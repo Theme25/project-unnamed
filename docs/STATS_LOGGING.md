@@ -137,6 +137,46 @@ edge, `pb.y = 395.5 + (j - 20)*0.05`. Repeat all four sweeps with
 
 Save it in the same calibration file as §3.3 (rows start with `E1`, `E1a`, `E2`, `E3`).
 
+### 3.6 Bounding-box structure dump (why the rotated ball box is +-1 twip off)
+
+Background: Flash never rotates a bounding box. A rotated object's box is the
+axis-aligned box of its rotated *local* box, and containers nest this (a child's
+box is rounded to twips, then its parent's transform is applied to that box).
+The 3,200 E1 rows fit `half-extent = trunc(210(|cos|+|sin|))` in 87% of cases
+and +-1 twip otherwise, and the exceptions repeat every 90 degrees, so they are
+a deterministic function of the angle, not of position or history. Every simple
+rule tried (rounding modes, 16.16 or coarser matrices, angle grids, edge box +
+stroke, per-term rounding) fails. These dumps show which ingredient causes it.
+Same rules as 3.5: Level 2 just loaded, paused, reload afterwards. Rotation
+sweep for every dump: `rot = -180 + k*0.7317` for `k = 0 ... 1499` (same as E1).
+
+**E4 - the matrix Flash actually uses.** For each `k` set `pb.rotation` and log
+`E4 k hex(pb.rotation)` then `pb.transform.matrix` (`a b c d tx ty`) and
+`pb.transform.concatenatedMatrix` (`a b c d tx ty`) and `L.transform.matrix`
+(`a b c d tx ty`) - all hex doubles. With the real matrix `rbsim` can compute the
+box itself instead of guessing the trig.
+
+**E5 - each nesting level separately.** For each `k`: `E5 k` then, as
+`x y width height` in `L` space, `pb.getBounds(L)`, `pb.getChildAt(0).getBounds(L)`,
+`pb.getChildAt(1).getBounds(L)`, `pb.getChildAt(2).getBounds(L)`; and at the same
+time `pb.getBounds(pb)` (local, unrotated) and `pb.getChildAt(0).getBounds(pb)`.
+
+**E6 - control shapes (isolates stroke, curves, nesting).** Create these fresh
+`Sprite`s, `addChild` each to `L` at `x = 500, y = 300`, sweep each through the
+rotation list, log `E6 <name> k hex(rot)` and `getBounds(L)` (`x y width height`),
+then `removeChild` it:
+- `sqFill`: `beginFill(0); drawRect(-10.5,-10.5,21,21)` (no stroke)
+- `sqStroke`: `lineStyle(1); drawRect(-10,-10,20,20)` (1 px stroke, edge box +-10, shape box +-10.5)
+- `circStroke`: `lineStyle(1); drawCircle(0,0,10)`
+- `nestIn`: outer `Sprite` (rotation 0) containing an inner `sqFill` rotated by `k`
+- `nestOut`: outer `Sprite` rotated by `k` containing an unrotated `sqFill`
+- `nest2`: outer rotated by `k`, inner rotated by `k` (two levels)
+
+Interpretation guide: if `sqFill` alone already gives the +-1 pattern the cause is
+the transform/rounding itself (E4 then shows the matrix); if only `sqStroke` or
+`circStroke` do, it is the stroke bound; if `nestOut`/`nest2` differ from `sqFill`,
+the box-in-a-box rounding at each level is the cause and E5 shows which level.
+
 ### 3.4 Other dynamic bodies (needed for levels with joints or moving parts)
 
 After the 21 standard columns, append one group of 7 columns for every
