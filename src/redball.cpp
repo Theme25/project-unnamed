@@ -1,17 +1,15 @@
-// redball.cpp - game-side logic (Level.as / Level_1.as / PlayerBox.as /
+// redball.cpp - game-side logic (Level.as / Level_N.as / PlayerBox.as /
 // Game.UpdateHandler) driving the Box2D port.
 #include "redball.h"
-#include <cstdio>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 
 namespace rb {
 
 // ---------------------------------------------------------------- display layer
-// DisplayObject.x/y setters store twips (integer 1/20 px).
-// UNVERIFIED: truncation toward zero vs round-to-nearest. The TAS stat logs
-// (sprite x/y) will settle this; it only matters for display-driven checks
-// (death line, hitTestObject for goal/checkpoints).
-// VERIFIED (calibration dump, 2400 samples): truncation toward zero.
+// DisplayObject.x/y setters store twips: truncation toward zero
+// (VERIFIED, calibration dump, 2400 samples on two players).
 static double SpriteCoord(double v) { return (double)as3_toInt32(v * 20) / 20.0; }
 
 // DisplayObject.rotation: the getter returns the written value normalised to
@@ -25,110 +23,211 @@ static double SpriteRotation(double angle) {
     return v;
 }
 
-// ---------------------------------------------------------------- level data
-// Level 1 placements extracted from the SWF (DefineSprite for Level_1,
-// PlaceObject matrices, translate in twips).
-LevelSpec MakeLevel1() {
-    LevelSpec L;
-    L.id = 1;
-    L.deathY = 550;
-    L.checkpoints.push_back(Placement{338, 4986, 0});  // checkPoint0 (16.9, 249.3)
-    auto box = [](double w, double h) {
-        return std::vector<std::pair<double, double>>{{w, 0}, {w, h}, {0, h}, {0, 0}};
-    };
-    BodySpec start;
-    start.name = "startPlatform";
-    start.placement = Placement{-400, 5400, 0};
-    start.kind = "Polygon";
-    start.density = 0;
-    start.friction = DEFAULT_FRICTION;
-    start.restitution = DEFAULT_RESTITUTION;
-    start.polys = {box(200, 20)};
-    L.bodies.push_back(start);
+// ---------------------------------------------------------------- templates
 
-    BodySpec exitp = start;
-    exitp.name = "exitPlatform";
-    exitp.placement = Placement{4800, 5400, 0};
-    exitp.polys = {box(300, 20)};
-    L.bodies.push_back(exitp);
-
-    BodySpec barier = start;
-    barier.name = "barier";
-    barier.placement = Placement{6680, 4420, 0};
-    barier.polys = {{{0, 0}, {20, 0}, {20, 50}, {0, 50}}};
-    L.bodies.push_back(barier);
-    return L;
-}
-
-LevelTemplate::LevelTemplate(const LevelSpec& s) : spec(s) {
-    // PlayerBox circle: radius = width / m_physScale / 2
-    ShapeDef pd;
+LevelTemplate::LevelTemplate(int32_t levelId) : id(levelId) {
+    for (const LevelPlacements& lp : kLevelPlacements)
+        if (lp.id == levelId) placements = &lp;
+    if (!placements) fatal("unknown level id");
+    ShapeDef pd;  // PlayerBox circle: radius = width / m_physScale / 2
     pd.type = e_circleShape;
     double width = PLAYER_SPRITE_WIDTH_TWIPS / 20.0;
     pd.radius = width / PHYS_SCALE / 2;
     pd.localPosition.Set(0, 0);
     playerGeom = geoms.Add(pd);
-    for (const BodySpec& b : spec.bodies) {
-        std::vector<int32_t> gs;
-        if (b.kind == "Polygon" || b.kind == "BluePolygon") {
-            for (const auto& poly : b.polys) {
-                ShapeDef d;
-                d.type = e_polygonShape;
-                d.vertexCount = (int32_t)poly.size();
-                for (int32_t i = 0; i < d.vertexCount; ++i)
-                    d.vertices[i].Set(poly[(size_t)i].first / PHYS_SCALE, poly[(size_t)i].second / PHYS_SCALE);
-                gs.push_back(geoms.Add(d));
-            }
-        } else if (b.kind == "Circle") {
-            ShapeDef d;
-            d.type = e_circleShape;
-            d.radius = b.circleSize / PHYS_SCALE / 2;
-            d.localPosition.Set(b.circleSize / PHYS_SCALE / 2, b.circleSize / PHYS_SCALE / 2);
-            gs.push_back(geoms.Add(d));
-        } else {
-            fatal("unknown body kind");
-        }
-        bodyGeoms.push_back(gs);
-    }
 }
 
-// ---------------------------------------------------------------- construction
+bool LevelTemplate::HasPlacement(const char* name) const {
+    for (int32_t i = 0; i < placements->count; ++i)
+        if (!std::strcmp(placements->items[i].name, name)) return true;
+    return false;
+}
 
-int32_t Sim::CreateLevelBody(const BodySpec& spec, const std::vector<int32_t>& gs) {
+const RawPlacement& LevelTemplate::Place(const char* name) const {
+    for (int32_t i = 0; i < placements->count; ++i)
+        if (!std::strcmp(placements->items[i].name, name)) return placements->items[i];
+    std::fprintf(stderr, "level %d: no placement named '%s'\n", id, name);
+    fatal("missing placement");
+}
+
+int32_t LevelTemplate::CheckpointCount() const {
+    int32_t n = 0;
+    while (n < 5) {  // Level(): for i < 5, stop at the first missing checkPoint<i>
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "checkPoint%d", n);
+        if (!HasPlacement(buf)) break;
+        ++n;
+    }
+    return n;
+}
+
+static double PlacementX(const RawPlacement& p) { return p.tx / 20.0; }
+static double PlacementY(const RawPlacement& p) { return p.ty / 20.0; }
+static double PlacementRotation(const RawPlacement& p) {
+    if (p.a == 65536 && p.b == 0 && p.c == 0 && p.d == 65536) return 0;
+    // TODO(level 3+): DisplayObject.rotation derived from a timeline matrix.
+    fatal("rotated/scaled placement: matrix->rotation not implemented yet");
+}
+
+// ---------------------------------------------------------------- body helpers
+
+int32_t Sim::Geom(const std::string& key, const ShapeDef& def) {
+    auto it = tpl->geomCache.find(key);
+    if (it != tpl->geomCache.end()) return it->second;
+    if (tpl->frozen) fatal("new geometry requested after template freeze");
+    int32_t g = tpl->geoms.Add(def);
+    tpl->geomCache[key] = g;
+    return g;
+}
+
+int32_t Sim::BeginBody(const char* name) {
+    const RawPlacement& p = tpl->Place(name);
+    double x = PlacementX(p), y = PlacementY(p);
     BodyDef bd;
-    bd.position = Vec2(spec.placement.X() / PHYS_SCALE, spec.placement.Y() / PHYS_SCALE);
-    bd.angle = spec.placement.rotationDeg * (AS3_PI / 180);
-    bd.userTag = 100 + (int32_t)(&spec - &tpl->spec.bodies[0]);
+    bd.position = Vec2(x / PHYS_SCALE, y / PHYS_SCALE);
+    bd.angle = PlacementRotation(p) * (AS3_PI / 180);
+    int32_t idx = -1;
+    for (size_t i = 0; i < tpl->bodyNames.size(); ++i)
+        if (tpl->bodyNames[i] == name) idx = (int32_t)i;
+    if (idx < 0) {
+        if (tpl->frozen) fatal("new body name after template freeze");
+        tpl->bodyNames.push_back(name);
+        idx = (int32_t)tpl->bodyNames.size() - 1;
+    }
+    bd.userTag = 100 + idx;
     int32_t b = world.CreateBody(bd);
-    if (spec.kind == "Polygon" || spec.kind == "BluePolygon") {
-        for (size_t i = 0; i < gs.size(); ++i) {
-            ShapeDef d;
-            d.type = e_polygonShape;
-            d.density = spec.density;
-            d.friction = spec.friction;
-            d.restitution = spec.restitution;
-            world.CreateShape(b, gs[i], d);
-        }
-    } else {
+    hasSprite[b] = true;
+    spriteX[b] = x;
+    spriteY[b] = y;
+    spriteRot[b] = PlacementRotation(p);
+    return b;
+}
+
+// Level.CreateBody(name, "Polygon"|"BluePolygon", density, friction, restitution, polys)
+int32_t Sim::CreateBody(const char* name, const char* kind, double density, double friction, double restitution,
+                        const PolyList& polys) {
+    if (std::strcmp(kind, "Polygon") && std::strcmp(kind, "BluePolygon")) fatal("CreateBody: polygon kinds only");
+    int32_t b = BeginBody(name);
+    for (size_t i = 0; i < polys.size(); ++i) {
         ShapeDef d;
-        d.type = e_circleShape;
-        d.density = spec.density;
-        d.friction = spec.friction;
-        d.restitution = spec.restitution;
-        world.CreateShape(b, gs[0], d);
+        d.type = e_polygonShape;
+        d.vertexCount = (int32_t)polys[i].size();
+        for (int32_t k = 0; k < d.vertexCount; ++k)
+            d.vertices[k].Set(polys[i][(size_t)k].first / PHYS_SCALE, polys[i][(size_t)k].second / PHYS_SCALE);
+        d.density = density;
+        d.friction = friction;
+        d.restitution = restitution;
+        world.CreateShape(b, Geom(std::string(name) + "#" + std::to_string(i), d), d);
     }
     world.SetMassFromShapes(b);
     return b;
 }
 
-void Sim::Load(const LevelTemplate* t) {
+// Level.CreateBody(name, "Circle", density, friction, restitution, [size])
+int32_t Sim::CreateCircleBody(const char* name, double density, double friction, double restitution, double size) {
+    int32_t b = BeginBody(name);
+    ShapeDef d;
+    d.type = e_circleShape;
+    d.radius = size / PHYS_SCALE / 2;
+    d.localPosition.Set(size / PHYS_SCALE / 2, size / PHYS_SCALE / 2);
+    d.density = density;
+    d.friction = friction;
+    d.restitution = restitution;
+    world.CreateShape(b, Geom(std::string(name) + "#c", d), d);
+    world.SetMassFromShapes(b);
+    return b;
+}
+
+void Sim::PlayerDie() {
+    // Level.PlayerDie spawns 8 debris bodies with Math.random() and destroys
+    // the player body. Randomness makes the continuation unreproducible, so
+    // death is treated as terminal (the search never continues past it).
+    playerAlive = false;
+}
+
+// ---------------------------------------------------------------- level scripts
+
+static const PolyList Box(double w, double h) { return {{{w, 0}, {w, h}, {0, h}, {0, 0}}}; }
+
+// Level_1.as
+static void L1_Construct(Sim& s) {
+    s.CreateBody("startPlatform", "Polygon", 0, DEFAULT_FRICTION, DEFAULT_RESTITUTION, Box(200, 20));
+    s.CreateBody("exitPlatform", "Polygon", 0, DEFAULT_FRICTION, DEFAULT_RESTITUTION, Box(300, 20));
+    s.CreateBody("barier", "Polygon", 0, DEFAULT_FRICTION, DEFAULT_RESTITUTION, {{{0, 0}, {20, 0}, {20, 50}, {0, 50}}});
+}
+static void L1_Update(Sim& s) {
+    if (s.spriteY[s.playerBody] > 550 && s.playerAlive) s.PlayerDie();
+}
+
+// Level_2.as: pendulum (distance joint) + moving platform (prismatic joint)
+enum { L2_MOVE_PLATFORM = 0 };        // lvBody
+enum { L2_MOVE_DIRECTION = 0 };       // lvInt
+static void L2_Construct(Sim& s) {
+    World& w = s.world;
+    s.CreateBody("firstPlatform", "Polygon", 0, DEFAULT_FRICTION, DEFAULT_RESTITUTION, Box(166, 20));
+    s.CreateBody("platformTriangle", "Polygon", 0, DEFAULT_FRICTION, DEFAULT_RESTITUTION, Box(166, 20));
+    s.CreateBody("triangleBarier", "Polygon", 0, DEFAULT_FRICTION, DEFAULT_RESTITUTION,
+                 {{{68, 67}, {0, 67}, {68, 15}}});
+    s.CreateBody("ballPlatform", "Polygon", 0, DEFAULT_FRICTION, DEFAULT_RESTITUTION, Box(166, 20));
+    int32_t kickBall = s.CreateCircleBody("kickBall", 3 * DEFAULT_DENSITY, DEFAULT_FRICTION, DEFAULT_RESTITUTION, 54);
+    s.CreateBody("jump1", "Polygon", 0, DEFAULT_FRICTION, DEFAULT_RESTITUTION, Box(100, 20));
+    int32_t movePlatform = s.CreateBody("movePlatform", "Polygon", DEFAULT_DENSITY, 3 * DEFAULT_FRICTION,
+                                        DEFAULT_RESTITUTION, {{{40, -5}, {40, 5}, {-40, 5}, {-40, -5}}});
+    s.CreateBody("exitPlatform", "Polygon", 0, DEFAULT_FRICTION, DEFAULT_RESTITUTION, Box(166, 20));
+    s.lvBody[L2_MOVE_PLATFORM] = movePlatform;
+
+    JointDef dj;  // b2DistanceJointDef.Initialize(kickBall, m_ground, a1, a2)
+    w.InitDistanceJointDef(dj, kickBall, w.groundBody, Vec2(148 / PHYS_SCALE, 305 / PHYS_SCALE),
+                           Vec2(87 / PHYS_SCALE, 209 / PHYS_SCALE));
+    w.CreateJoint(dj);
+    JointDef pj;  // b2PrismaticJointDef.Initialize(movePlatform, m_ground, worldCenter, (1,0))
+    w.InitPrismaticJointDef(pj, movePlatform, w.groundBody, w.bodies[movePlatform].sweep.c, Vec2(1, 0));
+    pj.enableLimit = false;
+    pj.enableMotor = false;
+    s.lvInt[L2_MOVE_DIRECTION] = 1;
+    w.CreateJoint(pj);
+}
+static void L2_Update(Sim& s) {
+    if (s.spriteY[s.playerBody] > 550 && s.playerAlive) s.PlayerDie();
+    int32_t mp = s.lvBody[L2_MOVE_PLATFORM];
+    if (s.spriteX[mp] < 390) s.lvInt[L2_MOVE_DIRECTION] = 1;
+    if (s.spriteX[mp] > 550) s.lvInt[L2_MOVE_DIRECTION] = -1;
+    s.world.SetLinearVelocity(mp, Vec2(2 * s.lvInt[L2_MOVE_DIRECTION], 0));
+}
+
+static void NotImplemented(Sim&) { fatal("level not implemented yet"); }
+
+const LevelScript& GetLevelScript(int32_t id) {
+    static const LevelScript scripts[] = {
+        {1, L1_Construct, L1_Update, true},
+        {2, L2_Construct, L2_Update, true},
+    };
+    for (const LevelScript& ls : scripts)
+        if (ls.id == id) return ls;
+    static LevelScript missing{0, NotImplemented, NotImplemented, false};
+    missing.id = id;
+    return missing;
+}
+
+// ---------------------------------------------------------------- construction
+
+void Sim::Load(LevelTemplate* t, int32_t checkpoint) {
     tpl = t;
-    lastCheckNum = 0;
+    lastCheckNum = checkpoint;
     frameCount = 0;
     Restart();
+    tpl->frozen = true;  // geometry/body names are now fixed; later constructions only look up
 }
 
 void Sim::Restart() {
+    const LevelScript& script = GetLevelScript(tpl->id);
+    if (!script.implemented) fatal("level script not implemented yet");
+    for (int32_t i = 0; i < CAP_BODIES; ++i) {
+        hasSprite[i] = false;
+        spriteX[i] = spriteY[i] = spriteRot[i] = 0;
+    }
+    for (int32_t i = 0; i < LV_VARS; ++i) lvBody[i] = lvInt[i] = 0;
+
     // --- Level() constructor
     AABB worldAABB;
     worldAABB.lowerBound.Set(-1000, -1000);
@@ -136,12 +235,14 @@ void Sim::Restart() {
     world.Init(&tpl->geoms, worldAABB, Vec2(0, 10), true);
     world.listener.enabled = true;  // m_world.SetContactListener(myContactListener)
 
-    // PlayerBox(playerStartPosition.x, playerStartPosition.y, m_world, m_sprite)
-    const Placement& cp = tpl->spec.checkpoints[(size_t)lastCheckNum];
-    double px = cp.X(), py = cp.Y();
-    playerSpriteX = SpriteCoord(px);
-    playerSpriteY = SpriteCoord(py);
-    playerSpriteRot = 0;
+    int32_t nCheck = tpl->CheckpointCount();
+    if (lastCheckNum >= nCheck) fatal("checkpoint index out of range");
+    char cpName[32];
+    std::snprintf(cpName, sizeof cpName, "checkPoint%d", lastCheckNum);
+    const RawPlacement& cp = tpl->Place(cpName);
+    double px = PlacementX(cp), py = PlacementY(cp);
+
+    // PlayerBox(x, y, world, sprite)
     BodyDef bd;
     bd.position.Set(px / PHYS_SCALE, py / PHYS_SCALE);
     bd.userTag = 0;
@@ -155,9 +256,13 @@ void Sim::Restart() {
     world.CreateShape(playerBody, tpl->playerGeom, sd);
     world.SetMassFromShapes(playerBody);
     world.listener.playerBody = playerBody;
+    hasSprite[playerBody] = true;
+    spriteX[playerBody] = SpriteCoord(px);
+    spriteY[playerBody] = SpriteCoord(py);
+    spriteRot[playerBody] = 0;
 
-    // --- Level_N() constructor: CreateBody(...) calls in order
-    for (size_t i = 0; i < tpl->spec.bodies.size(); ++i) CreateLevelBody(tpl->spec.bodies[i], tpl->bodyGeoms[i]);
+    // --- Level_N() constructor
+    script.construct(*this);
 
     playerAlive = true;
     isTimeStop = false;
@@ -186,13 +291,13 @@ int32_t Sim::GetBodyAtPoint(double x, double y, bool includeStatic) {
 void Sim::LevelUpdate(bool left, bool up, bool right) {
     world.Step(LEVEL_TIMESTEP, LEVEL_ITERATIONS);
 
-    // sprite sync for the player (other dynamic sprites are cosmetic here)
-    {
-        const Body& pb = world.bodies[playerBody];
-        if (!pb.IsStatic()) {
-            playerSpriteX = SpriteCoord(pb.xf.position.x * PHYS_SCALE);
-            playerSpriteY = SpriteCoord(pb.xf.position.y * PHYS_SCALE);
-            playerSpriteRot = SpriteRotation(pb.sweep.a);
+    // sprite sync: every non-static body whose userData is a Sprite
+    for (int32_t b = world.bodyList; b != -1; b = world.bodies[b].next) {
+        const Body& bb = world.bodies[b];
+        if (hasSprite[b] && !bb.IsStatic()) {
+            spriteX[b] = SpriteCoord(bb.xf.position.x * PHYS_SCALE);
+            spriteY[b] = SpriteCoord(bb.xf.position.y * PHYS_SCALE);
+            spriteRot[b] = SpriteRotation(bb.sweep.a);
         }
     }
 
@@ -231,13 +336,9 @@ void Sim::LevelUpdate(bool left, bool up, bool right) {
             world.ApplyForce(playerBody, Vec2(0, -1), world.bodies[playerBody].sweep.c);
         }
     }
+    // TODO(display layer): levelAim.hitTestObject -> PlayerWin, spikes, checkpoints.
 
-    // TODO(display layer): levelAim.hitTestObject -> PlayerWin, spikes,
-    // checkpoints. Level_1.Update death line:
-    if (playerSpriteY > tpl->spec.deathY && playerAlive) {
-        // PlayerDie() spawns Math.random() debris: treat death as terminal.
-        playerAlive = false;
-    }
+    GetLevelScript(tpl->id).update(*this);  // Level_N.Update after super.Update
 }
 
 void Sim::Tick(uint8_t input) {
@@ -273,16 +374,16 @@ FrameStats Sim::Stats(uint8_t input) const {
         if (i) s.contactNames += ",";
         s.contactNames += BodyName(world.listener.bodies[i]);
     }
-    s.sx = playerSpriteX;
-    s.sy = playerSpriteY;
-    s.sr = playerSpriteRot;
+    s.sx = spriteX[playerBody];
+    s.sy = spriteY[playerBody];
+    s.sr = spriteRot[playerBody];
     return s;
 }
 
 std::string Sim::BodyName(int32_t body) const {
     if (body == world.groundBody) return "ground";
     int32_t tag = world.bodies[body].userTag;
-    if (tag >= 100 && tag - 100 < (int32_t)tpl->spec.bodies.size()) return tpl->spec.bodies[(size_t)(tag - 100)].name;
+    if (tag >= 100 && tag - 100 < (int32_t)tpl->bodyNames.size()) return tpl->bodyNames[(size_t)(tag - 100)];
     if (body == playerBody) return "playerBox";
     return "body" + std::to_string(body);
 }

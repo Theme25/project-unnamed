@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -44,6 +45,7 @@ struct Entry {
 };
 struct Segment {
     int line = 0;
+    int level = 1, checkpoint = 0;
     std::vector<Entry> entries;  // entries[0] = tick-0 state line
 };
 
@@ -90,6 +92,41 @@ std::vector<int> Compare(const FrameStats& s, const std::vector<std::string>& f,
     return bad;
 }
 
+// Optional extension: after the 21 standard columns, groups of 7 columns
+// <name> <px> <py> <a> <vx> <vy> <w> (hex) for other dynamic bodies.
+// Returns false on mismatch (appending a description to `detail`).
+bool CompareExtraBodies(const Sim& sim, const std::vector<std::string>& f, std::string& detail, int& groups) {
+    groups = 0;
+    bool ok = true;
+    for (size_t i = 21; i + 7 <= f.size(); i += 7) {
+        ++groups;
+        const std::string& name = f[i];
+        if (name.rfind("playerDiePart", 0) == 0) continue;  // random death debris: not simulated
+        int32_t body = -1;
+        for (int32_t b = 0; b < sim.world.numBodies; ++b)
+            if (sim.world.bodies[b].inWorld && sim.BodyName(b) == name) body = b;
+        if (body < 0) {
+            detail += "  body '" + name + "' logged by Flash but missing in sim\n";
+            ok = false;
+            continue;
+        }
+        const Body& B = sim.world.bodies[body];
+        const double mine[6] = {B.xf.position.x, B.xf.position.y, B.sweep.a,
+                                B.linearVelocity.x, B.linearVelocity.y, B.angularVelocity};
+        static const char* fld[6] = {"px", "py", "a", "vx", "vy", "w"};
+        for (int k = 0; k < 6; ++k) {
+            double flash = FromHex(f[i + 1 + (size_t)k]);
+            if (Bits(flash) != Bits(mine[k])) {
+                char buf[200];
+                std::snprintf(buf, sizeof buf, "  %s.%-3s flash=%.17g  sim=%.17g\n", name.c_str(), fld[k], flash, mine[k]);
+                detail += buf;
+                ok = false;
+            }
+        }
+    }
+    return ok;
+}
+
 }  // namespace
 
 int CmdVerify(int argc, char** argv) {
@@ -120,14 +157,16 @@ int CmdVerify(int argc, char** argv) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.empty() || line[0] == '#') continue;
         if (line.rfind("LEVEL", 0) == 0) {
-            if (line != "LEVEL 1 0") {
-                std::fprintf(stderr, "line %d: only 'LEVEL 1 0' segments are supported yet (%s)\n", ln, line.c_str());
-                segs.push_back(Segment());
+            int lv = 0, cp = 0;
+            segs.push_back(Segment());
+            if (std::sscanf(line.c_str(), "LEVEL %d %d", &lv, &cp) != 2 || !GetLevelScript(lv).implemented) {
+                std::fprintf(stderr, "line %d: level not supported yet (%s)\n", ln, line.c_str());
                 segs.back().line = -ln;  // marks unsupported
                 continue;
             }
-            segs.push_back(Segment());
             segs.back().line = ln;
+            segs.back().level = lv;
+            segs.back().checkpoint = cp;
             continue;
         }
         if (segs.empty() || segs.back().line < 0) {
@@ -147,9 +186,9 @@ int CmdVerify(int argc, char** argv) {
         segs.back().entries.push_back(e);
     }
 
-    LevelTemplate tpl(MakeLevel1());
+    std::map<int, std::unique_ptr<LevelTemplate>> tpls;
     auto sim = std::make_unique<Sim>();
-    int perfect = 0, diverged = 0, unsupported = 0, shown = 0;
+    int perfect = 0, diverged = 0, unsupported = 0, shown = 0, extraGroupsSeen = 0;
     long framesCompared = 0, framesMatched = 0;
     std::map<std::string, int> firstFieldHist;
     std::map<int, int> divergeTickHist;
@@ -159,7 +198,9 @@ int CmdVerify(int argc, char** argv) {
             ++unsupported;
             continue;
         }
-        sim->Load(&tpl);
+        auto& tp = tpls[sg.level];
+        if (!tp) tp.reset(new LevelTemplate(sg.level));
+        sim->Load(tp.get(), sg.checkpoint);
         bool ok = true;
         int endReason = 0;  // 0 = end of log, 1 = death, 2 = win
         for (size_t ei = 0; ei < sg.entries.size(); ++ei) {
@@ -176,19 +217,22 @@ int CmdVerify(int argc, char** argv) {
             std::vector<int> relevant;
             for (int c : bad)
                 if (!ignore[(size_t)c]) relevant.push_back(c);
+            int groups = 0;
+            if (!CompareExtraBodies(*sim, e.f, detail, groups)) relevant.push_back(21);
+            extraGroupsSeen = std::max(extraGroupsSeen, groups);
             ++framesCompared;
             if (relevant.empty()) {
                 ++framesMatched;
             } else {
                 ok = false;
                 std::string key;
-                for (int c : relevant) key += std::string(key.empty() ? "" : "+") + kField[c];
+                for (int c : relevant) key += std::string(key.empty() ? "" : "+") + (c < 21 ? kField[c] : "otherBodies");
                 firstFieldHist[key]++;
                 divergeTickHist[std::stoi(e.f[0]) / 100 * 100]++;
                 if (shown < verbose) {
                     ++shown;
-                    std::printf("segment %zu (log line %d): first divergence at tick %s (log line %d), input %d\n", si,
-                                sg.line, e.f[0].c_str(), e.line, code);
+                    std::printf("segment %zu (level %d, log line %d): first divergence at tick %s (log line %d), input %d\n", si,
+                                sg.level, sg.line, e.f[0].c_str(), e.line, code);
                     std::printf("%s", detail.c_str());
                     // context: previous inputs
                     std::string hist;
@@ -216,6 +260,7 @@ int CmdVerify(int argc, char** argv) {
                 perfect, diverged, unsupported);
     std::printf("frames compared: %ld, matched: %ld  (log lines before first LEVEL skipped: %d)\n", framesCompared,
                 framesMatched, skipped);
+    if (extraGroupsSeen) std::printf("extra bodies compared per frame: up to %d\n", extraGroupsSeen);
     if (!firstFieldHist.empty()) {
         std::printf("first-divergence fields:\n");
         for (auto& kv : firstFieldHist) std::printf("  %-28s %d\n", kv.first.c_str(), kv.second);

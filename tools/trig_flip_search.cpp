@@ -34,7 +34,7 @@ int main(int argc,char**argv){
   int segLine=atoi(argv[2]); size_t horizon=argc>3?atoi(argv[3]):3000;
   std::ifstream in(argv[1]); std::string l; int ln=0; bool on=false;
   while(std::getline(in,l)){++ln; if(ln==segLine){on=true;continue;} if(!on) continue; if(l.rfind("LEVEL",0)==0) break; if(l.empty()||l=="R") continue; rows.push_back(split(l));}
-  g_sinHook=hs; g_cosHook=hc; LevelTemplate tpl(MakeLevel1()); T=&tpl;
+  g_sinHook=hs; g_cosHook=hc; LevelTemplate tpl(1); T=&tpl;
   horizon=std::min(horizon,rows.size()-1);
   int iter=0;
   for(;;){

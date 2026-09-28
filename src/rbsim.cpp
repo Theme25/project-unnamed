@@ -5,6 +5,8 @@
 //   rbsim bench [--frames N]         # raw simulation throughput
 #include "redball.h"
 #include <chrono>
+#include <cmath>
+#include <algorithm>
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
@@ -54,24 +56,81 @@ static void Replay(Sim& sim, const std::vector<uint8_t>& inputs, F&& perFrame) {
     }
 }
 
+
+static std::string Hex(double d) {
+    char buf[20];
+    std::snprintf(buf, sizeof buf, "%016" PRIx64, bits(d));
+    return buf;
+}
+
+// Writes a stats log in the exact format of the Flash logging mod
+// (docs/STATS_LOGGING.md), including the optional extra-body columns.
+static void LogLine(const Sim& s, int tick, uint8_t in, bool extras) {
+    FrameStats st = s.Stats(in);
+    std::printf("%d\t%d\t%u\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%u\t%d\t%d\t%d\t%d\t%s\t%d\t%s\t%s\t%s\t%d", tick,
+                st.frame, in, Hex(st.px).c_str(), Hex(st.py).c_str(), Hex(st.vx).c_str(), Hex(st.vy).c_str(),
+                Hex(st.angle).c_str(), Hex(st.omega).c_str(), Hex(st.sleepTime).c_str(), st.flags, st.probeCenter,
+                st.probeLeft, st.probeRight, st.contactCount, st.contactNames.c_str(), st.worldContactCount,
+                Hex(st.sx).c_str(), Hex(st.sy).c_str(), Hex(st.sr).c_str(), (int)s.isTimeStop);
+    if (extras) {
+        const World& w = s.world;
+        for (int32_t b = w.bodyList; b != -1; b = w.bodies[b].next) {
+            const Body& B = w.bodies[b];
+            if (b == s.playerBody || B.IsStatic() || !s.hasSprite[b]) continue;
+            std::printf("\t%s\t%s\t%s\t%s\t%s\t%s\t%s", s.BodyName(b).c_str(), Hex(B.xf.position.x).c_str(),
+                        Hex(B.xf.position.y).c_str(), Hex(B.sweep.a).c_str(), Hex(B.linearVelocity.x).c_str(),
+                        Hex(B.linearVelocity.y).c_str(), Hex(B.angularVelocity).c_str());
+        }
+    }
+    std::printf("\n");
+}
+
+static int CmdLog(int argc, char** argv) {
+    std::string inputs = "n60";
+    int level = 1, checkpoint = 0;
+    bool extras = true;
+    for (int i = 2; i < argc; ++i) {
+        if (!std::strcmp(argv[i], "--inputs") && i + 1 < argc) inputs = argv[++i];
+        else if (!std::strcmp(argv[i], "--level") && i + 1 < argc) level = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--checkpoint") && i + 1 < argc) checkpoint = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--no-extras")) extras = false;
+    }
+    if (!GetLevelScript(level).implemented) {
+        std::fprintf(stderr, "level %d is not implemented yet\n", level);
+        return 2;
+    }
+    LevelTemplate tpl(level);
+    auto sim = std::make_unique<Sim>();
+    sim->Load(&tpl, checkpoint);
+    std::printf("# inputs\t%s\n", inputs.c_str());
+    std::printf("#tick\tframe\tin\tpx\tpy\tvx\tvy\ta\tw\tsleepT\tflags\tpC\tpL\tpR\tnCB\tcb\tnC\tsx\tsy\tsr\tts%s\n",
+                extras ? "\t[name px py a vx vy w]..." : "");
+    std::printf("LEVEL %d %d\n", level, checkpoint);
+    LogLine(*sim, 0, 0, extras);
+    int tick = 0;
+    Replay(*sim, DecodeInputs(inputs), [&](Sim& s, uint8_t code) { LogLine(s, ++tick, code, extras); });
+    return 0;
+}
+
 static int CmdRun(int argc, char** argv) {
     std::string inputs = "n60";
     bool hex = false;
     int every = 1;
+    int level = 1, checkpoint = 0;
     for (int i = 2; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--inputs") && i + 1 < argc) inputs = argv[++i];
         else if (!std::strcmp(argv[i], "--hex")) hex = true;
         else if (!std::strcmp(argv[i], "--every") && i + 1 < argc) every = std::atoi(argv[++i]);
-        else if (!std::strcmp(argv[i], "--level") && i + 1 < argc) {
-            if (std::atoi(argv[++i]) != 1) {
-                std::fprintf(stderr, "only level 1 is available in this milestone\n");
-                return 2;
-            }
-        }
+        else if (!std::strcmp(argv[i], "--level") && i + 1 < argc) level = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--checkpoint") && i + 1 < argc) checkpoint = std::atoi(argv[++i]);
     }
-    LevelTemplate tpl(MakeLevel1());
+    if (!GetLevelScript(level).implemented) {
+        std::fprintf(stderr, "level %d is not implemented yet\n", level);
+        return 2;
+    }
+    LevelTemplate tpl(level);
     auto sim = std::make_unique<Sim>();
-    sim->Load(&tpl);
+    sim->Load(&tpl, checkpoint);
     std::vector<uint8_t> in = DecodeInputs(inputs);
     PrintHeader(hex);
     Replay(*sim, in, [&](Sim& s, uint8_t code) {
@@ -91,7 +150,7 @@ static bool SameState(const Sim& a, const Sim& b) {
 }
 
 static int CmdTest() {
-    LevelTemplate tpl(MakeLevel1());
+    LevelTemplate tpl(1);
     int failures = 0;
     auto check = [&](bool ok, const char* what) {
         std::printf("[%s] %s\n", ok ? " ok " : "FAIL", what);
@@ -206,6 +265,53 @@ static int CmdTest() {
         std::vector<uint8_t> legacy = DecodeInputs("0011");
         check(legacy.size() == 4 && legacy[2] == 1, "legacy digit format");
     }
+    // 9. Level 2: joints behave, and snapshots capture joint state
+    {
+        LevelTemplate t2(2);
+        auto s = std::make_unique<Sim>();
+        s->Load(&t2);
+        World& w = s->world;
+        int32_t kick = -1, mp = s->lvBody[0];
+        for (int32_t b = w.bodyList; b != -1; b = w.bodies[b].next)
+            if (s->BodyName(b) == "kickBall") kick = b;
+        int32_t dj = -1;
+        for (int32_t j = w.jointList; j != -1; j = w.joints[j].next)
+            if (w.joints[j].type == JT_DISTANCE) dj = j;
+        check(kick >= 0 && dj >= 0 && w.jointCount == 2, "level 2 builds pendulum + prismatic joints");
+        double maxErr = 0, minX = 1e9, maxX = -1e9, maxDy = 0;
+        double y0 = w.bodies[mp].xf.position.y;
+        for (int f = 0; f < 600; ++f) {
+            s->Tick(IN_NONE);
+            const Joint& J = w.joints[dj];
+            Vec2 a1 = b2MulX(w.bodies[kick].xf, J.localAnchor1);
+            Vec2 a2 = b2MulX(w.bodies[w.groundBody].xf, J.localAnchor2);
+            maxErr = std::max(maxErr, std::fabs(std::hypot(a1.x - a2.x, a1.y - a2.y) - J.length));
+            minX = std::min(minX, s->spriteX[mp]);
+            maxX = std::max(maxX, s->spriteX[mp]);
+            maxDy = std::max(maxDy, std::fabs(w.bodies[mp].xf.position.y - y0));
+        }
+        std::printf("       L2 600f: rope error <= %.2e m, platform x in [%.2f, %.2f] px, platform |dy| <= %.2e m\n",
+                    maxErr, minX, maxX, maxDy);
+        check(maxErr < 1e-4, "distance joint holds the pendulum rope length");
+        check(minX < 390 && minX > 380 && maxX > 550 && maxX < 560, "moving platform reverses at sprite x 390 / 550");
+        check(maxDy < 0.01, "prismatic joint keeps the platform on its axis");
+
+        auto a = std::make_unique<Sim>();
+        a->Load(&t2);
+        std::vector<uint8_t> in = DecodeInputs("n20d30e6d25a8q5n30d40");
+        for (size_t i = 0; i < 60; ++i) a->Tick(in[i]);
+        auto snap = std::make_unique<Sim>(*a);
+        bool same = true;
+        for (size_t i = 60; i < in.size(); ++i) {
+            a->Tick(in[i]);
+            snap->Tick(in[i]);
+            same &= SameState(*a, *snap);
+            const Body& k1 = a->world.bodies[kick];
+            const Body& k2 = snap->world.bodies[kick];
+            same &= bits(k1.sweep.c.x) == bits(k2.sweep.c.x) && bits(k1.angularVelocity) == bits(k2.angularVelocity);
+        }
+        check(same, "level 2 snapshot copy continues bit-identically (joints included)");
+    }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }
@@ -214,7 +320,7 @@ static int CmdBench(int argc, char** argv) {
     int frames = 200000;
     for (int i = 2; i < argc; ++i)
         if (!std::strcmp(argv[i], "--frames") && i + 1 < argc) frames = std::atoi(argv[++i]);
-    LevelTemplate tpl(MakeLevel1());
+    LevelTemplate tpl(1);
     auto s = std::make_unique<Sim>();
     auto base = std::make_unique<Sim>();
     base->Load(&tpl);
@@ -244,10 +350,11 @@ int main(int argc, char** argv) {
             else { std::fprintf(stderr, "--trig intel|glibc\n"); return 2; }
         }
     if (argc < 2) {
-        std::fprintf(stderr, "usage: rbsim run|test|bench|verify [options]\n");
+        std::fprintf(stderr, "usage: rbsim run|log|test|bench|verify [options]\n");
         return 2;
     }
     if (!std::strcmp(argv[1], "run")) return CmdRun(argc, argv);
+    if (!std::strcmp(argv[1], "log")) return CmdLog(argc, argv);
     if (!std::strcmp(argv[1], "test")) return CmdTest();
     if (!std::strcmp(argv[1], "bench")) return CmdBench(argc, argv);
     if (!std::strcmp(argv[1], "verify")) return CmdVerify(argc, argv);

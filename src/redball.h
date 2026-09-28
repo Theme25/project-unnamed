@@ -1,60 +1,55 @@
 // redball.h - Red Ball 1 game logic on top of the Box2D port.
-// Mirrors Levels/Level.as, Levels/Level_N.as, PlayerBox.as and
-// Game.UpdateHandler from the practice-hack SWF.
+// Mirrors Levels/Level.as (base), Levels/Level_N.as (per-level constructor and
+// Update), PlayerBox.as and Game.UpdateHandler from the practice-hack SWF.
 #pragma once
 #include "b2world.h"
+#include "levels_data.h"
+#include <map>
 #include <string>
 #include <vector>
 
 namespace rb {
 
 // Game constants (Levels/Level.as)
-constexpr int32_t LEVEL_ITERATIONS = 10;          // Level.m_iterations
-constexpr double LEVEL_TIMESTEP = 1.0 / 30.0;     // Level.m_timeStep (== 0.03333333333333333 literal)
-constexpr double PHYS_SCALE = 30;                 // Level.m_physScale
+constexpr int32_t LEVEL_ITERATIONS = 10;       // Level.m_iterations
+constexpr double LEVEL_TIMESTEP = 1.0 / 30.0;  // Level.m_timeStep (== 0.03333333333333333 literal)
+constexpr double PHYS_SCALE = 30;              // Level.m_physScale
 constexpr double DEFAULT_DENSITY = 1;
 constexpr double DEFAULT_FRICTION = 1;
 constexpr double DEFAULT_RESTITUTION = 0.2;
-constexpr int32_t PLAYER_SPRITE_WIDTH_TWIPS = 420; // PlayerBox symbol bounds: 21.0 px
+constexpr int32_t PLAYER_SPRITE_WIDTH_TWIPS = 420;  // PlayerBox symbol bounds: 21.0 px
+constexpr int32_t NUM_LEVELS = 17;
 
 // Input codes: 4*Left + 2*Up + 1*Right; 8 = restart from checkpoint ("R")
 enum : uint8_t { IN_NONE = 0, IN_R = 1, IN_U = 2, IN_UR = 3, IN_L = 4, IN_LR = 5, IN_LU = 6, IN_LUR = 7,
                  IN_RESTART = 8 };
 
-// A display-list placement taken from the SWF timeline (PlaceObject matrix).
-struct Placement {
-    int32_t txTwips = 0, tyTwips = 0;  // translation in twips
-    double rotationDeg = 0;            // DisplayObject.rotation (0 for all Level 1 bodies)
-    double X() const { return txTwips / 20.0; }
-    double Y() const { return tyTwips / 20.0; }
-};
+// Pixel-space polygon list, as passed to Level.CreateBody(... , [[[x,y],...],...])
+using PolyList = std::vector<std::vector<std::pair<double, double>>>;
 
-// Static description of one CreateBody(...) call in a level constructor.
-struct BodySpec {
-    std::string name;
-    Placement placement;
-    std::string kind;  // "Polygon" | "Circle"
-    double density = 0, friction = 0, restitution = 0;
-    std::vector<std::vector<std::pair<double, double>>> polys;  // pixel-space vertices
-    double circleSize = 0;                                       // "Circle": diameter in px
+struct Sim;
+struct LevelScript {
+    int32_t id;
+    void (*construct)(Sim&);  // body of Level_N() after super()
+    void (*update)(Sim&);     // body of Level_N.Update() after super.Update()
+    bool implemented;
 };
-
-struct LevelSpec {
-    int32_t id = 0;
-    std::vector<Placement> checkpoints;  // checkPoint0..N
-    std::vector<BodySpec> bodies;        // in constructor order
-    double deathY = 0;                   // Level_N.Update: playerBox.y > deathY
-};
-
-LevelSpec MakeLevel1();
+const LevelScript& GetLevelScript(int32_t id);
 
 // Immutable per-level data shared by every simulation instance (and snapshot).
+// Geometry is registered on first construction and reused afterwards.
 struct LevelTemplate {
-    LevelSpec spec;
+    int32_t id = 0;
+    const LevelPlacements* placements = nullptr;
     GeomTable geoms;
     int32_t playerGeom = -1;
-    std::vector<std::vector<int32_t>> bodyGeoms;  // per BodySpec, per polygon
-    explicit LevelTemplate(const LevelSpec& s);
+    std::map<std::string, int32_t> geomCache;  // "name#i" -> geom id
+    std::vector<std::string> bodyNames;        // CreateBody order (userTag = 100 + index)
+    bool frozen = false;                       // no new geometry after the first load
+    explicit LevelTemplate(int32_t levelId);
+    const RawPlacement& Place(const char* name) const;
+    bool HasPlacement(const char* name) const;
+    int32_t CheckpointCount() const;
 };
 
 struct FrameStats {
@@ -72,30 +67,45 @@ struct FrameStats {
     double sx, sy, sr;         // PlayerBox sprite x/y/rotation
 };
 
+constexpr int32_t LV_VARS = 8;
+
 // Complete, copyable game state (World + game-side fields).
 struct Sim {
-    const LevelTemplate* tpl = nullptr;
+    LevelTemplate* tpl = nullptr;
     World world;
     int32_t playerBody = -1;
     bool playerAlive = true;
     bool isTimeStop = false;
-    int32_t lastCheckNum = 0;
+    int32_t lastCheckNum = 0;  // Level.lastCheckNum (static in AS3: survives restarts)
     int32_t frameCount = 0;
-    double playerSpriteX = 0, playerSpriteY = 0;  // display coordinates (twip-quantised)
-    double playerSpriteRot = 0;                   // DisplayObject.rotation (normalised degrees)
+    // display layer: DisplayObject x/y/rotation of each body's sprite (twip-quantised)
+    double spriteX[CAP_BODIES], spriteY[CAP_BODIES], spriteRot[CAP_BODIES];
+    bool hasSprite[CAP_BODIES];
+    // per-level script state (Level_N private fields)
+    int32_t lvBody[LV_VARS];
+    int32_t lvInt[LV_VARS];
     // last-frame diagnostics
     bool probeC = false, probeL = false, probeR = false;
 
-    void Load(const LevelTemplate* t);       // Game.SetLevel(id) -> new Level_N()
-    void Restart();                          // "R": SetLevel(id, true)
-    void Tick(uint8_t input);                // one Game.UpdateHandler iteration
+    void Load(LevelTemplate* t, int32_t checkpoint = 0);  // Game.SetLevel(id) -> new Level_N()
+    void Restart();                                       // "R": SetLevel(id, true)
+    void Tick(uint8_t input);                             // one Game.UpdateHandler iteration
     FrameStats Stats(uint8_t input) const;
     std::string BodyName(int32_t body) const;
 
+    // API used by level scripts (mirrors Level.as helpers)
+    int32_t CreateBody(const char* name, const char* kind, double density, double friction, double restitution,
+                       const PolyList& polys);
+    int32_t CreateCircleBody(const char* name, double density, double friction, double restitution, double size);
+    void PlayerDie();
+    double SpriteX(int32_t body) const { return spriteX[body]; }
+    double SpriteY(int32_t body) const { return spriteY[body]; }
+
    private:
-    int32_t CreateLevelBody(const BodySpec& spec, const std::vector<int32_t>& geoms);
     int32_t GetBodyAtPoint(double x, double y, bool includeStatic);
     void LevelUpdate(bool left, bool up, bool right);
+    int32_t Geom(const std::string& key, const ShapeDef& def);
+    int32_t BeginBody(const char* name);
 };
 
 // Game.as DecodeInRLE / EncodeOutRLE (TAS string format)

@@ -99,6 +99,25 @@ These settle the three open assumptions in `rbsim` directly.
 
 Note that `sx`, `sy`, `sr` in the per-frame lines also expose twip behaviour on real values.
 
+### 3.4 Other dynamic bodies (needed for levels with joints or moving parts)
+
+After the 21 standard columns, append one group of 7 columns for every
+**non-static body other than the player** whose `m_userData` is a
+`DisplayObject`:
+
+`name  px  py  a  vx  vy  w`
+
+Here `name` is `m_userData.name`, and the six numbers are hex doubles of
+`m_xf.position.x`, `m_xf.position.y`, `m_sweep.a`, `m_linearVelocity.x`,
+`m_linearVelocity.y` and `m_angularVelocity`.
+
+- On Level 2 this logs `kickBall` (the pendulum) and `movePlatform`.
+- A joint bug then shows up in the joint body's own fields on the first
+  wrong frame, instead of indirectly through the ball many frames later.
+- Death debris (`playerDiePart*`) is ignored by `rbsim verify`, so it is fine
+  if it appears.
+- `rbsim verify` compares these groups by name; the order doesn't matter.
+
 ## 4. Where to hook in
 
 ### 4.1 `Game.as` — both update paths
@@ -162,12 +181,15 @@ var _loc6_:Boolean = Boolean(this.GetBodyAtPoint(...GetPosition().x + 0.2, ... +
 `public function dbgContactCount():int { return m_world.m_contactCount; }`
 (required; `logFrame` calls it).
 
+For §3.4 also add `public function dbgWorld():* { return m_world; }`.
+
 ## 5. Encoding helpers (AS3)
 
 ```as3
 import flash.utils.ByteArray;
 import flash.system.Capabilities;
 import flash.net.FileReference;
+import flash.display.DisplayObject;
 
 private var dbgLog:Array = [];
 private var dbgTick:int = 0;
@@ -201,7 +223,19 @@ private function logFrame(forceTick:int = -1):void {
       int(L.dbgPC), int(L.dbgPL), int(L.dbgPR),
       cbl.length, names.join(","), L.dbgContactCount(),
       hex(L.getplayerBox().x), hex(L.getplayerBox().y), hex(L.getplayerBox().rotation),
-      int(L.isTimeStop)].join("\t"));
+      int(L.isTimeStop)]
+      .concat(dbgExtraBodies(L, b)).join("\t"));
+}
+
+// §3.4: other dynamic bodies (pendulums, moving platforms, ...)
+private function dbgExtraBodies(L:*, player:*):Array {
+   var out:Array = [];
+   for (var wb:* = L.dbgWorld().m_bodyList; wb; wb = wb.m_next) {
+      if (wb == player || wb.IsStatic() || !(wb.m_userData is DisplayObject)) continue;
+      out.push(wb.m_userData.name, hex(wb.m_xf.position.x), hex(wb.m_xf.position.y), hex(wb.m_sweep.a),
+               hex(wb.m_linearVelocity.x), hex(wb.m_linearVelocity.y), hex(wb.m_angularVelocity));
+   }
+   return out;
 }
 
 // Call from the keyboard handler: FileReference.save() only works inside a user-input event.
@@ -232,7 +266,20 @@ through the instant `LoadState` path. Export one file per run.
 | T6 L+R | `n20S30W10n30` | same-frame Left+Right (live velocity reads) |
 | T7 restart | `n20d20R1d20n20` | `R` handling, re-construction |
 | T8 real TAS | your Level 1 TAS string | barrier, exitPlatform landing, win / `isTimeStop` |
-| T9+ | later levels' TAS strings | only once joints and level extraction land in `rbsim` |
+| T9+ | later levels' TAS strings | once each level is implemented in `rbsim` |
+
+**Level 2** (distance joint pendulum `kickBall`, prismatic `movePlatform`).
+Use the §3.4 extra-body columns for all of these:
+
+| name | start | RLE input | exercises |
+|---|---|---|---|
+| L2-idle | Level 2, checkpoint 0 | `n900` | pendulum and platform free-running (pure joint test) |
+| L2-TAS | Level 2, checkpoint 0 | your Level 2 TAS | everything, through the win |
+| L2-play | Level 2 | a few manual runs: hit the pendulum, ride the moving platform, fall off it | ball-joint-body contacts |
+| L2-cp1 | Level 2 after reaching checkPoint1, then `R` | `R1n300` or any | restart from checkpoint 1 (`LEVEL 2 1`) |
+
+`rbsim log --level 2 --inputs "<rle>"` prints the simulator's log in the same
+format, which is useful for a direct diff.
 
 Also export the calibration dump (§3.3) once.
 

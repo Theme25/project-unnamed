@@ -151,9 +151,39 @@ struct Contact {
 };
 
 // ----------------------------------------------------------------- joints
-// Joints are the next milestone; the structural parts (lists, island edges,
-// IsConnected) are already wired so Solve() is faithful once they land.
-enum JointType : int32_t { JT_UNKNOWN = 0, JT_REVOLUTE, JT_PRISMATIC, JT_DISTANCE, JT_PULLEY, JT_MOUSE, JT_GEAR };
+// Box2DFlash 2.0.x joints (force-based formulation). Only the three types
+// the game creates are implemented; the others abort.
+enum JointType : int32_t { JT_UNKNOWN = 0, JT_REVOLUTE = 1, JT_PRISMATIC = 2, JT_DISTANCE = 3, JT_PULLEY = 4,
+                           JT_MOUSE = 5, JT_GEAR = 6 };
+enum LimitState : int32_t { LS_INACTIVE = 0, LS_AT_LOWER = 1, LS_AT_UPPER = 2, LS_EQUAL = 3 };
+
+struct JointDef {
+    int32_t type = JT_UNKNOWN;
+    int32_t body1 = -1, body2 = -1;
+    bool collideConnected = false;
+    Vec2 localAnchor1, localAnchor2;
+    // b2DistanceJointDef
+    double length = 1, frequencyHz = 0, dampingRatio = 0;
+    // b2PrismaticJointDef / b2RevoluteJointDef
+    Vec2 localAxis1{1, 0};
+    double referenceAngle = 0;
+    bool enableLimit = false, enableMotor = false;
+    double lowerTranslation = 0, upperTranslation = 0, maxMotorForce = 0;
+    double lowerAngle = 0, upperAngle = 0, maxMotorTorque = 0;
+    double motorSpeed = 0;
+};
+
+struct Jacobian {
+    Vec2 linear1;
+    double angular1 = NUM_NAN;  // AS3: uninitialised Number
+    Vec2 linear2;
+    double angular2 = NUM_NAN;
+    void SetZero() { linear1.SetZero(); angular1 = 0; linear2.SetZero(); angular2 = 0; }
+    double Compute(const Vec2& x1, double a1, const Vec2& x2, double a2) const {
+        return linear1.x * x1.x + linear1.y * x1.y + angular1 * a1 + (linear2.x * x2.x + linear2.y * x2.y) +
+               angular2 * a2;
+    }
+};
 
 struct JointEdge {             // edge ref = jointIndex*2 + nodeIndex
     int32_t other = -1;
@@ -168,6 +198,26 @@ struct Joint {
     bool islandFlag = false;
     bool collideConnected = false;
     bool alive = false;
+    double inv_dt = NUM_NAN;
+    Vec2 localAnchor1, localAnchor2;
+    // distance
+    Vec2 u;
+    double length = 0, frequencyHz = 0, dampingRatio = 0;
+    double impulse = 0, gamma = 0, bias = 0, mass = NUM_NAN;
+    // prismatic
+    Vec2 localXAxis1, localYAxis1;
+    double refAngle = 0;
+    Jacobian linearJacobian, motorJacobian;
+    double linearMass = 0, force = 0, angularMass = 0, torque = 0;
+    double motorMass = NUM_NAN, motorForce = 0, limitForce = 0, limitPositionImpulse = 0;
+    double lowerTranslation = 0, upperTranslation = 0, maxMotorForce = 0, motorSpeed = 0;
+    bool enableLimit = false, enableMotor = false;
+    int32_t limitState = LS_INACTIVE;  // AS3: uninitialised int = 0
+    // revolute
+    double referenceAngle = 0;
+    Vec2 pivotForce;
+    Mat22 pivotMass;
+    double lowerAngle = 0, upperAngle = 0, maxMotorTorque = 0;
 };
 
 // ----------------------------------------------------------------- bodies
@@ -328,6 +378,22 @@ struct World {
     void ApplyForce(int32_t body, const Vec2& force, const Vec2& point);
     void ApplyImpulse(int32_t body, const Vec2& impulse, const Vec2& point);
     bool IsConnected(int32_t body, int32_t other) const;
+    void SetLinearVelocity(int32_t body, const Vec2& v) { bodies[body].linearVelocity = v; }  // no wake-up (AS3)
+    Vec2 GetLocalPoint(int32_t body, const Vec2& worldPoint) const { return b2MulXT(bodies[body].xf, worldPoint); }
+    Vec2 GetLocalVector(int32_t body, const Vec2& v) const {  // b2MulTMV
+        const Mat22& R = bodies[body].xf.R;
+        return Vec2(v.x * R.col1.x + v.y * R.col1.y, v.x * R.col2.x + v.y * R.col2.y);
+    }
+
+    // ---- joints (b2joints.cpp)
+    int32_t CreateJoint(const JointDef& def);
+    void DestroyJoint(int32_t j);
+    void InitDistanceJointDef(JointDef& d, int32_t b1, int32_t b2, const Vec2& anchor1, const Vec2& anchor2) const;
+    void InitPrismaticJointDef(JointDef& d, int32_t b1, int32_t b2, const Vec2& anchor, const Vec2& axis) const;
+    void InitRevoluteJointDef(JointDef& d, int32_t b1, int32_t b2, const Vec2& anchor) const;
+    void JointInitVelocityConstraints(int32_t j, const TimeStep& step);
+    void JointSolveVelocityConstraints(int32_t j, const TimeStep& step);
+    bool JointSolvePositionConstraints(int32_t j);
 
     // ---- shape helpers
     bool ShapeTestPoint(int32_t shape, const XForm& xf, const Vec2& p) const;

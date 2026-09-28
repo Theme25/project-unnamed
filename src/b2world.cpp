@@ -866,8 +866,9 @@ void World::DestroyBody(int32_t b) {
     Body& body = bodies[b];
     int32_t je = body.jointList;
     while (je != -1) {
-        (void)JEdge;
-        fatal("DestroyBody with joints: joints not implemented yet");
+        int32_t je0 = je;
+        je = JEdge(*this, je).next;
+        DestroyJoint(je0 >> 1);  // destruction listener is null in this game
     }
     int32_t s = body.shapeList;
     while (s != -1) {
@@ -1373,10 +1374,10 @@ struct Island {
         }
         ContactSolver contactSolver(w, step, contacts, contactCount, g_scratch.constraints);
         contactSolver.InitVelocityConstraints(step);
-        if (jointCount > 0) fatal("joint solving not implemented yet");
+        for (int32_t i = 0; i < jointCount; ++i) w.JointInitVelocityConstraints(joints[i], step);
         for (int32_t i = 0; i < step.maxIterations; ++i) {
             contactSolver.SolveVelocityConstraints();
-            // joints SolveVelocityConstraints (next milestone)
+            for (int32_t k = 0; k < jointCount; ++k) w.JointSolveVelocityConstraints(joints[k], step);
         }
         contactSolver.FinalizeVelocityConstraints();
         for (int32_t i = 0; i < bodyCount; ++i) {
@@ -1391,10 +1392,14 @@ struct Island {
             w.SynchronizeTransform(bi);
         }
         if (correctPositions) {
-            // joints InitPositionConstraints (next milestone)
+            // b2Joint.InitPositionConstraints is a no-op for every joint type
             for (positionIterationCount = 0; positionIterationCount < step.maxIterations; ++positionIterationCount) {
                 bool contactsOkay = contactSolver.SolvePositionConstraints(settings::contactBaumgarte);
                 bool jointsOkay = true;
+                for (int32_t k = 0; k < jointCount; ++k) {
+                    bool jointOkay = w.JointSolvePositionConstraints(joints[k]);  // always evaluated
+                    jointsOkay = jointsOkay && jointOkay;
+                }
                 if (contactsOkay && jointsOkay) break;
             }
         }
