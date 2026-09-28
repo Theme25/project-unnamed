@@ -89,6 +89,7 @@ std::vector<int> Compare(const FrameStats& s, const std::vector<std::string>& f,
     cmpD(17, s.sx);
     cmpD(18, s.sy);
     cmpD(19, s.sr);
+    cmpI(20, s.timeStop);
     return bad;
 }
 
@@ -206,6 +207,12 @@ int CmdVerify(int argc, char** argv) {
         for (size_t ei = 0; ei < sg.entries.size(); ++ei) {
             const Entry& e = sg.entries[ei];
             if (e.restart) {
+                // lastCheckNum is static in AS3: it decides which checkpoint the next segment starts at
+                if (si + 1 < segs.size() && segs[si + 1].level == sg.level && segs[si + 1].checkpoint != sim->lastCheckNum) {
+                    std::printf("segment %zu: checkpoint carried into the restart differs: flash=%d sim=%d\n", si,
+                                segs[si + 1].checkpoint, sim->lastCheckNum);
+                    ok = false;
+                }
                 sim->Restart();
                 continue;
             }

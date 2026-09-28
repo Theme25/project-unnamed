@@ -35,6 +35,49 @@ LevelTemplate::LevelTemplate(int32_t levelId) : id(levelId) {
     pd.radius = width / PHYS_SCALE / 2;
     pd.localPosition.Set(0, 0);
     playerGeom = geoms.Add(pd);
+    aim = Display("levelAim");
+    for (int32_t i = 0; i < 5; ++i) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "checkPoint%d", i);
+        cps[i] = Display(buf);
+    }
+}
+
+const DisplayObj* LevelTemplate::Display(const char* name) const {
+    for (const LevelDisplay& ld : kDisplayTable) {
+        if (ld.id != id) continue;
+        for (int32_t i = 0; i < ld.count; ++i)
+            if (!std::strcmp(ld.items[i].name, name)) return &ld.items[i];
+    }
+    return nullptr;
+}
+
+DisplayConfig& GetDisplayConfig() {
+    static DisplayConfig cfg;
+    return cfg;
+}
+
+// PlayerBox symbol: children 20/21/22 all lie inside (-210,-210)-(210,210) twips.
+Rect BallBounds(double sx, double sy, double rotDeg) {
+    const double x = std::llround(sx * 20), y = std::llround(sy * 20);  // sprite x/y are whole twips
+    const double a = rotDeg * (AS3_PI / 180), c = std::cos(a), s = std::sin(a);
+    const double h = PLAYER_SPRITE_WIDTH_TWIPS / 2.0;
+    const double ex = std::fabs(c) * h + std::fabs(s) * h;  // AABB half-extent of the rotated square
+    Rect r{x - ex, y - ex, x + ex, y + ex};
+    switch (GetDisplayConfig().bounds) {
+        case BoundsModel::Exact: break;
+        case BoundsModel::RoundNearest:
+            r = {std::floor(r.x0 + 0.5), std::floor(r.y0 + 0.5), std::floor(r.x1 + 0.5), std::floor(r.y1 + 0.5)};
+            break;
+        case BoundsModel::FloorCeil: r = {std::floor(r.x0), std::floor(r.y0), std::ceil(r.x1), std::ceil(r.y1)}; break;
+    }
+    return r;
+}
+
+bool RectsHit(const Rect& a, const Rect& b) {
+    const double ox = std::fmin(a.x1, b.x1) - std::fmax(a.x0, b.x0);
+    const double oy = std::fmin(a.y1, b.y1) - std::fmax(a.y0, b.y0);
+    return GetDisplayConfig().inclusive ? (ox >= 0 && oy >= 0) : (ox > 0 && oy > 0);
 }
 
 bool LevelTemplate::HasPlacement(const char* name) const {
@@ -237,6 +280,9 @@ void Sim::Restart() {
 
     int32_t nCheck = tpl->CheckpointCount();
     if (lastCheckNum >= nCheck) fatal("checkpoint index out of range");
+    // Level(): levelAim.stop(); each checkPoint<i>.stop(), gotoAndStop(5) if already collected
+    aimFrame = 1;
+    for (int32_t i = 0; i < 5; ++i) cpFrame[i] = (i < nCheck && lastCheckNum > i) ? 5 : 1;
     char cpName[32];
     std::snprintf(cpName, sizeof cpName, "checkPoint%d", lastCheckNum);
     const RawPlacement& cp = tpl->Place(cpName);
@@ -336,12 +382,41 @@ void Sim::LevelUpdate(bool left, bool up, bool right) {
             world.ApplyForce(playerBody, Vec2(0, -1), world.bodies[playerBody].sweep.c);
         }
     }
-    // TODO(display layer): levelAim.hitTestObject -> PlayerWin, spikes, checkpoints.
+    DisplayUpdate();
 
     GetLevelScript(tpl->id).update(*this);  // Level_N.Update after super.Update
 }
 
+void Sim::PlayerWin() {
+    isTimeStop = true;  // Game.tPause = 0: the game loop stops calling Update
+    aimFrame = 2;       // levelAim.play()
+    Body& b = world.bodies[playerBody];
+    b.linearDamping = 3;
+    b.angularDamping = 3;
+}
+
+// Level.Update: levelAim win test, spikes (TODO), checkpoints.
+void Sim::DisplayUpdate() {
+    // A destroyed PlayerBox is off the display list, so hitTestObject is false.
+    const Rect ball = playerAlive ? BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRot[playerBody])
+                                  : Rect{0, 0, 0, 0};
+    if (playerAlive && tpl->aim && aimFrame == 1) {
+        const DisplayObj& o = *tpl->aim;
+        if (RectsHit(ball, Rect{o.x0, o.y0, o.x1, o.y1})) PlayerWin();
+    }
+    // TODO(spikes): Shipik/Ships10 HitTestObjectControlPoints -> PlayerDie (levels with spikes).
+    for (int32_t i = 0; i < 5; ++i) {
+        const DisplayObj* o = tpl->cps[i];
+        if (!o) continue;
+        if (playerAlive && cpFrame[i] == 1 && RectsHit(ball, Rect{o->x0, o->y0, o->x1, o->y1})) {
+            if (i > lastCheckNum) lastCheckNum = i;
+            cpFrame[i] = 2;  // checkPoint<i>.play()
+        }
+    }
+}
+
 void Sim::Tick(uint8_t input) {
+    if (isTimeStop) return;  // Game.tPause == 0 after PlayerWin: no more Level.Update calls
     // Game.UpdateHandler (playback): Left = v>=4, Up = v>=6||v==2||v==3, Right = v%2==1
     bool left = input >= 4;
     bool up = input >= 6 || input == 2 || input == 3;
@@ -377,6 +452,7 @@ FrameStats Sim::Stats(uint8_t input) const {
     s.sx = spriteX[playerBody];
     s.sy = spriteY[playerBody];
     s.sr = spriteRot[playerBody];
+    s.timeStop = isTimeStop;
     return s;
 }
 

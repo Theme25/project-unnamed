@@ -122,7 +122,7 @@ adaptation.
 | level | status |
 |---|---|
 | 1 | bit-exact against Flash logs (FP 11.4: 100%) |
-| 2 | implemented: pendulum (distance joint) and moving platform (prismatic joint); self-tests pass; **awaiting Flash logs** |
+| 2 | **bit-exact** against Flash logs (FP 11.4: 4 runs, 1,350 frames: idle, TAS-style win, long manual win, checkpoint-1 restart + win); joints, goal and checkpoint timing verified |
 | 3–17 | not yet: need their scripts; levels 3, 4, 8–13, 15, 16 also need matrix-to-rotation for rotated placements |
 
 Joint code: every field write in all 48 joint methods was cross-checked
@@ -131,7 +131,6 @@ revolute joints are ever created by the game.
 
 ## Roadmap
 
-1. Verify Level 2 against Flash logs with extra-body columns (docs/STATS_LOGGING.md §3.4).
-2. Display layer: goal/checkpoint `hitTestObject` (rotated ball bbox), spikes; `DisplayObject.rotation` from timeline matrices.
-3. Levels 3–17 scripts (placements already extracted).
-4. Search: shrink snapshots, work-stealing thread pool, prefix-shared branching.
+1. Display layer: goal/checkpoint `hitTestObject` is in (twip AABB model, verified on Level 2); still to do: rotated-box rounding and edge-touch rule (calibration dump, docs/STATS_LOGGING.md §3.5), spikes, `DisplayObject.rotation` from timeline matrices.
+2. Levels 3–17 scripts (placements already extracted).
+3. Search: shrink snapshots, work-stealing thread pool, prefix-shared branching.

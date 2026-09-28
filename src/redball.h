@@ -4,6 +4,7 @@
 #pragma once
 #include "b2world.h"
 #include "levels_data.h"
+#include "display_data.h"
 #include <map>
 #include <string>
 #include <vector>
@@ -27,6 +28,23 @@ enum : uint8_t { IN_NONE = 0, IN_R = 1, IN_U = 2, IN_UR = 3, IN_L = 4, IN_LR = 5
 // Pixel-space polygon list, as passed to Level.CreateBody(... , [[[x,y],...],...])
 using PolyList = std::vector<std::vector<std::pair<double, double>>>;
 
+// ---- display layer: hitTestObject on twip bounding boxes -------------------
+// Rectangles are in Level-local twips (Level.x/y are integral twips and the
+// camera scale is always 1 -- scaleTimer is never started -- so the global
+// offset cancels in any pairwise overlap test).
+struct Rect { double x0, y0, x1, y1; };
+// How Flash rounds a rotated bounding box to twips is still to be calibrated
+// (docs/STATS_LOGGING.md 3.5).  Until then the exact model reproduces every
+// Level 2 win/checkpoint tick in the FP 11.4 logs.
+enum class BoundsModel { Exact, RoundNearest, FloorCeil };
+struct DisplayConfig {
+    BoundsModel bounds = BoundsModel::Exact;
+    bool inclusive = false;  // touching edges count as a hit
+};
+DisplayConfig& GetDisplayConfig();
+Rect BallBounds(double spriteXpx, double spriteYpx, double rotationDeg);
+bool RectsHit(const Rect& a, const Rect& b);
+
 struct Sim;
 struct LevelScript {
     int32_t id;
@@ -48,6 +66,9 @@ struct LevelTemplate {
     bool frozen = false;                       // no new geometry after the first load
     explicit LevelTemplate(int32_t levelId);
     const RawPlacement& Place(const char* name) const;
+    const DisplayObj* Display(const char* name) const;  // nullptr if the level has no such object
+    const DisplayObj* aim = nullptr;                    // levelAim
+    const DisplayObj* cps[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};  // checkPoint0..4
     bool HasPlacement(const char* name) const;
     int32_t CheckpointCount() const;
 };
@@ -65,6 +86,7 @@ struct FrameStats {
     int32_t worldContactCount;
     std::string contactNames;  // playerContactBodies names, comma-joined
     double sx, sy, sr;         // PlayerBox sprite x/y/rotation
+    bool timeStop;             // Level.isTimeStop (win)
 };
 
 constexpr int32_t LV_VARS = 8;
@@ -77,6 +99,8 @@ struct Sim {
     bool playerAlive = true;
     bool isTimeStop = false;
     int32_t lastCheckNum = 0;  // Level.lastCheckNum (static in AS3: survives restarts)
+    int32_t aimFrame = 1;      // levelAim.currentFrame (1 = armed)
+    int32_t cpFrame[5] = {1, 1, 1, 1, 1};  // checkPointN.currentFrame (1 = armed, 5 = already collected)
     int32_t frameCount = 0;
     // display layer: DisplayObject x/y/rotation of each body's sprite (twip-quantised)
     double spriteX[CAP_BODIES], spriteY[CAP_BODIES], spriteRot[CAP_BODIES];
@@ -98,12 +122,14 @@ struct Sim {
                        const PolyList& polys);
     int32_t CreateCircleBody(const char* name, double density, double friction, double restitution, double size);
     void PlayerDie();
+    void PlayerWin();
     double SpriteX(int32_t body) const { return spriteX[body]; }
     double SpriteY(int32_t body) const { return spriteY[body]; }
 
    private:
     int32_t GetBodyAtPoint(double x, double y, bool includeStatic);
     void LevelUpdate(bool left, bool up, bool right);
+    void DisplayUpdate();  // win check + checkpoints (Level.Update, after the input forces)
     int32_t Geom(const std::string& key, const ShapeDef& def);
     int32_t BeginBody(const char* name);
 };

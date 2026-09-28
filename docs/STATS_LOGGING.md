@@ -99,6 +99,44 @@ These settle the three open assumptions in `rbsim` directly.
 
 Note that `sx`, `sy`, `sr` in the per-frame lines also expose twip behaviour on real values.
 
+### 3.5 Display calibration dump (rotated bounding boxes, `hitTestObject`)
+
+`rbsim` decides win, checkpoints and (later) spikes with its own model of
+`hitTestObject`. Level 2 win/checkpoint ticks already match the logs, but those
+events happened 2-5 px inside the boxes, so they cannot show how Flash rounds a
+*rotated* bounding box to twips or whether touching edges count as a hit.
+This dump measures both directly. Run it once, on **Level 2, right after the
+level has loaded** (nothing has moved), then reload the level afterwards: it
+temporarily moves the real `PlayerBox` and does not restore it.
+
+Let `L = m_currLevel`, `pb = L.getplayerBox()`, `aim = L.levelAim`.
+Every number is a hex double (§5), tab separated, one row per sample.
+
+**E1 - bounds of the rotated ball.** For `k = 0 ... 2999`:
+`pb.x = 500 + k*0.0137 + 0.001`, `pb.y = 300 + k*0.0091 + 0.001`,
+`pb.rotation = ((k*0.7317) % 360) - 180`. Then log
+`E1 k hex(pb.x) hex(pb.y) hex(pb.rotation)` followed by
+`getBounds(L)` as `x y width height`, then `getBounds(stage)` as
+`x y width height`. Also log the first 40 samples with `pb.rotation = 0`, `45`,
+`90`, `30`, `-135` in place of the formula (fixed angles, same positions),
+tagged `E1a`.
+
+**E2 - hitTestObject at twip granularity.** With `pb.rotation = 0`, `pb.y = 350`
+(inside the goal's vertical range) sweep `pb.x` around the goal's left edge in
+twip steps: `pb.x = 721.2 + (j - 20)*0.05` for `j = 0 ... 40`. Repeat for the
+right edge with `pb.x = 757.3 + (j - 20)*0.05`. Then hold `pb.x = 740` and sweep
+`pb.y` around the top edge, `pb.y = 334.5 + (j - 20)*0.05`, and the bottom
+edge, `pb.y = 395.5 + (j - 20)*0.05`. Repeat all four sweeps with
+`pb.rotation = 45`. Log
+`E2 hex(pb.x) hex(pb.y) hex(pb.rotation) int(pb.hitTestObject(aim))` and
+`getBounds(L)` of `pb` (`x y width height`).
+
+**E3 - static object bounds.** For `aim`, `checkPoint0`, `checkPoint1`,
+`movePlatform`, `exitPlatform`: log
+`E3 name` + `getBounds(L)` (`x y width height`) + `getRect(L)` (`x y width height`).
+
+Save it in the same calibration file as §3.3 (rows start with `E1`, `E1a`, `E2`, `E3`).
+
 ### 3.4 Other dynamic bodies (needed for levels with joints or moving parts)
 
 After the 21 standard columns, append one group of 7 columns for every

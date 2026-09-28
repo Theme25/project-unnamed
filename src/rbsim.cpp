@@ -312,6 +312,54 @@ static int CmdTest() {
         }
         check(same, "level 2 snapshot copy continues bit-identically (joints included)");
     }
+    // 11. display layer (FP 11.4 logs rb1_stats2_{2,3,4}_f): Level 2 goal and checkpoint timing
+    {
+        LevelTemplate t2(2);
+        struct Case { const char* name; const char* inputs; int winTick, winFrame; };
+        const Case cases[] = {
+            {"tas-style run", "d18e1w1n1w5n26a2e1w4n10w1n46a2n4d1n19w6n2w8n28", 186, 185},
+            {"long manual run", "d18e6d41e17d7e1d6e2d24a2d26q25d18e2q55d10e22q23e8d1e1d2n2w3n26d11q1a17n6d5n1d60", 449, 448},
+        };
+        for (const Case& c : cases) {
+            auto s = std::make_unique<Sim>();
+            s->Load(&t2);
+            std::vector<uint8_t> in = DecodeInputs(c.inputs);
+            int tick = 0, winTick = -1;
+            for (uint8_t code : in) {
+                s->Tick(code);
+                ++tick;
+                if (s->isTimeStop && winTick < 0) winTick = tick;
+            }
+            check(winTick == c.winTick && s->frameCount == c.winFrame,
+                  (std::string("level 2 goal triggers at the Flash tick: ") + c.name).c_str());
+        }
+        // run 4: pick up checkPoint1 (tick 165), R, restart there, then win 175 ticks later
+        auto s = std::make_unique<Sim>();
+        s->Load(&t2);
+        std::vector<uint8_t> in = DecodeInputs(
+            "d18e8d32a12d1e2n8d13e1d6w2a6n56R1n1d14e11d7a1n5w1d21n22d20e1d18a1d1e3d3e1d1e2d4a1d3e5d28");
+        int tick = 0, cpTick = -1, winTick = -1, seg = 0;
+        for (size_t i = 0; i < in.size();) {
+            uint8_t code = in[i++];
+            if (code == IN_RESTART) {
+                s->Restart();
+                tick = 0;
+                seg = 1;
+                if (i >= in.size()) break;
+                code = in[i++];
+            }
+            s->Tick(code);
+            ++tick;
+            if (seg == 0 && s->lastCheckNum == 1 && cpTick < 0) cpTick = tick;
+            if (s->isTimeStop && winTick < 0) winTick = tick;
+        }
+        check(cpTick == 165, "level 2 checkPoint1 collected at the Flash tick");
+        check(winTick == 175, "level 2 goal after a checkpoint restart at the Flash tick");
+        auto idle = std::make_unique<Sim>();
+        idle->Load(&t2);
+        for (int f = 0; f < 370; ++f) idle->Tick(IN_NONE);
+        check(!idle->isTimeStop && idle->lastCheckNum == 0, "idle on the start platform: no goal, no checkpoint");
+    }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }
