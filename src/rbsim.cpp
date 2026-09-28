@@ -237,6 +237,12 @@ static int CmdBench(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+    for (int i = 1; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--trig")) {
+            if (!std::strcmp(argv[i + 1], "glibc")) g_trigImpl = TrigImpl::Glibc;
+            else if (!std::strcmp(argv[i + 1], "intel")) g_trigImpl = TrigImpl::IntelLibm;
+            else { std::fprintf(stderr, "--trig intel|glibc\n"); return 2; }
+        }
     if (argc < 2) {
         std::fprintf(stderr, "usage: rbsim run|test|bench|verify [options]\n");
         return 2;

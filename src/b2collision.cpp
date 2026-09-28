@@ -6,6 +6,7 @@
 
 namespace rb {
 
+TrigImpl g_trigImpl = TrigImpl::IntelLibm;
 double (*g_sinHook)(double) = nullptr;
 double (*g_cosHook)(double) = nullptr;
 

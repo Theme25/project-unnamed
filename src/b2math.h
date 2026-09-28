@@ -17,14 +17,30 @@ constexpr double NUM_MAX_VALUE = DBL_MAX;                   // Number.MAX_VALUE
 constexpr double NUM_NAN = std::numeric_limits<double>::quiet_NaN();
 constexpr double AS3_PI = 3.141592653589793;                // Math.PI
 
-// Single choke point for transcendental functions. Flash's Math.sin/cos may
-// not be bit-identical to glibc; if verification shows drift on rotating
-// bodies, replace these two functions only.
-// Optional override hook (used by diagnostics; null in normal runs).
-extern double (*g_sinHook)(double);
+// Single choke point for transcendental functions (used by Mat22::Set).
+// Flash's Math.sin/cos are NOT correctly rounded and differ between players:
+//   TrigImpl::IntelLibm - Flash Player 11.4 (standard plugin/projector, x86):
+//                         Intel LIBM SSE2 routines, bit-exact (4096/4096
+//                         calibration samples). Default.
+//   TrigImpl::Glibc     - correctly rounded glibc; matches neither player
+//                         exactly (kept for comparison / the ActiveX player,
+//                         whose libm is still unidentified).
+enum class TrigImpl : int { IntelLibm = 0, Glibc = 1 };
+extern TrigImpl g_trigImpl;
+extern double (*g_sinHook)(double);  // diagnostics only (null in normal runs)
 extern double (*g_cosHook)(double);
-inline double as3_sin(double a) { return __builtin_expect(g_sinHook != nullptr, 0) ? g_sinHook(a) : std::sin(a); }
-inline double as3_cos(double a) { return __builtin_expect(g_cosHook != nullptr, 0) ? g_cosHook(a) : std::cos(a); }
+}  // namespace rb
+extern "C" double rb_libm_sin(double);  // src/libm_intel.S
+extern "C" double rb_libm_cos(double);
+namespace rb {
+inline double as3_sin(double a) {
+    if (__builtin_expect(g_sinHook != nullptr, 0)) return g_sinHook(a);
+    return g_trigImpl == TrigImpl::IntelLibm ? rb_libm_sin(a) : std::sin(a);
+}
+inline double as3_cos(double a) {
+    if (__builtin_expect(g_cosHook != nullptr, 0)) return g_cosHook(a);
+    return g_trigImpl == TrigImpl::IntelLibm ? rb_libm_cos(a) : std::cos(a);
+}
 inline double as3_sqrt(double a) { return std::sqrt(a); }  // IEEE correctly rounded everywhere
 
 // ECMAScript ToUint32 / ToInt32
