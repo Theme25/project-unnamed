@@ -16,6 +16,7 @@
 using namespace rb;
 
 int CmdVerify(int argc, char** argv);
+int CmdCalib(int argc, char** argv);
 
 static uint64_t bits(double d) {
     uint64_t u;
@@ -359,6 +360,8 @@ static int CmdTest() {
         idle->Load(&t2);
         for (int f = 0; f < 370; ++f) idle->Tick(IN_NONE);
         check(!idle->isTimeStop && idle->lastCheckNum == 0, "idle on the start platform: no goal, no checkpoint");
+        check(s->displayUncertain == 0 && idle->displayUncertain == 0,
+              "no goal/checkpoint outcome depended on the unresolved +-1 twip bounds rounding in the logged runs");
     }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
@@ -406,6 +409,7 @@ int main(int argc, char** argv) {
     if (!std::strcmp(argv[1], "test")) return CmdTest();
     if (!std::strcmp(argv[1], "bench")) return CmdBench(argc, argv);
     if (!std::strcmp(argv[1], "verify")) return CmdVerify(argc, argv);
+    if (!std::strcmp(argv[1], "calib")) return CmdCalib(argc, argv);
     std::fprintf(stderr, "unknown command %s\n", argv[1]);
     return 2;
 }

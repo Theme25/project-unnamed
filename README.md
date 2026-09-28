@@ -131,6 +131,6 @@ revolute joints are ever created by the game.
 
 ## Roadmap
 
-1. Display layer: goal/checkpoint `hitTestObject` is in (twip AABB model, verified on Level 2); still to do: rotated-box rounding and edge-touch rule (calibration dump, docs/STATS_LOGGING.md §3.5), spikes, `DisplayObject.rotation` from timeline matrices.
+1. Display layer: goal/checkpoint `hitTestObject` is in (twip AABB model, verified on Level 2); edge-touch rule confirmed (inclusive); rotated-ball box rounding known to ±1 twip (`rbsim calib`, `Sim::displayUncertain` flags affected tests); still to do: exact rounding rule, spikes, `DisplayObject.rotation` from timeline matrices.
 2. Levels 3–17 scripts (placements already extracted).
 3. Search: shrink snapshots, work-stealing thread pool, prefix-shared branching.

@@ -33,16 +33,15 @@ using PolyList = std::vector<std::vector<std::pair<double, double>>>;
 // camera scale is always 1 -- scaleTimer is never started -- so the global
 // offset cancels in any pairwise overlap test).
 struct Rect { double x0, y0, x1, y1; };
-// How Flash rounds a rotated bounding box to twips is still to be calibrated
-// (docs/STATS_LOGGING.md 3.5).  Until then the exact model reproduces every
-// Level 2 win/checkpoint tick in the FP 11.4 logs.
-enum class BoundsModel { Exact, RoundNearest, FloorCeil };
+// Flash's rotated getBounds rounding is only known to +-1 twip (see BallBounds).
 struct DisplayConfig {
-    BoundsModel bounds = BoundsModel::Exact;
-    bool inclusive = false;  // touching edges count as a hit
+    bool inclusive = true;  // touching edges count as a hit (VERIFIED: E2 calibration, 5/5 touching cases hit)
 };
 DisplayConfig& GetDisplayConfig();
-Rect BallBounds(double spriteXpx, double spriteYpx, double rotationDeg);
+// adj = -1/0/+1 twips on every side of the rotated box: the rounding rule of Flash's
+// rotated getBounds is only known to +-1 twip (calibration: 3,200 rows, half-extent = trunc(h) in 87%,
+// trunc(h)+1 in 12.5%, trunc(h)-1 in 0.2%), so hit tests are made at -1/0/+1 and disagreements are flagged.
+Rect BallBounds(double spriteXpx, double spriteYpx, double rotationDeg, int adj = 0);
 bool RectsHit(const Rect& a, const Rect& b);
 
 struct Sim;
@@ -99,6 +98,7 @@ struct Sim {
     bool playerAlive = true;
     bool isTimeStop = false;
     int32_t lastCheckNum = 0;  // Level.lastCheckNum (static in AS3: survives restarts)
+    int32_t displayUncertain = 0;  // # of goal/checkpoint tests whose outcome depends on the unresolved +-1 twip rounding
     int32_t aimFrame = 1;      // levelAim.currentFrame (1 = armed)
     int32_t cpFrame[5] = {1, 1, 1, 1, 1};  // checkPointN.currentFrame (1 = armed, 5 = already collected)
     int32_t frameCount = 0;

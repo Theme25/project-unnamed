@@ -58,20 +58,16 @@ DisplayConfig& GetDisplayConfig() {
 }
 
 // PlayerBox symbol: children 20/21/22 all lie inside (-210,-210)-(210,210) twips.
-Rect BallBounds(double sx, double sy, double rotDeg) {
+// Calibration (E1, 3,200 rows, FP 11.4): the rotated getBounds is always symmetric about the
+// sprite position with an integral half-extent n; n = trunc(210*(|cos|+|sin|)) in 87.4% of rows,
+// n+1 in 12.5%, n-1 in 0.2% (rule for the bump not identified yet).
+Rect BallBounds(double sx, double sy, double rotDeg, int adj) {
     const double x = std::llround(sx * 20), y = std::llround(sy * 20);  // sprite x/y are whole twips
-    const double a = rotDeg * (AS3_PI / 180), c = std::cos(a), s = std::sin(a);
-    const double h = PLAYER_SPRITE_WIDTH_TWIPS / 2.0;
-    const double ex = std::fabs(c) * h + std::fabs(s) * h;  // AABB half-extent of the rotated square
-    Rect r{x - ex, y - ex, x + ex, y + ex};
-    switch (GetDisplayConfig().bounds) {
-        case BoundsModel::Exact: break;
-        case BoundsModel::RoundNearest:
-            r = {std::floor(r.x0 + 0.5), std::floor(r.y0 + 0.5), std::floor(r.x1 + 0.5), std::floor(r.y1 + 0.5)};
-            break;
-        case BoundsModel::FloorCeil: r = {std::floor(r.x0), std::floor(r.y0), std::ceil(r.x1), std::ceil(r.y1)}; break;
-    }
-    return r;
+    const double a = rotDeg * (AS3_PI / 180);
+    const double half = PLAYER_SPRITE_WIDTH_TWIPS / 2.0;
+    const double h = half * (std::fabs(std::cos(a)) + std::fabs(std::sin(a)));
+    const double n = std::floor(h + 1e-9) + adj;
+    return Rect{x - n, y - n, x + n, y + n};
 }
 
 bool RectsHit(const Rect& a, const Rect& b) {
@@ -258,6 +254,7 @@ void Sim::Load(LevelTemplate* t, int32_t checkpoint) {
     tpl = t;
     lastCheckNum = checkpoint;
     frameCount = 0;
+    displayUncertain = 0;
     Restart();
     tpl->frozen = true;  // geometry/body names are now fixed; later constructions only look up
 }
@@ -398,17 +395,26 @@ void Sim::PlayerWin() {
 // Level.Update: levelAim win test, spikes (TODO), checkpoints.
 void Sim::DisplayUpdate() {
     // A destroyed PlayerBox is off the display list, so hitTestObject is false.
-    const Rect ball = playerAlive ? BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRot[playerBody])
-                                  : Rect{0, 0, 0, 0};
+    Rect ball{0, 0, 0, 0}, ballLo = ball, ballHi = ball;
+    if (playerAlive) {
+        ball = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRot[playerBody], 0);
+        ballLo = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRot[playerBody], -1);
+        ballHi = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRot[playerBody], +1);
+    }
+    auto test = [&](const DisplayObj& o) {
+        const Rect r{o.x0, o.y0, o.x1, o.y1};
+        const bool lo = RectsHit(ballLo, r), hi = RectsHit(ballHi, r);
+        if (lo != hi) ++displayUncertain;
+        return RectsHit(ball, r);
+    };
     if (playerAlive && tpl->aim && aimFrame == 1) {
-        const DisplayObj& o = *tpl->aim;
-        if (RectsHit(ball, Rect{o.x0, o.y0, o.x1, o.y1})) PlayerWin();
+        if (test(*tpl->aim)) PlayerWin();
     }
     // TODO(spikes): Shipik/Ships10 HitTestObjectControlPoints -> PlayerDie (levels with spikes).
     for (int32_t i = 0; i < 5; ++i) {
         const DisplayObj* o = tpl->cps[i];
         if (!o) continue;
-        if (playerAlive && cpFrame[i] == 1 && RectsHit(ball, Rect{o->x0, o->y0, o->x1, o->y1})) {
+        if (playerAlive && cpFrame[i] == 1 && test(*o)) {
             if (i > lastCheckNum) lastCheckNum = i;
             cpFrame[i] = 2;  // checkPoint<i>.play()
         }
