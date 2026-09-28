@@ -13,6 +13,8 @@
 
 using namespace rb;
 
+int CmdVerify(int argc, char** argv);
+
 static uint64_t bits(double d) {
     uint64_t u;
     std::memcpy(&u, &d, 8);
@@ -236,12 +238,13 @@ static int CmdBench(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: rbsim run|test|bench [options]\n");
+        std::fprintf(stderr, "usage: rbsim run|test|bench|verify [options]\n");
         return 2;
     }
     if (!std::strcmp(argv[1], "run")) return CmdRun(argc, argv);
     if (!std::strcmp(argv[1], "test")) return CmdTest();
     if (!std::strcmp(argv[1], "bench")) return CmdBench(argc, argv);
+    if (!std::strcmp(argv[1], "verify")) return CmdVerify(argc, argv);
     std::fprintf(stderr, "unknown command %s\n", argv[1]);
     return 2;
 }

@@ -2,6 +2,7 @@
 // Game.UpdateHandler) driving the Box2D port.
 #include "redball.h"
 #include <cstdio>
+#include <cmath>
 
 namespace rb {
 
@@ -10,7 +11,19 @@ namespace rb {
 // UNVERIFIED: truncation toward zero vs round-to-nearest. The TAS stat logs
 // (sprite x/y) will settle this; it only matters for display-driven checks
 // (death line, hitTestObject for goal/checkpoints).
+// VERIFIED (calibration dump, 2400 samples): truncation toward zero.
 static double SpriteCoord(double v) { return (double)as3_toInt32(v * 20) / 20.0; }
+
+// DisplayObject.rotation: the getter returns the written value normalised to
+// (-180, 180] via fmod (VERIFIED, 720 samples). Level.Update writes
+// angle * (180 / Math.PI) % 360.
+static double SpriteRotation(double angle) {
+    double v = std::fmod(angle * (180 / AS3_PI), 360.0);
+    v = std::fmod(v, 360.0);
+    if (v > 180) v -= 360;
+    else if (v < -180) v += 360;
+    return v;
+}
 
 // ---------------------------------------------------------------- level data
 // Level 1 placements extracted from the SWF (DefineSprite for Level_1,
@@ -85,6 +98,7 @@ int32_t Sim::CreateLevelBody(const BodySpec& spec, const std::vector<int32_t>& g
     BodyDef bd;
     bd.position = Vec2(spec.placement.X() / PHYS_SCALE, spec.placement.Y() / PHYS_SCALE);
     bd.angle = spec.placement.rotationDeg * (AS3_PI / 180);
+    bd.userTag = 100 + (int32_t)(&spec - &tpl->spec.bodies[0]);
     int32_t b = world.CreateBody(bd);
     if (spec.kind == "Polygon" || spec.kind == "BluePolygon") {
         for (size_t i = 0; i < gs.size(); ++i) {
@@ -127,6 +141,7 @@ void Sim::Restart() {
     double px = cp.X(), py = cp.Y();
     playerSpriteX = SpriteCoord(px);
     playerSpriteY = SpriteCoord(py);
+    playerSpriteRot = 0;
     BodyDef bd;
     bd.position.Set(px / PHYS_SCALE, py / PHYS_SCALE);
     bd.userTag = 0;
@@ -177,6 +192,7 @@ void Sim::LevelUpdate(bool left, bool up, bool right) {
         if (!pb.IsStatic()) {
             playerSpriteX = SpriteCoord(pb.xf.position.x * PHYS_SCALE);
             playerSpriteY = SpriteCoord(pb.xf.position.y * PHYS_SCALE);
+            playerSpriteRot = SpriteRotation(pb.sweep.a);
         }
     }
 
@@ -250,7 +266,25 @@ FrameStats Sim::Stats(uint8_t input) const {
     s.contactCount = world.listener.count;
     s.alive = playerAlive;
     s.sleeping = b.IsSleeping();
+    s.sleepTime = b.sleepTime;
+    s.flags = b.flags;
+    s.worldContactCount = world.contactCount;
+    for (int32_t i = 0; i < world.listener.count; ++i) {
+        if (i) s.contactNames += ",";
+        s.contactNames += BodyName(world.listener.bodies[i]);
+    }
+    s.sx = playerSpriteX;
+    s.sy = playerSpriteY;
+    s.sr = playerSpriteRot;
     return s;
+}
+
+std::string Sim::BodyName(int32_t body) const {
+    if (body == world.groundBody) return "ground";
+    int32_t tag = world.bodies[body].userTag;
+    if (tag >= 100 && tag - 100 < (int32_t)tpl->spec.bodies.size()) return tpl->spec.bodies[(size_t)(tag - 100)].name;
+    if (body == playerBody) return "playerBox";
+    return "body" + std::to_string(body);
 }
 
 // ---------------------------------------------------------------- input codec

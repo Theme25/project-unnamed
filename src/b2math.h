@@ -20,8 +20,11 @@ constexpr double AS3_PI = 3.141592653589793;                // Math.PI
 // Single choke point for transcendental functions. Flash's Math.sin/cos may
 // not be bit-identical to glibc; if verification shows drift on rotating
 // bodies, replace these two functions only.
-inline double as3_sin(double a) { return std::sin(a); }
-inline double as3_cos(double a) { return std::cos(a); }
+// Optional override hook (used by diagnostics; null in normal runs).
+extern double (*g_sinHook)(double);
+extern double (*g_cosHook)(double);
+inline double as3_sin(double a) { return __builtin_expect(g_sinHook != nullptr, 0) ? g_sinHook(a) : std::sin(a); }
+inline double as3_cos(double a) { return __builtin_expect(g_cosHook != nullptr, 0) ? g_cosHook(a) : std::cos(a); }
 inline double as3_sqrt(double a) { return std::sqrt(a); }  // IEEE correctly rounded everywhere
 
 // ECMAScript ToUint32 / ToInt32

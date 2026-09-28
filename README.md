@@ -12,6 +12,7 @@ make              # g++ -O2 -ffp-contract=off (no FMA), strict IEEE doubles
 ./rbsim test      # self-tests: resting, rolling, jumping, determinism, snapshots
 ./rbsim run --inputs "n20w1d25n40" [--hex] [--every N]
 ./rbsim bench     # ~0.9M frames/s/thread on Level 1 incl. snapshot restores
+./rbsim verify rb1_stats.tsv   # bit-exact comparison against a Flash stats log
 ```
 
 `run` prints the player's position, velocity, angle, angular velocity, ground
@@ -29,6 +30,8 @@ legacy digit format is also accepted.
 | `b2world.cpp` | SAP broadphase, pair manager, contact lifecycle and listener emulation, island + contact solver, TOI loop, bodies/shapes |
 | `redball.cpp` | Level/PlayerBox construction order, ground probes, input nudges and forces, death line, RLE codec |
 | `rbsim.cpp` | CLI, self-tests, benchmark |
+| `verify.cpp` | replays `rb1_stats.tsv` logs and compares every field bit-for-bit |
+| `tools/trig_flip_search.cpp` | diagnoses divergences caused by 1-ulp `sin`/`cos` differences |
 
 - **Snapshots:** all mutable state lives in fixed arrays linked by `int`
   indices, so `Sim copy = sim;` is a complete, bit-exact snapshot (128 KB now,
@@ -59,19 +62,41 @@ legacy digit format is also accepted.
     `FindMaxSeparation`; the AVM2 p-code confirms it exists and the port
     includes it.
 
-## Unverified assumptions (need the TAS stat logs)
+## Verification status (Flash Player 11.5.502.149, Windows 8, x86)
 
-- **Flash `Math.sin/cos` vs glibc.** Only affects rotating bodies (the ball's
-  position never depends on its angle), so Level 1 is immune.
-- **Twip quantisation of `DisplayObject.x/y`** (truncate vs round). This only
-  matters for display-driven checks: the death line, goal/checkpoint
-  `hitTestObject`, and spikes.
-- **Flash JIT precision:** SSE2 doubles are assumed. If logs diverge on the
-  very first frames, x87 extended precision is the suspect.
+Checked against a real stats log (`docs/STATS_LOGGING.md` describes the mod):
+388 fresh Level 1 runs, 113,938 frames, every field compared bit-for-bit.
+
+- **376 / 388 runs are bit-exact** from level load to the end of the run,
+  death or win. This covers the broadphase and pair order, solver quirks, the
+  listener bug, TOI, sleeping, ground probes, the contact list, twips and
+  sprite rotation.
+- The remaining 12 runs diverge only because Flash's `Math.sin` / `Math.cos`
+  differ from glibc by 1 ulp in about 3.5% of inputs.
+  `tools/trig_flip_search` proves it: with four 1-ulp `sin` corrections the
+  full 1,528-tick Level 1 TAS matches through the win.
+- Without the corrections the TAS drifts: visible at tick 510, and the ball
+  misses a jump by tick 750. **Exact Flash trig is required.**
+
+Calibration results (`rb1_calib.tsv`):
+
+| question | answer |
+|---|---|
+| twip quantisation of `x`/`y` | truncation toward zero (2,400/2,400) |
+| `rotation` getter | written value, `fmod`-normalised to (-180, 180] (720/720) |
+| x87 extended precision in physics | no; all arithmetic matches SSE2 doubles |
+| `Math.sin`/`cos` | **not** glibc, x87 `fsin`/`fcos`, fdlibm, or Intel LIBM x64. ~0.52-ulp error signature, likely the MSVC 32-bit CRT SSE2 routines statically linked into the player. **Open.** |
+
+Tools:
+
+```
+./rbsim verify rb1_stats.tsv [--verbose N] [--ignore sr,...]
+make tools/trig_flip_search && tools/trig_flip_search rb1_stats.tsv <LEVEL line>
+```
 
 ## Roadmap
 
-1. Verify against stat-augmented TAS strings (first divergence frame + field).
+1. Implement Flash's exact `sin`/`cos`, extracted from the Flash Player binary, and re-verify (target: 388/388).
 2. Joints: revolute, prismatic, distance, mouse (structure already wired;
    `Solve` aborts if a joint is present).
 3. Automatic extraction of all 17 levels from the SWF (placements, rotations,

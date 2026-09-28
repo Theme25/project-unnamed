@@ -6,6 +6,9 @@
 
 namespace rb {
 
+double (*g_sinHook)(double) = nullptr;
+double (*g_cosHook)(double) = nullptr;
+
 void fatal(const char* msg) {
     std::fprintf(stderr, "rbsim fatal: %s\n", msg);
     std::abort();

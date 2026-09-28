@@ -65,6 +65,11 @@ struct FrameStats {
     int32_t contactCount;
     bool alive;
     bool sleeping;
+    double sleepTime;
+    uint32_t flags;
+    int32_t worldContactCount;
+    std::string contactNames;  // playerContactBodies names, comma-joined
+    double sx, sy, sr;         // PlayerBox sprite x/y/rotation
 };
 
 // Complete, copyable game state (World + game-side fields).
@@ -77,6 +82,7 @@ struct Sim {
     int32_t lastCheckNum = 0;
     int32_t frameCount = 0;
     double playerSpriteX = 0, playerSpriteY = 0;  // display coordinates (twip-quantised)
+    double playerSpriteRot = 0;                   // DisplayObject.rotation (normalised degrees)
     // last-frame diagnostics
     bool probeC = false, probeL = false, probeR = false;
 
@@ -84,6 +90,7 @@ struct Sim {
     void Restart();                          // "R": SetLevel(id, true)
     void Tick(uint8_t input);                // one Game.UpdateHandler iteration
     FrameStats Stats(uint8_t input) const;
+    std::string BodyName(int32_t body) const;
 
    private:
     int32_t CreateLevelBody(const BodySpec& spec, const std::vector<int32_t>& geoms);
