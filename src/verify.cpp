@@ -189,7 +189,7 @@ int CmdVerify(int argc, char** argv) {
 
     std::map<int, std::unique_ptr<LevelTemplate>> tpls;
     auto sim = std::make_unique<Sim>();
-    int perfect = 0, diverged = 0, unsupported = 0, shown = 0, extraGroupsSeen = 0;
+    int perfect = 0, diverged = 0, unsupported = 0, shown = 0, extraGroupsSeen = 0, deathsMatched = 0;
     long framesCompared = 0, framesMatched = 0;
     std::map<std::string, int> firstFieldHist;
     std::map<int, int> divergeTickHist;
@@ -221,9 +221,21 @@ int CmdVerify(int argc, char** argv) {
             FrameStats st = sim->Stats(code);
             std::string detail;
             std::vector<int> bad = Compare(st, e.f, detail);
+            // Death: Flash logs the 8 playerDiePart* debris bodies from the frame Level.PlayerDie ran.
+            bool flashDied = false;
+            for (size_t k = 21; k + 7 <= e.f.size(); k += 7)
+                if (e.f[k].rfind("playerDiePart", 0) == 0) flashDied = true;
+            const bool simDied = !sim->playerAlive;
             std::vector<int> relevant;
-            for (int c : bad)
-                if (!ignore[(size_t)c]) relevant.push_back(c);
+            for (int c : bad) {
+                if (ignore[(size_t)c]) continue;
+                if (c == 16 && flashDied && simDied) continue;  // nC counts contacts of the (random) debris
+                relevant.push_back(c);
+            }
+            if (flashDied != simDied) {
+                detail += std::string("  death: flash=") + (flashDied ? "died" : "alive") + "  sim=" + (simDied ? "died" : "alive") + "\n";
+                relevant.push_back(21);
+            }
             int groups = 0;
             if (!CompareExtraBodies(*sim, e.f, detail, groups)) relevant.push_back(21);
             extraGroupsSeen = std::max(extraGroupsSeen, groups);
@@ -255,6 +267,7 @@ int CmdVerify(int argc, char** argv) {
             }
             if (!sim->playerAlive) {
                 endReason = 1;
+                ++deathsMatched;
                 break;
             }
         }
@@ -267,6 +280,7 @@ int CmdVerify(int argc, char** argv) {
                 perfect, diverged, unsupported);
     std::printf("frames compared: %ld, matched: %ld  (log lines before first LEVEL skipped: %d)\n", framesCompared,
                 framesMatched, skipped);
+    if (deathsMatched) std::printf("deaths on the same tick as Flash (player fields exact, debris not simulated): %d\n", deathsMatched);
     if (extraGroupsSeen) std::printf("extra bodies compared per frame: up to %d\n", extraGroupsSeen);
     if (!firstFieldHist.empty()) {
         std::printf("first-divergence fields:\n");
