@@ -123,7 +123,7 @@ adaptation.
 |---|---|
 | 1 | bit-exact against Flash logs (FP 11.4: 100%) |
 | 2 | **bit-exact** against Flash logs (FP 11.4: 4 runs, 1,350 frames: idle, TAS-style win, long manual win, checkpoint-1 restart + win); joints, goal and checkpoint timing verified |
-| 3 | implemented: two vertical moving platforms (prismatic), 3 spike rows with the **standardized spike check** (MATHSPIKES = 1, speedrun rule) and the Tweener camera it depends on (`dp`); native-conversion precision to calibrate (§3.8); **awaiting Flash logs** |
+| 3 | **bit-exact** against Flash logs (FP 11.4, MATHSPIKES = 1: 14 segments incl. 10 spike deaths on the Flash tick, a win, a checkpoint-1 restart; camera and ball matrix checked every frame); standardized spike check calibrated exactly (E8a/b/c) |
 | 3–17 | not yet: need their scripts; levels 3, 4, 8–13, 15, 16 also need matrix-to-rotation for rotated placements |
 
 Joint code: every field write in all 48 joint methods was cross-checked

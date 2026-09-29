@@ -220,6 +220,15 @@ frame row; `rbsim verify` will then compare the in-game matrix directly.
 
 ### 3.8 Standardized spikes (`MATHSPIKES = 1`) and camera
 
+**Results (rb1_calib_mathspikes.tsv + rb1_stats_mathspikes1-5.tsv, FP 11.4, isGless off):**
+camera tween constant identical to `pow(2, -10/31)`; camera and ball matrix match on every
+logged frame. `localToGlobal` truncates the point to twips, applies the 16.16 matrix and
+rounds to the nearest twip (E8a 16,000/16,000); `testPoint`'s shift goes back to twips by
+truncation, and `cover.x = dp` is itself truncated by the setter (E8b 26,040/26,040); the whole
+check matches on E8c 30,000/30,000 (479 hits). Stats rows end with
+`ball.a ball.b Level.x Level.y dp[0] dp[1]` (hex); a trailing row logged without the frame
+advancing (stop keypress) has an unreliable input field and is skipped by `rbsim verify`.
+
 The speedrun rule is the Practice Hack's standardized spike check (`mathspikes 1`), which
 `rbsim` implements: for each of the ball's 16 control points, `Shipik.testPoint` requires
 the Level-space point to lie in the spike's `getBounds(Level)` rectangle, then shifts it by

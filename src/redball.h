@@ -50,9 +50,9 @@ bool RectsHit(const Rect& a, const Rect& b);
 // PlayerBox.HitTestObjectControlPoints -> Shipik.testPoint for 16 control points
 // (10.5 px radius, through the ball's display matrix). Each point, in Level space, must lie in the
 // Shipik's getBounds rectangle; then it is shifted by -dp (the camera step of this frame) and tested
-// strictly against the triangle (0,0) (3,-9.65) (6,0). Native localToGlobal/globalToLocal are modelled
-// as exact doubles (docs/STATS_LOGGING.md 3.8 calibrates them); decisions within SPIKE_EDGE_MARGIN
-// twips of an edge are counted in Sim::displayUncertain.
+// strictly against the triangle (0,0) (3,-9.65) (6,0), with Flash's twip conversions reproduced exactly
+// (docs/STATS_LOGGING.md 3.8). Rotated/scaled Shipiks (later levels) are not calibrated yet: decisions
+// within SPIKE_EDGE_MARGIN twips of an edge there are counted in Sim::displayUncertain.
 constexpr double SPIKE_EDGE_MARGIN = 1.0;
 struct SpikeResult { bool hit; bool uncertain; };
 SpikeResult BallHitsSpike(double spriteXpx, double spriteYpx, double rotationDeg, double dpx, double dpy, const SpikeObj& s);

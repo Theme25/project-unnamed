@@ -29,6 +29,7 @@ std::vector<std::string> Split(const std::string& s) {
     return out;
 }
 long Tw(double px) { return std::lround(px * 20); }
+double SpriteCoordC(double v) { return (double)as3_toInt32(v * 20) / 20.0; }
 }  // namespace
 
 int CmdCalib(int argc, char** argv) {
@@ -47,6 +48,8 @@ int CmdCalib(int argc, char** argv) {
     long e2 = 0, e2obs = 0, e2model = 0, e2inRange = 0, e2touch = 0;
     long e3ok = 0, e3n = 0;
     long mN = 0, mOk = 0;  // E4 / E7a / E7b: rotation -> matrix
+    long e8cN = 0, e8cOk = 0, e8cHits = 0, powN = 0, powOk = 0;
+    LevelTemplate tpl3(3);
     auto checkM = [&](double rot, const std::string& ha, const std::string& hb) {
         const FlashMatrix m = FlashRotationMatrix(rot);
         ++mN;
@@ -82,6 +85,18 @@ int CmdCalib(int argc, char** argv) {
             const double ox = std::fmin(obs.x1, g.x1) - std::fmax(obs.x0, g.x0);
             const double oy = std::fmin(obs.y1, g.y1) - std::fmax(obs.y0, g.y0);
             if ((ox == 0 && oy >= 0) || (oy == 0 && ox >= 0)) ++e2touch;
+        } else if (f[0] == "E8pow" && f.size() >= 2) {
+            ++powN;
+            if (H(f[1]) == std::pow(2.0, -10 * 1.0 / 31)) ++powOk;
+        } else if (f[0] == "E8c" && f.size() >= 5) {
+            // pb.HitTestObjectControlPoints(L.ship1) with the covers at (0,0): ship1 = first 11 Level 3 spikes
+            const double rot = H(f[1]), x = SpriteCoordC(H(f[2])), y = SpriteCoordC(H(f[3]));
+            bool hit = false;
+            for (int32_t i = 0; i < 11 && i < tpl3.spikeCount; ++i)
+                if (BallHitsSpike(x, y, rot, 0, 0, tpl3.spikes[i]).hit) hit = true;
+            ++e8cN;
+            if (hit == (std::stoi(f[4]) == 1)) ++e8cOk;
+            if (std::stoi(f[4]) == 1) ++e8cHits;
         } else if (f[0] == "E4" && f.size() >= 6) {
             checkM(H(f[2]), f[3], f[4]);
         } else if (f[0] == "E7a" && f.size() >= 8) {
@@ -105,12 +120,15 @@ int CmdCalib(int argc, char** argv) {
     std::printf("   Flash-matrix model: exact %ld, flash +1 twip %ld, flash -1 twip %ld, worse %ld\n", e1exact, e1plus, e1minus,
                 e1far);
     if (mN) std::printf("rotation -> 16.16 matrix (E4/E7a/E7b): %ld / %ld exact\n", mOk, mN);
+    if (powN) std::printf("camera tween constant Math.pow(2, -10/31): %s\n", powOk == powN ? "identical" : "DIFFERENT");
+    if (e8cN) std::printf("standardized spikes, whole check (E8c): %ld / %ld (Flash hits: %ld)\n", e8cOk, e8cN, e8cHits);
     std::printf("E2 hitTestObject sweep: %ld rows; RectsHit on Flash's own bounds agrees in %ld (touching-edge rows: %ld)\n",
                 e2, e2obs, e2touch);
     std::printf("   with the modelled ball box: agrees in %ld, consistent with some +-1 twip adjustment in %ld\n", e2model,
                 e2inRange);
     std::printf("E3 static bounds vs SWF-derived display_data.h: %ld / %ld identical\n", e3ok, e3n);
-    const bool pass = e1far == 0 && e2obs == e2 && e2inRange == e2 && e1exact == e1 && (mN == 0 || mN - mOk <= 4);
+    const bool e8ok = e8cOk == e8cN && powOk == powN;
+    const bool pass = e8ok && e1far == 0 && e2obs == e2 && e2inRange == e2 && e1exact == e1 && (mN == 0 || mN - mOk <= 4);
     std::printf("%s\n", pass ? "CALIB OK" : "CALIB MISMATCH");
     return pass ? 0 : 1;
 }

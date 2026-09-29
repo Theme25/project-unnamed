@@ -117,31 +117,47 @@ static double ShipikEdgeDistance(double x, double y) {
     return best;
 }
 
+// Standardized spike check, calibrated in docs/STATS_LOGGING.md 3.8 (FP 11.4, rb1_calib_mathspikes.tsv):
+//  - localToGlobal truncates the point to twips, applies the 16.16 display matrix and rounds to the nearest
+//    twip (E8a 16,000/16,000); globalToLocal for pure translations is exact twip subtraction;
+//  - Shipik.testPoint: Level point (twips / 20) in getBounds(Level) (doubles, left/top inclusive), minus
+//    cover.x/y (= dp through the DisplayObject setter, i.e. truncated to twips), L.localToGlobal truncates to
+//    twips, S.globalToLocal subtracts the Shipik origin, strict sign test (E8b 26,040/26,040);
+//  - whole HitTestObjectControlPoints: E8c 30,000/30,000.
+// Only translated Shipiks are calibrated; rotated/scaled ones (later levels) use exact doubles and count
+// decisions within SPIKE_EDGE_MARGIN twips of an edge as uncertain.
 SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s) {
-    const double m = SPIKE_EDGE_MARGIN / 20.0;  // px
-    const double bx0 = s.bx0 / 20.0, by0 = s.by0 / 20.0, bx1 = s.bx1 / 20.0, by1 = s.by1 / 20.0;
-    // quick reject: control points are within 10.5 px of the ball
-    if (sx + 10.5 + m < bx0 || sx - 10.5 - m > bx1 || sy + 10.5 + m < by0 || sy - 10.5 - m > by1) return {false, false};
+    const double bx0 = s.bx0 / 20.0, by0 = s.by0 / 20.0, bw = (s.bx1 - s.bx0) / 20.0, bh = (s.by1 - s.by0) / 20.0;
+    if (sx + 11 < bx0 || sx - 11 > bx0 + bw || sy + 11 < by0 || sy - 11 > by0 + bh) return {false, false};
+    const int64_t X = std::llround(sx * 20), Y = std::llround(sy * 20);  // sprite x/y: whole twips
     const FlashMatrix fm = FlashRotationMatrix(rotDeg);
-    const double a = fm.a / 65536.0, b = fm.b / 65536.0;  // c = -b, d = a
-    const double det = s.a * s.d - s.b * s.c;
-    const double r = PLAYER_SPRITE_WIDTH_TWIPS / 20.0 / 2;  // this.width / 2
+    const double coverX = SpriteCoord(dpx), coverY = SpriteCoord(dpy);  // Shipik.updateCover: cover.x = dp[0]
+    const bool plain = s.a == 1 && s.b == 0 && s.c == 0 && s.d == 1;
+    const int64_t ox = std::llround(s.tx * 20), oy = std::llround(s.ty * 20);
+    const double r = PLAYER_SPRITE_WIDTH_TWIPS / 20.0 / 2;  // PlayerBox: this.width / 2
     const double step = 2 * AS3_PI / 16;
     bool hit = false, uncertain = false;
     for (int k = 0; k < 16; ++k) {
-        const double lx = r * as3_cos(step * k), ly = r * as3_sin(step * k);  // testPoints[k]
-        const double px = sx + (a * lx - b * ly), py = sy + (b * lx + a * ly);  // Level space
-        // this.getBounds(this.p).containsPoint(point)
-        const bool inB = px >= bx0 && px < bx0 + (bx1 - bx0) && py >= by0 && py < by0 + (by1 - by0);
-        const double bd = std::fmin(std::fmin(std::fabs(px - bx0), std::fabs(px - bx1)), std::fmin(std::fabs(py - by0), std::fabs(py - by1)));
-        const bool nearB = bd < m && px > bx0 - m && px < bx1 + m && py > by0 - m && py < by1 + m;
-        // point.subtract(cover) -> Shipik local
-        const double qx = px - dpx - s.tx, qy = py - dpy - s.ty;
-        const double ux = (s.d * qx - s.c * qy) / det, uy = (-s.b * qx + s.a * qy) / det;
-        const bool inT = ShipikPointInTriangle(ux, uy);
-        const bool nearT = ShipikEdgeDistance(ux, uy) < m;
-        if (inB && inT) hit = true;
-        if ((nearB && (inT || nearT)) || (nearT && (inB || nearB))) uncertain = true;
+        // testPoints[k] = (r cos(step k), r sin(step k)); localToGlobal: to twips (truncate), matrix, round
+        const int64_t qx = (int64_t)std::trunc(r * as3_cos(step * k) * 20), qy = (int64_t)std::trunc(r * as3_sin(step * k) * 20);
+        const int64_t gx = X + ((fm.a * qx - fm.b * qy + 32768) >> 16);
+        const int64_t gy = Y + ((fm.b * qx + fm.a * qy + 32768) >> 16);
+        const double px = gx / 20.0, py = gy / 20.0;  // p.globalToLocal(point)
+        if (!(px >= bx0 && px < bx0 + bw && py >= by0 && py < by0 + bh)) continue;  // getBounds(p).containsPoint
+        const double qxs = px - coverX, qys = py - coverY;                           // point.subtract(cover)
+        const int64_t tx = (int64_t)std::trunc(qxs * 20), ty = (int64_t)std::trunc(qys * 20);  // p.localToGlobal
+        double ux, uy;
+        if (plain) {
+            ux = (tx - ox) / 20.0;
+            uy = (ty - oy) / 20.0;
+        } else {
+            const double det = s.a * s.d - s.b * s.c;
+            const double vx = tx / 20.0 - s.tx, vy = ty / 20.0 - s.ty;
+            ux = (s.d * vx - s.c * vy) / det;
+            uy = (-s.b * vx + s.a * vy) / det;
+            if (ShipikEdgeDistance(ux, uy) < SPIKE_EDGE_MARGIN / 20.0) uncertain = true;
+        }
+        if (ShipikPointInTriangle(ux, uy)) hit = true;
     }
     return {hit, uncertain};
 }

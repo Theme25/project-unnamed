@@ -409,6 +409,26 @@ static int CmdTest() {
             if (!s4->playerAlive) break;
         }
         check(!s4->playerAlive && f < 100 && s4->spriteY[s4->playerBody] < 450, "level 3: jumping into the first spike row kills");
+        // rb1_stats_mathspikes2.tsv (FP 11.4, MATHSPIKES = 1): d18 e1 d58 dies on the spikes at tick 72
+        auto s5 = std::make_unique<Sim>();
+        s5->Load(&t3);
+        int deathTick = -1, tk = 0;
+        for (uint8_t c : DecodeInputs("d18e1d58n10")) {
+            s5->Tick(c);
+            ++tk;
+            if (!s5->playerAlive) {
+                deathTick = tk;
+                break;
+            }
+        }
+        check(deathTick == 72, "level 3: standardized spike death on the Flash tick (72)");
+        // E8c spot rows (rb1_calib_mathspikes.tsv): whole check on ship1, covers at (0,0)
+        auto hitShip1 = [&](double rot, double x, double y) {
+            for (int32_t i = 0; i < 11; ++i)
+                if (BallHitsSpike(x, y, rot, 0, 0, t3.spikes[i]).hit) return true;
+            return false;
+        };
+        check(!hitShip1(0, 317, 404.8) && hitShip1(0, 317, 405.4), "standardized check: tip contact threshold at rotation 0");
     }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

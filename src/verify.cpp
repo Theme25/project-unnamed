@@ -2,6 +2,7 @@
 // compare every field bit-for-bit against the simulator.
 #include "redball.h"
 #include <cinttypes>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -96,6 +97,7 @@ std::vector<int> Compare(const FrameStats& s, const std::vector<std::string>& f,
 // Optional extension: after the 21 standard columns, groups of 7 columns
 // <name> <px> <py> <a> <vx> <vy> <w> (hex) for other dynamic bodies.
 // Returns false on mismatch (appending a description to `detail`).
+static long g_cameraFramesChecked = 0, g_matrixFramesChecked = 0;
 bool CompareExtraBodies(const Sim& sim, const std::vector<std::string>& f, std::string& detail, int& groups) {
     groups = 0;
     bool ok = true;
@@ -124,6 +126,35 @@ bool CompareExtraBodies(const Sim& sim, const std::vector<std::string>& f, std::
                 ok = false;
             }
         }
+    }
+    // Trailing block (docs/STATS_LOGGING.md 3.8): ball matrix a b, Level.x Level.y dp[0] dp[1]
+    if (f.size() >= 27 && (f.size() - 21) % 7 == 6) {
+        const size_t c = f.size() - 6;
+        if (sim.playerAlive) {
+            const FlashMatrix m = FlashRotationMatrix(sim.spriteRot[sim.playerBody]);
+            const double fa = FromHex(f[c]), fb = FromHex(f[c + 1]);
+            if (std::lround(fa * 65536) != m.a || std::lround(fb * 65536) != m.b) {
+                char buf[200];
+                std::snprintf(buf, sizeof buf, "  ball matrix flash=(%ld,%ld)  sim=(%d,%d) /65536\n", std::lround(fa * 65536),
+                              std::lround(fb * 65536), m.a, m.b);
+                detail += buf;
+                ok = false;
+            }
+            ++g_matrixFramesChecked;
+        }
+        const double mine[4] = {sim.camX, sim.camY, sim.dpX, sim.dpY};
+        static const char* fld[4] = {"Level.x", "Level.y", "dp[0]", "dp[1]"};
+        for (int k = 0; k < 4; ++k) {
+            const double flash = FromHex(f[c + 2 + (size_t)k]);
+            if (std::isnan(flash)) continue;  // dp before the first Update
+            if (Bits(flash) != Bits(mine[k])) {
+                char buf[200];
+                std::snprintf(buf, sizeof buf, "  %-7s flash=%.17g  sim=%.17g\n", fld[k], flash, mine[k]);
+                detail += buf;
+                ok = false;
+            }
+        }
+        ++g_cameraFramesChecked;
     }
     return ok;
 }
@@ -190,7 +221,7 @@ int CmdVerify(int argc, char** argv) {
     std::map<int, std::unique_ptr<LevelTemplate>> tpls;
     auto sim = std::make_unique<Sim>();
     int perfect = 0, diverged = 0, unsupported = 0, shown = 0, extraGroupsSeen = 0, deathsMatched = 0;
-    long framesCompared = 0, framesMatched = 0;
+    long framesCompared = 0, framesMatched = 0, trailingSkipped = 0;
     std::map<std::string, int> firstFieldHist;
     std::map<int, int> divergeTickHist;
     for (size_t si = 0; si < segs.size(); ++si) {
@@ -216,6 +247,18 @@ int CmdVerify(int argc, char** argv) {
                 sim->Restart();
                 continue;
             }
+            // Artifact: the last row of a log can be written without the frame counter advancing
+            // (the stop/export keypress triggers one more Update), and its "in" field does not
+            // reflect the keys the game actually read. Skip such a trailing row.
+            if (ei > 0 && !sg.entries[ei - 1].restart && e.f[1] == sg.entries[ei - 1].f[1]) {
+                bool tail = true;
+                for (size_t k = ei; k < sg.entries.size(); ++k)
+                    if (sg.entries[k].restart || sg.entries[k].f[1] != e.f[1]) tail = false;
+                if (tail) {
+                    trailingSkipped += (long)(sg.entries.size() - ei);
+                    break;
+                }
+            }
             uint8_t code = (uint8_t)std::stoi(e.f[2]);
             if (ei > 0) sim->Tick(code);
             FrameStats st = sim->Stats(code);
@@ -229,7 +272,7 @@ int CmdVerify(int argc, char** argv) {
             std::vector<int> relevant;
             for (int c : bad) {
                 if (ignore[(size_t)c]) continue;
-                if (c == 16 && flashDied && simDied) continue;  // nC counts contacts of the (random) debris
+                if ((c == 14 || c == 15 || c == 16) && flashDied && simDied) continue;  // body destroyed in Flash; nC counts the (random) debris
                 relevant.push_back(c);
             }
             if (flashDied != simDied) {
@@ -280,6 +323,11 @@ int CmdVerify(int argc, char** argv) {
                 perfect, diverged, unsupported);
     std::printf("frames compared: %ld, matched: %ld  (log lines before first LEVEL skipped: %d)\n", framesCompared,
                 framesMatched, skipped);
+    if (trailingSkipped)
+        std::printf("trailing rows skipped (logged without the frame advancing, input field unreliable): %ld\n", trailingSkipped);
+    if (g_cameraFramesChecked)
+        std::printf("camera (Level.x/y, dp) compared on %ld frames, ball display matrix on %ld\n", g_cameraFramesChecked,
+                    g_matrixFramesChecked);
     if (deathsMatched) std::printf("deaths on the same tick as Flash (player fields exact, debris not simulated): %d\n", deathsMatched);
     if (extraGroupsSeen) std::printf("extra bodies compared per frame: up to %d\n", extraGroupsSeen);
     if (!firstFieldHist.empty()) {
