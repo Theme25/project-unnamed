@@ -37,6 +37,8 @@ struct Rect { double x0, y0, x1, y1; };
 // Flash's rotation -> 16.16 display matrix and the resulting getBounds (docs/STATS_LOGGING.md 3.6/3.7).
 struct FlashMatrix { int32_t a, b; };  // c = -b, d = a (16.16)
 FlashMatrix FlashRotationMatrix(double rotationDeg);
+// Flash-reported DisplayObject.rotation of rotated timeline clips (docs/STATS_LOGGING.md 3.9).
+bool LookupTimelineRotation(int32_t level, const char* name, double& out);
 struct DisplayConfig {
     bool inclusive = true;  // touching edges count as a hit (VERIFIED: E2 calibration, 5/5 touching cases hit)
 };

@@ -124,7 +124,7 @@ adaptation.
 | 1 | bit-exact against Flash logs (FP 11.4: 100%) |
 | 2 | **bit-exact** against Flash logs (FP 11.4: 4 runs, 1,350 frames: idle, TAS-style win, long manual win, checkpoint-1 restart + win); joints, goal and checkpoint timing verified |
 | 3 | **bit-exact** against Flash logs (FP 11.4, MATHSPIKES = 1: 14 segments incl. 10 spike deaths on the Flash tick, a win, a checkpoint-1 restart; camera and ball matrix checked every frame); standardized spike check calibrated exactly (E8a/b/c) |
-| 8 | implemented: car on two wheels (revolute joints, first use), three crushers (prismatic), kill ramps (contact death), 12 spike rows (6 quarter-turned, exact integer path); `killSpusk2` angle from a provisional matrix->rotation getter (§3.9); **awaiting Flash logs** |
+| 8 | implemented: car on two wheels (revolute joints, first use), three crushers (prismatic), kill ramps (contact death), 12 spike rows (6 quarter-turned, exact integer path); `killSpusk2` angle = Flash-reported rotation (E9a, §3.9); **awaiting Flash logs** |
 | 3–17 | not yet: need their scripts; levels 3, 4, 8–13, 15, 16 also need matrix-to-rotation for rotated placements |
 
 Joint code: every field write in all 48 joint methods was cross-checked

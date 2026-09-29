@@ -264,6 +264,15 @@ columns): idle `n600`; a run that dies on the first spike row; one that falls of
 
 ### 3.9 Level 8: rotation getter of timeline clips, and Level 8 runs
 
+**Result (rb1_calib_l8.tsv, FP 11.4):** all 32 named Level 8 placements match the SWF data.
+For matrices set from code the getter is `atan2(b, a) * 180 / Math.PI` on the stored entries
+(E9b 10,000/10,000 within 1e-12 deg, 7,824 bit-exact). For **timeline** clips it is not:
+`killSpusk2` stores the SWF's 16.16 matrix (-65400, -566) but reports -179.50430297851562
+versus atan2 = -179.50414982270968 (~10 float32 ulps; an internal routine). `rbsim` therefore
+uses the Flash-reported value from a table (`kTimelineRotations`) and refuses to build a rotated
+body clip that is not in it. For each new level with rotated body clips, an E9a dump of that
+level fills the table.
+
 `Level.CreateBody` takes a body's angle from `clip.rotation`. For a clip placed with a rotated
 timeline matrix (Level 8's `killSpusk2`: 16.16 matrix a = -65400, b = -566, c = 566, d = -65400)
 Flash derives `rotation` from the matrix; `rbsim` provisionally uses `atan2(b, a)` in degrees

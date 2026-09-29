@@ -199,12 +199,32 @@ int32_t LevelTemplate::CheckpointCount() const {
 
 static double PlacementX(const RawPlacement& p) { return p.tx / 20.0; }
 static double PlacementY(const RawPlacement& p) { return p.ty / 20.0; }
-// DisplayObject.rotation of a timeline-placed clip, derived from its 16.16 matrix.
-// Unrotated (b == c == 0, a > 0): 0 whatever the scale. Otherwise PROVISIONAL: atan2(b, a) in degrees
-// on the 16.16 values (Level 8's killSpusk2); Flash's getter is calibrated by docs/STATS_LOGGING.md 3.9.
-static double PlacementRotation(const RawPlacement& p) {
+// DisplayObject.rotation of a timeline-placed clip. Unrotated (b == c == 0, a > 0): 0 whatever the
+// scale. Rotated: Flash does NOT return atan2 of the stored 16.16 matrix for timeline clips (Level 8
+// killSpusk2: matrix -65400/-566 gives atan2 = -179.50414982270968, Flash reports -179.50430297851562,
+// ~10 float32 ulps away, an internal approximation). Until that routine is known, the values Flash
+// reports (docs/STATS_LOGGING.md 3.9, E9a dump per level) are used verbatim.
+struct TimelineRotation { int32_t level; const char* name; uint64_t bits; };
+static const TimelineRotation kTimelineRotations[] = {
+    {8, "killSpusk2", 0xc066702340000000ULL},  // rb1_calib_l8.tsv E9a: -179.50430297851562
+};
+bool LookupTimelineRotation(int32_t level, const char* name, double& out) {
+    for (const TimelineRotation& t : kTimelineRotations)
+        if (t.level == level && !std::strcmp(t.name, name)) {
+            std::memcpy(&out, &t.bits, 8);
+            return true;
+        }
+    return false;
+}
+static double PlacementRotation(int32_t level, const RawPlacement& p) {
     if (p.b == 0 && p.c == 0 && p.a > 0) return 0;
-    return std::atan2((double)p.b / 65536, (double)p.a / 65536) * (180 / AS3_PI);
+    for (const TimelineRotation& t : kTimelineRotations)
+        if (t.level == level && !std::strcmp(t.name, p.name)) {
+            double v;
+            std::memcpy(&v, &t.bits, 8);
+            return v;
+        }
+    fatal("rotated timeline placement without a measured rotation (log E9a for this level, docs/STATS_LOGGING.md 3.9)");
 }
 
 // ---------------------------------------------------------------- body helpers
@@ -223,7 +243,7 @@ int32_t Sim::BeginBody(const char* name) {
     double x = PlacementX(p), y = PlacementY(p);
     BodyDef bd;
     bd.position = Vec2(x / PHYS_SCALE, y / PHYS_SCALE);
-    bd.angle = PlacementRotation(p) * (AS3_PI / 180);
+    bd.angle = PlacementRotation(tpl->id, p) * (AS3_PI / 180);
     int32_t idx = -1;
     for (size_t i = 0; i < tpl->bodyNames.size(); ++i)
         if (tpl->bodyNames[i] == name) idx = (int32_t)i;
@@ -237,7 +257,7 @@ int32_t Sim::BeginBody(const char* name) {
     hasSprite[b] = true;
     spriteX[b] = x;
     spriteY[b] = y;
-    spriteRot[b] = PlacementRotation(p);
+    spriteRot[b] = PlacementRotation(tpl->id, p);
     return b;
 }
 

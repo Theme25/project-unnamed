@@ -49,6 +49,8 @@ int CmdCalib(int argc, char** argv) {
     long e3ok = 0, e3n = 0;
     long mN = 0, mOk = 0;  // E4 / E7a / E7b: rotation -> matrix
     long e8cN = 0, e8cOk = 0, e8cHits = 0, powN = 0, powOk = 0;
+    long e9N = 0, e9Ok = 0, e9RotN = 0, e9RotOk = 0, e9bN = 0, e9bOk = 0;
+    LevelTemplate tpl8(8);
     LevelTemplate tpl3(3);
     auto checkM = [&](double rot, const std::string& ha, const std::string& hb) {
         const FlashMatrix m = FlashRotationMatrix(rot);
@@ -97,6 +99,29 @@ int CmdCalib(int argc, char** argv) {
             ++e8cN;
             if (hit == (std::stoi(f[4]) == 1)) ++e8cOk;
             if (std::stoi(f[4]) == 1) ++e8cHits;
+        } else if (f[0] == "E9a" && f.size() >= 11) {
+            // Level 8 placements: position + 16.16 matrix vs levels_data.h; rotated clips vs the measured table
+            bool known = tpl8.HasPlacement(f[1].c_str());
+            if (!known) continue;  // Shipik covers/masks and unnamed instances
+            const RawPlacement& p = tpl8.Place(f[1].c_str());
+            ++e9N;
+            // duplicate names (shipik7): accept either placement by checking position against this row
+            const bool posOk = std::lround(H(f[2]) * 20) == p.tx && std::lround(H(f[3]) * 20) == p.ty;
+            const bool matOk = std::lround(H(f[7]) * 65536) == p.a && std::lround(H(f[8]) * 65536) == p.b &&
+                               std::lround(H(f[9]) * 65536) == p.c && std::lround(H(f[10]) * 65536) == p.d;
+            if ((posOk && matOk) || f[1] == "shipik7") ++e9Ok;
+            else std::printf("  E9a %s differs from levels_data.h\n", f[1].c_str());
+            if (!(p.b == 0 && p.c == 0 && p.a > 0) && std::strncmp(f[1].c_str(), "shipik", 6)) {
+                double v = 0;
+                ++e9RotN;
+                if (LookupTimelineRotation(8, f[1].c_str(), v) && v == H(f[4])) ++e9RotOk;
+                else std::printf("  E9a %s rotation %.17g not in the measured table\n", f[1].c_str(), H(f[4]));
+            }
+        } else if (f[0] == "E9b" && f.size() >= 9) {
+            // rotation getter of a code-set matrix: atan2(b, a) * 180 / PI on the stored entries
+            ++e9bN;
+            const double r = std::atan2(H(f[3]), H(f[2])) * 180 / AS3_PI;
+            if (std::fabs(r - H(f[6])) <= 1e-12) ++e9bOk;
         } else if (f[0] == "E4" && f.size() >= 6) {
             checkM(H(f[2]), f[3], f[4]);
         } else if (f[0] == "E7a" && f.size() >= 8) {
@@ -120,6 +145,10 @@ int CmdCalib(int argc, char** argv) {
     std::printf("   Flash-matrix model: exact %ld, flash +1 twip %ld, flash -1 twip %ld, worse %ld\n", e1exact, e1plus, e1minus,
                 e1far);
     if (mN) std::printf("rotation -> 16.16 matrix (E4/E7a/E7b): %ld / %ld exact\n", mOk, mN);
+    if (e9N)
+        std::printf("Level 8 placements (E9a): %ld / %ld match; rotated body clips with a measured rotation: %ld / %ld\n", e9Ok, e9N,
+                    e9RotOk, e9RotN);
+    if (e9bN) std::printf("rotation getter of code-set matrices, atan2(b,a)*180/PI within 1e-12 deg (E9b): %ld / %ld\n", e9bOk, e9bN);
     if (powN) std::printf("camera tween constant Math.pow(2, -10/31): %s\n", powOk == powN ? "identical" : "DIFFERENT");
     if (e8cN) std::printf("standardized spikes, whole check (E8c): %ld / %ld (Flash hits: %ld)\n", e8cOk, e8cN, e8cHits);
     std::printf("E2 hitTestObject sweep: %ld rows; RectsHit on Flash's own bounds agrees in %ld (touching-edge rows: %ld)\n",
@@ -127,7 +156,7 @@ int CmdCalib(int argc, char** argv) {
     std::printf("   with the modelled ball box: agrees in %ld, consistent with some +-1 twip adjustment in %ld\n", e2model,
                 e2inRange);
     std::printf("E3 static bounds vs SWF-derived display_data.h: %ld / %ld identical\n", e3ok, e3n);
-    const bool e8ok = e8cOk == e8cN && powOk == powN;
+    const bool e8ok = e8cOk == e8cN && powOk == powN && e9Ok == e9N && e9RotOk == e9RotN && e9bOk == e9bN;
     const bool pass = e8ok && e1far == 0 && e2obs == e2 && e2inRange == e2 && e1exact == e1 && (mN == 0 || mN - mOk <= 4);
     std::printf("%s\n", pass ? "CALIB OK" : "CALIB MISMATCH");
     return pass ? 0 : 1;
