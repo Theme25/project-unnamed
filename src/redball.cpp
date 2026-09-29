@@ -132,7 +132,11 @@ SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, doubl
     const int64_t X = std::llround(sx * 20), Y = std::llround(sy * 20);  // sprite x/y: whole twips
     const FlashMatrix fm = FlashRotationMatrix(rotDeg);
     const double coverX = SpriteCoord(dpx), coverY = SpriteCoord(dpy);  // Shipik.updateCover: cover.x = dp[0]
-    const bool plain = s.a == 1 && s.b == 0 && s.c == 0 && s.d == 1;
+    // Translations and exact quarter turns / mirrors (entries 0 or +-1) map whole twips to whole twips, so
+    // Flash's globalToLocal has nothing to round; anything else is not calibrated yet.
+    auto unit = [](double v) { return v == 0 || v == 1 || v == -1; };
+    const bool plain = unit(s.a) && unit(s.b) && unit(s.c) && unit(s.d);
+    const int64_t ia = (int64_t)s.a, ib = (int64_t)s.b, ic = (int64_t)s.c, id = (int64_t)s.d, idet = ia * id - ib * ic;
     const int64_t ox = std::llround(s.tx * 20), oy = std::llround(s.ty * 20);
     const double r = PLAYER_SPRITE_WIDTH_TWIPS / 20.0 / 2;  // PlayerBox: this.width / 2
     const double step = 2 * AS3_PI / 16;
@@ -148,8 +152,9 @@ SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, doubl
         const int64_t tx = (int64_t)std::trunc(qxs * 20), ty = (int64_t)std::trunc(qys * 20);  // p.localToGlobal
         double ux, uy;
         if (plain) {
-            ux = (tx - ox) / 20.0;
-            uy = (ty - oy) / 20.0;
+            const int64_t vx = tx - ox, vy = ty - oy;
+            ux = (double)((id * vx - ic * vy) * idet) / 20.0;  // inverse of a 0/+-1 matrix = adjugate * det
+            uy = (double)((-ib * vx + ia * vy) * idet) / 20.0;
         } else {
             const double det = s.a * s.d - s.b * s.c;
             const double vx = tx / 20.0 - s.tx, vy = ty / 20.0 - s.ty;
@@ -194,10 +199,12 @@ int32_t LevelTemplate::CheckpointCount() const {
 
 static double PlacementX(const RawPlacement& p) { return p.tx / 20.0; }
 static double PlacementY(const RawPlacement& p) { return p.ty / 20.0; }
+// DisplayObject.rotation of a timeline-placed clip, derived from its 16.16 matrix.
+// Unrotated (b == c == 0, a > 0): 0 whatever the scale. Otherwise PROVISIONAL: atan2(b, a) in degrees
+// on the 16.16 values (Level 8's killSpusk2); Flash's getter is calibrated by docs/STATS_LOGGING.md 3.9.
 static double PlacementRotation(const RawPlacement& p) {
-    if (p.a == 65536 && p.b == 0 && p.c == 0 && p.d == 65536) return 0;
-    // TODO(level 3+): DisplayObject.rotation derived from a timeline matrix.
-    fatal("rotated/scaled placement: matrix->rotation not implemented yet");
+    if (p.b == 0 && p.c == 0 && p.a > 0) return 0;
+    return std::atan2((double)p.b / 65536, (double)p.a / 65536) * (180 / AS3_PI);
 }
 
 // ---------------------------------------------------------------- body helpers
@@ -360,6 +367,118 @@ static void L3_Update(Sim& s) {
     s.world.SetLinearVelocity(m2, Vec2(0, 3 * s.lvInt[L3_MOVE2]));
 }
 
+// Level_8.as: car on two wheels (revolute joints), three crushers on prismatic joints, kill ramps,
+// 11 spike rows (6 rotated 90 degrees).
+enum { L8_KILLER1 = 0, L8_KILLER2 = 1, L8_KILLER3 = 2, L8_KILLSPUSK = 3, L8_KILLSPUSK2 = 4, L8_CAR = 5 };
+static void L8_Construct(Sim& s) {
+    World& w = s.world;
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    s.CreateBody("firstRampa", "Polygon", 0, F, R,
+                 {{{217, 189}, {247, 270}, {84, 4}, {102, 11}, {115, 24}, {127, 37}, {145, 60}, {174, 100}, {197, 143}},
+                  {{247, 270}, {288, 338.95}, {0, 480.95}, {0, 0}, {68, 0}, {84, 4}},
+                  {{288, 338.95}, {315.95, 365.95}, {0, 480.95}},
+                  {{315.95, 365.95}, {348.95, 380.95}, {0, 480.95}},
+                  {{348.95, 380.95}, {390.95, 386.95}, {478.95, 480.95}, {0, 480.95}},
+                  {{478.95, 354.95}, {478.95, 480.95}, {428.95, 378.95}},
+                  {{428.95, 378.95}, {478.95, 480.95}, {390.95, 386.95}}});
+    s.CreateBody("pol", "Polygon", 0, F, R,
+                 {{{683, 0}, {683, 34.05}, {500, 34.05}, {0, 0}}, {{0, 200.05}, {0, 0}, {500, 34.05}, {500, 200.05}}});
+    s.CreateBody("potolok1", "Polygon", 0, F, R, {{{198, 0}, {198, 200.05}, {0, 200.05}, {0, 0}}});
+    s.CreateBody("potolok2", "Polygon", 0, F, R, {{{0, 0}, {45, 0}, {45, 200}, {0, 200}}});
+    s.CreateBody("potolok3", "Polygon", 0, F, R, {{{0, 0}, {45, 0}, {45, 200}, {0, 200}}});
+    s.CreateBody("potolok4", "Polygon", 0, F, R, {{{0, 0}, {125, 0}, {125, 200}, {0, 200}}});
+    s.lvBody[L8_KILLSPUSK] = s.CreateBody(
+        "killSpusk", "Polygon", 0, F, R,
+        {{{954.95, 494.95}, {963.95, 524.95}, {874.95, 514.95}},
+         {{874.95, 514.95}, {963.95, 524.95}, {882.95, 547.95}, {792.95, 547.95}, {798.95, 514.95}},
+         {{182.95, 26}, {544.95, 393.95}, {522.95, 419.95}, {164, 53.95}, {115.95, 0}},
+         {{0, 0}, {115.95, 0}, {111, 33.95}, {0, 33.95}},
+         {{111, 33.95}, {115.95, 0}, {164, 53.95}},
+         {{544.95, 393.95}, {646.95, 458.95}, {522.95, 419.95}},
+         {{646.95, 458.95}, {798.95, 514.95}, {792.95, 547.95}, {632.95, 491}, {522.95, 419.95}}});
+    const int32_t car = s.CreateBody(
+        "car", "Polygon", D, F, R,
+        {{{98, 40.75}, {91.5, 41.75}, {91.5, 39.25}, {98, 24.25}},
+         {{62, 0}, {68, 16.5}, {65.75, 17}, {59.75, 0}},
+         {{68, 16.5}, {98, 24.25}, {65.75, 26}, {65.75, 17}},
+         {{17.25, 0.5}, {20.5, 21.75}, {13.5, 28.5}, {9.5, 31.5}, {0, 0.5}},
+         {{0, 41.5}, {0, 0.5}, {6.5, 36.25}, {5.5, 41.5}},
+         {{6.5, 36.25}, {0, 0.5}, {9.5, 31.5}},
+         {{13.5, 28.5}, {20.5, 21.75}, {17.25, 27.5}},
+         {{20.5, 21.75}, {33.25, 26}, {17.25, 27.5}},
+         {{33.25, 26}, {65.75, 26}, {21.25, 27.5}, {17.25, 27.5}},
+         {{21.25, 27.5}, {65.75, 26}, {25.5, 28.5}},
+         {{65.75, 26}, {98, 24.25}, {28.5, 30.25}, {25.5, 28.5}},
+         {{28.5, 30.25}, {98, 24.25}, {75.25, 27.5}, {30.75, 32.75}},
+         {{33.75, 41.5}, {33.5, 39.25}, {63.5, 41.5}},
+         {{33.5, 39.25}, {32.25, 35.5}, {63.5, 41.5}},
+         {{32.25, 35.5}, {30.75, 32.75}, {64.5, 36.25}, {63.5, 41.5}},
+         {{64.5, 36.25}, {30.75, 32.75}, {67.5, 31.5}},
+         {{67.5, 31.5}, {30.75, 32.75}, {71.5, 28.5}},
+         {{71.5, 28.5}, {30.75, 32.75}, {75.25, 27.5}},
+         {{75.25, 27.5}, {98, 24.25}, {79.25, 27.5}},
+         {{79.25, 27.5}, {98, 24.25}, {83.5, 28.5}},
+         {{83.5, 28.5}, {98, 24.25}, {86.5, 30.25}},
+         {{86.5, 30.25}, {98, 24.25}, {88.75, 32.75}},
+         {{88.75, 32.75}, {98, 24.25}, {90.25, 35.5}},
+         {{90.25, 35.5}, {98, 24.25}, {91.5, 39.25}}});
+    s.lvBody[L8_CAR] = car;
+    s.lvBody[L8_KILLSPUSK2] = s.CreateBody(
+        "killSpusk2", "Polygon", 0, F, R,
+        {{{290, 76}, {631.05, 409.05}, {275, 105.95}, {199, 34}},
+         {{0, 0}, {199, 34}, {191, 65.95}, {-6, 34.95}},
+         {{191, 65.95}, {199, 34}, {275, 105.95}},
+         {{275, 105.95}, {631.05, 409.05}, {618, 439.95}},
+         {{631.05, 409.05}, {717.05, 457.05}, {618, 439.95}},
+         {{717.05, 457.05}, {891.05, 494.05}, {882.95, 523.95}, {705.95, 485.95}, {618, 439.95}},
+         {{891.05, 494.05}, {965.05, 494.05}, {964.95, 523.95}, {882.95, 523.95}},
+         {{964.95, 523.95}, {965.05, 494.05}, {1049.05, 468.05}, {1057.95, 493.95}}});
+    const int32_t wheel1 = s.CreateCircleBody("koleco1", D, F, R, 23.3);
+    const int32_t wheel2 = s.CreateCircleBody("koleco2", D, F, R, 23.3);
+    const PolyList killer = {{{8.9, 0}, {34.9, 0}, {34.9, 200}, {22.2, 218.5}, {8.9, 200}}};
+    s.lvBody[L8_KILLER1] = s.CreateBody("killer1", "Polygon", 10 * D, F, R, killer);
+    s.lvBody[L8_KILLER2] = s.CreateBody("killer2", "Polygon", 10 * D, F, R, killer);
+    s.lvBody[L8_KILLER3] = s.CreateBody("killer3", "Polygon", 10 * D, F, R, killer);
+    s.CreateBody("finishPlatform", "Polygon", 0, F, R,
+                 {{{482.85, -107}, {500.05, -107}, {500.05, 20}, {482.85, 0}}, {{0, 0}, {482.85, 0}, {500.05, 20}, {0, 20}}});
+    s.CreateBody("barier", "Polygon", 0, F, R, {{{24.75, 0}, {34.5, 33.75}, {0, 33.75}, {10, 0}}});
+    // one b2PrismaticJointDef Initialize'd three times (defaults: no limit, no motor)
+    JointDef pj;
+    for (int k = L8_KILLER1; k <= L8_KILLER3; ++k) {
+        const int32_t kb = s.lvBody[k];
+        w.InitPrismaticJointDef(pj, kb, w.groundBody, w.bodies[kb].sweep.c, Vec2(0, 1));
+        w.CreateJoint(pj);
+        s.lvInt[k] = 0;  // killerNUp = false
+    }
+    // one b2RevoluteJointDef: car <-> wheel at ((koleco.x + 11.65) / 30, (koleco.y + 11.65) / 30)
+    JointDef rj;
+    const double k1x = s.tpl->Place("koleco1").tx / 20.0, k1y = s.tpl->Place("koleco1").ty / 20.0;
+    const double k2x = s.tpl->Place("koleco2").tx / 20.0, k2y = s.tpl->Place("koleco2").ty / 20.0;
+    w.InitRevoluteJointDef(rj, car, wheel1, Vec2((k1x + 11.65) / PHYS_SCALE, (k1y + 11.65) / PHYS_SCALE));
+    w.CreateJoint(rj);
+    w.InitRevoluteJointDef(rj, car, wheel2, Vec2((k2x + 11.65) / PHYS_SCALE, (k2y + 11.65) / PHYS_SCALE));
+    w.CreateJoint(rj);
+}
+static bool PlayerTouches(const Sim& s, int32_t body) {
+    const PlayerContactListener& L = s.world.listener;
+    for (int32_t i = 0; i < L.count; ++i)
+        if (L.bodies[i] == body) return true;
+    return false;
+}
+static void L8_Update(Sim& s) {
+    if (s.spriteY[s.playerBody] > 1800 || PlayerTouches(s, s.lvBody[L8_KILLER1]) || PlayerTouches(s, s.lvBody[L8_KILLER2]) ||
+        PlayerTouches(s, s.lvBody[L8_KILLER3]) || PlayerTouches(s, s.lvBody[L8_KILLSPUSK]) ||
+        PlayerTouches(s, s.lvBody[L8_KILLSPUSK2])) {
+        if (s.playerAlive) s.PlayerDie();
+    }
+    for (int k = L8_KILLER1; k <= L8_KILLER3; ++k) {
+        const int32_t kb = s.lvBody[k];
+        if (s.spriteY[kb] > 70) s.lvInt[k] = 1;
+        if (s.spriteY[kb] < -4) s.lvInt[k] = 0;
+        if (s.lvInt[k]) s.world.SetLinearVelocity(kb, Vec2(0, -4));
+    }
+}
+
 static void NotImplemented(Sim&) { fatal("level not implemented yet"); }
 
 const LevelScript& GetLevelScript(int32_t id) {
@@ -367,6 +486,7 @@ const LevelScript& GetLevelScript(int32_t id) {
         {1, L1_Construct, L1_Update, true},
         {2, L2_Construct, L2_Update, true},
         {3, L3_Construct, L3_Update, true},
+        {8, L8_Construct, L8_Update, true},
     };
     for (const LevelScript& ls : scripts)
         if (ls.id == id) return ls;

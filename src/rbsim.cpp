@@ -430,6 +430,25 @@ static int CmdTest() {
         };
         check(!hitShip1(0, 317, 404.8) && hitShip1(0, 317, 405.4), "standardized check: tip contact threshold at rotation 0");
     }
+    // 14. Level 8 (car, crushers, kill ramps, rotated spike rows)
+    {
+        LevelTemplate t8(8);
+        check(t8.spikeCount == 12 * 11, "level 8 has 12 spike rows x 11 spikes (shipik7 is placed twice)");
+        // wall spikes on the left face of 'pol': quarter-turned, bases at x = -733.6, tips at x = -743.25
+        const SpikeObj& w = t8.spikes[0];  // shipik3 first Shipik: tip at (-743.25, 352.55)
+        check(w.a == 0 && w.b == -1 && w.c == 1 && w.d == 0 && w.bx0 == -14865, "wall spikes are quarter-turned, tips pointing left");
+        check(BallHitsSpike(-743.25 - 10.5 + 0.5, 352.55, 0, 0, 0, w).hit, "ball pressed onto a wall spike tip is hit");
+        check(!BallHitsSpike(-743.25 - 10.5 - 0.25, 352.55, 0, 0, 0, w).hit, "ball just left of a wall spike tip is safe");
+        auto s8 = std::make_unique<Sim>();
+        s8->Load(&t8);
+        int reversals = 0, prevUp = s8->lvInt[0];
+        for (int f = 0; f < 900; ++f) {
+            s8->Tick(IN_NONE);
+            if (s8->lvInt[0] != prevUp) ++reversals;
+            prevUp = s8->lvInt[0];
+        }
+        check(s8->playerAlive && reversals >= 20, "level 8 idle: alive, crushers cycle");
+    }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }

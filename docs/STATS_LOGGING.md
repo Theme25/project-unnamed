@@ -262,6 +262,27 @@ every frame.
 columns): idle `n600`; a run that dies on the first spike row; one that falls off
 (y > 650); a win; a checkpoint-1 restart.
 
+### 3.9 Level 8: rotation getter of timeline clips, and Level 8 runs
+
+`Level.CreateBody` takes a body's angle from `clip.rotation`. For a clip placed with a rotated
+timeline matrix (Level 8's `killSpusk2`: 16.16 matrix a = -65400, b = -566, c = 566, d = -65400)
+Flash derives `rotation` from the matrix; `rbsim` provisionally uses `atan2(b, a)` in degrees
+(-179.50414982270968). Run on **Level 8, just loaded, paused**, reload afterwards.
+
+**E9a - Level 8 placements.** For every child `o` of `L` (in `getChildAt` order) log
+`E9a o.name` + hex of `o.x o.y o.rotation o.scaleX o.scaleY` + `o.transform.matrix` (a b c d).
+
+**E9b - rotation getter sweep** (calibrates it for later levels). `s = new Sprite()`; for
+`j = 0 ... 9999`: `t = (-180 + j*0.036 + 0.0007) * Math.PI / 180`, `k = ((j % 7) - 3) * 0.5 *
+Math.PI / 180`, `sx = 0.5 + (j % 97) / 64`, `sy = 0.5 + (j % 89) / 64`;
+`s.transform.matrix = new Matrix(Math.cos(t)*sx, Math.sin(t)*sx, -Math.sin(t+k)*sy, Math.cos(t+k)*sy, 0, 0)`;
+log `E9b j` + hex of the matrix read back (a b c d) + `s.rotation s.scaleX s.scaleY`.
+
+**Level 8 stats runs** (same format as Level 3: extra bodies, ball matrix, camera; mathspikes 1):
+idle `n900`; death on a crusher (`killer1-3`); death on the left-wall spikes (`shipik1-6`);
+death on the first kill ramp (`killSpusk`); a run that drives the car; death on `killSpusk2` or
+the finish-area spikes (`shipik7-11`); a checkpoint-1 restart; a win.
+
 ### 3.4 Other dynamic bodies (needed for levels with joints or moving parts)
 
 After the 21 standard columns, append one group of 7 columns for every
