@@ -179,6 +179,16 @@ the box-in-a-box rounding at each level is the cause and E5 shows which level.
 
 ### 3.7 Rotation-to-matrix dump (how Flash turns `rotation` into the 16.16 matrix)
 
+**Result (rb1_calib3_7.tsv, FP 11.4):** no history dependence (E7a 200/200 identical
+across predecessors, E7c no drift). `x = trunc(rotation * 65536)`; for `|x| <= 90 deg`:
+`i = |x| >> 14`, `fr = |x| & 16383`, `v = T[i] + ((T[i+1] - T[i]) * fr >> 16)` with
+`T[i] = trunc(sin(i * 0.25 deg) * 2^30)`, result `(v + 2^13) >> 14` (16.16), sign of x.
+Beyond 90 deg the sine uses `180 - |x|`; `cos(x) = sin(90 - |x|)` (negative mirror beyond
+90). Exact on 14,496 / 14,500 matrices; the 4 misses are near-ties (< 0.0013 unit).
+Box: half-extent = `round(210 * (|a| + |b|) / 65536)` twips, exact on all 3,200 E1 rows.
+Tool: `rbsim calib <file>`.
+
+
 Result of the 3.6 dumps (`rb1_calib3_6*.tsv`, FP 11.4): the bounding box is fully
 explained by the display matrix. With `M = pb.transform.matrix` (16.16 fixed
 point, `a == d`, `b == -c`), every level's box half-extent is

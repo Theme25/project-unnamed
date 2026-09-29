@@ -5,6 +5,7 @@
 #include "b2world.h"
 #include "levels_data.h"
 #include "display_data.h"
+#include "flash_sintab.h"
 #include <map>
 #include <string>
 #include <vector>
@@ -33,14 +34,16 @@ using PolyList = std::vector<std::vector<std::pair<double, double>>>;
 // camera scale is always 1 -- scaleTimer is never started -- so the global
 // offset cancels in any pairwise overlap test).
 struct Rect { double x0, y0, x1, y1; };
-// Flash's rotated getBounds rounding is only known to +-1 twip (see BallBounds).
+// Flash's rotation -> 16.16 display matrix and the resulting getBounds (docs/STATS_LOGGING.md 3.6/3.7).
+struct FlashMatrix { int32_t a, b; };  // c = -b, d = a (16.16)
+FlashMatrix FlashRotationMatrix(double rotationDeg);
 struct DisplayConfig {
     bool inclusive = true;  // touching edges count as a hit (VERIFIED: E2 calibration, 5/5 touching cases hit)
 };
 DisplayConfig& GetDisplayConfig();
-// adj = -1/0/+1 twips on every side of the rotated box: the rounding rule of Flash's
-// rotated getBounds is only known to +-1 twip (calibration: 3,200 rows, half-extent = trunc(h) in 87%,
-// trunc(h)+1 in 12.5%, trunc(h)-1 in 0.2%), so hit tests are made at -1/0/+1 and disagreements are flagged.
+// adj = -1/0/+1 on the matrix entries (in 1/65536 units): the fitted matrix is exact on 14,496 of
+// 14,500 logged matrices; the 4 misses are near-ties in the last rounding step. Hit tests are also made
+// with the matrix nudged by -1/+1 and disagreements are flagged in Sim::displayUncertain.
 Rect BallBounds(double spriteXpx, double spriteYpx, double rotationDeg, int adj = 0);
 bool RectsHit(const Rect& a, const Rect& b);
 
@@ -98,7 +101,7 @@ struct Sim {
     bool playerAlive = true;
     bool isTimeStop = false;
     int32_t lastCheckNum = 0;  // Level.lastCheckNum (static in AS3: survives restarts)
-    int32_t displayUncertain = 0;  // # of goal/checkpoint tests whose outcome depends on the unresolved +-1 twip rounding
+    int32_t displayUncertain = 0;  // # of goal/checkpoint tests that flip if a matrix entry is off by one unit
     int32_t aimFrame = 1;      // levelAim.currentFrame (1 = armed)
     int32_t cpFrame[5] = {1, 1, 1, 1, 1};  // checkPointN.currentFrame (1 = armed, 5 = already collected)
     int32_t frameCount = 0;

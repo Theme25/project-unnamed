@@ -361,7 +361,22 @@ static int CmdTest() {
         for (int f = 0; f < 370; ++f) idle->Tick(IN_NONE);
         check(!idle->isTimeStop && idle->lastCheckNum == 0, "idle on the start platform: no goal, no checkpoint");
         check(s->displayUncertain == 0 && idle->displayUncertain == 0,
-              "no goal/checkpoint outcome depended on the unresolved +-1 twip bounds rounding in the logged runs");
+              "no goal/checkpoint outcome depends on a one-unit matrix error in the logged runs");
+    }
+    // 12. Flash display matrix (calibration 3.7): spot values from rb1_calib3_7.tsv / rb1_calib3_6.tsv
+    {
+        const struct { double rot; int32_t a, b; } m[] = {
+            {-180.0, -65536, 0}, {-179.2683, -65530, -638}, {9.7603, 64552, 11101}, {10.0003, 64503, 11380},
+            {0.2553, 65534, 287}, {-0.2397, 65535, -69}, {28.5309, 57487, 31279}, {-106.83, -18909, -62687},
+        };
+        bool ok = true;
+        for (auto& e : m) {
+            const FlashMatrix f = FlashRotationMatrix(e.rot);
+            if (f.a != e.a || f.b != e.b) ok = false;
+        }
+        check(ok, "Flash rotation -> 16.16 matrix reproduces logged matrices");
+        const Rect r = BallBounds(500, 300, -179.2683);
+        check(r.x0 == 10000 - 212 && r.x1 == 10000 + 212, "rotated ball getBounds half-extent (Flash matrix, round-to-nearest)");
     }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

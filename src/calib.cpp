@@ -46,6 +46,12 @@ int CmdCalib(int argc, char** argv) {
     long e1 = 0, e1exact = 0, e1plus = 0, e1minus = 0, e1far = 0, e1sym = 0;
     long e2 = 0, e2obs = 0, e2model = 0, e2inRange = 0, e2touch = 0;
     long e3ok = 0, e3n = 0;
+    long mN = 0, mOk = 0;  // E4 / E7a / E7b: rotation -> matrix
+    auto checkM = [&](double rot, const std::string& ha, const std::string& hb) {
+        const FlashMatrix m = FlashRotationMatrix(rot);
+        ++mN;
+        if (m.a == std::lround(H(ha) * 65536) && m.b == std::lround(H(hb) * 65536)) ++mOk;
+    };
     std::string line;
     while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -57,7 +63,7 @@ int CmdCalib(int argc, char** argv) {
             ++e1;
             if (cx - l == r - cx && cy - t == b - cy && cx - l == cy - t) ++e1sym;
             const Rect m = BallBounds(x, y, rot, 0);
-            const long d = (cx - l) - std::lround(cx - m.x0);
+            const long d = (cx - l) - std::lround(cx - m.x0);  // 0 when the model is exact
             if (d == 0) ++e1exact;
             else if (d == 1) ++e1plus;
             else if (d == -1) ++e1minus;
@@ -76,6 +82,12 @@ int CmdCalib(int argc, char** argv) {
             const double ox = std::fmin(obs.x1, g.x1) - std::fmax(obs.x0, g.x0);
             const double oy = std::fmin(obs.y1, g.y1) - std::fmax(obs.y0, g.y0);
             if ((ox == 0 && oy >= 0) || (oy == 0 && ox >= 0)) ++e2touch;
+        } else if (f[0] == "E4" && f.size() >= 6) {
+            checkM(H(f[2]), f[3], f[4]);
+        } else if (f[0] == "E7a" && f.size() >= 8) {
+            checkM(H(f[3]), f[4], f[5]);
+        } else if (f[0] == "E7b" && f.size() >= 7) {
+            checkM(H(f[2]), f[3], f[4]);
         } else if (f[0] == "E3" && f.size() >= 10) {
             const DisplayObj* o = tpl.Display(f[1].c_str());
             if (!o) continue;
@@ -90,14 +102,15 @@ int CmdCalib(int argc, char** argv) {
         }
     }
     std::printf("E1 rotated ball bounds: %ld rows, symmetric integral half-extent in %ld\n", e1, e1sym);
-    std::printf("   model n = trunc(h): exact %ld, flash +1 twip %ld, flash -1 twip %ld, worse %ld\n", e1exact, e1plus, e1minus,
+    std::printf("   Flash-matrix model: exact %ld, flash +1 twip %ld, flash -1 twip %ld, worse %ld\n", e1exact, e1plus, e1minus,
                 e1far);
+    if (mN) std::printf("rotation -> 16.16 matrix (E4/E7a/E7b): %ld / %ld exact\n", mOk, mN);
     std::printf("E2 hitTestObject sweep: %ld rows; RectsHit on Flash's own bounds agrees in %ld (touching-edge rows: %ld)\n",
                 e2, e2obs, e2touch);
     std::printf("   with the modelled ball box: agrees in %ld, consistent with some +-1 twip adjustment in %ld\n", e2model,
                 e2inRange);
     std::printf("E3 static bounds vs SWF-derived display_data.h: %ld / %ld identical\n", e3ok, e3n);
-    const bool pass = e1far == 0 && e2obs == e2 && e2inRange == e2;
-    std::printf("%s\n", pass ? "CALIB OK (rotated-box rounding still known only to +-1 twip)" : "CALIB MISMATCH");
+    const bool pass = e1far == 0 && e2obs == e2 && e2inRange == e2 && e1exact == e1 && (mN == 0 || mN - mOk <= 4);
+    std::printf("%s\n", pass ? "CALIB OK" : "CALIB MISMATCH");
     return pass ? 0 : 1;
 }

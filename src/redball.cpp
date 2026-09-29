@@ -57,16 +57,33 @@ DisplayConfig& GetDisplayConfig() {
     return cfg;
 }
 
-// PlayerBox symbol: children 20/21/22 all lie inside (-210,-210)-(210,210) twips.
-// Calibration (E1, 3,200 rows, FP 11.4): the rotated getBounds is always symmetric about the
-// sprite position with an integral half-extent n; n = trunc(210*(|cos|+|sin|)) in 87.4% of rows,
-// n+1 in 12.5%, n-1 in 0.2% (rule for the bump not identified yet).
+// Flash's internal sine: angle in 16.16 fixed-point degrees, 0.25-degree table (2^30 scale),
+// "linear interpolation" whose weight is the low 14 bits / 65536 (a quarter of the proper weight),
+// rounded to 16.16. cos(x) = sin(90 - |x|). Angles beyond 90 degrees are mirrored first.
+static int32_t FlashSinFx(int64_t x) {  // x >= 0, x <= 90 * 65536
+    const int64_t i = x >> 14, fr = x & 16383;
+    const int64_t v = kFlashSinTab[i] + (((kFlashSinTab[i + 1] - kFlashSinTab[i]) * fr) >> 16);
+    return (int32_t)((v + (1 << 13)) >> 14);
+}
+
+FlashMatrix FlashRotationMatrix(double rotDeg) {
+    const int64_t D90 = 90LL * 65536, D180 = 180LL * 65536;
+    const int64_t xf = (int64_t)std::trunc(rotDeg * 65536);
+    const int64_t x = xf < 0 ? -xf : xf;
+    const int32_t sn = FlashSinFx(x > D90 ? D180 - x : x);
+    const int32_t cs = x <= D90 ? FlashSinFx(D90 - x) : -FlashSinFx(x - D90);
+    return FlashMatrix{cs, xf < 0 ? -sn : sn};
+}
+
+// PlayerBox local box is (-210,-210)-(210,210) twips (children 20/21/22). Flash's getBounds of a
+// rotated object is the axis-aligned box of its transformed local box, each half-extent rounded to
+// the nearest twip (calibration 3.6: exact on E1, E5 and all E6 control shapes).
 Rect BallBounds(double sx, double sy, double rotDeg, int adj) {
     const double x = std::llround(sx * 20), y = std::llround(sy * 20);  // sprite x/y are whole twips
-    const double a = rotDeg * (AS3_PI / 180);
-    const double half = PLAYER_SPRITE_WIDTH_TWIPS / 2.0;
-    const double h = half * (std::fabs(std::cos(a)) + std::fabs(std::sin(a)));
-    const double n = std::floor(h + 1e-9) + adj;
+    const FlashMatrix m = FlashRotationMatrix(rotDeg);
+    const int64_t a = std::llabs((int64_t)m.a) + adj, b = std::llabs((int64_t)m.b) + adj;
+    const int64_t h2 = (int64_t)PLAYER_SPRITE_WIDTH_TWIPS / 2;
+    const double n = (double)((h2 * (a + b) + 32768) >> 16);
     return Rect{x - n, y - n, x + n, y + n};
 }
 
