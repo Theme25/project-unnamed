@@ -46,13 +46,16 @@ DisplayConfig& GetDisplayConfig();
 // with the matrix nudged by -1/+1 and disagreements are flagged in Sim::displayUncertain.
 Rect BallBounds(double spriteXpx, double spriteYpx, double rotationDeg, int adj = 0);
 bool RectsHit(const Rect& a, const Rect& b);
-// PlayerBox.HitTestObjectControlPoints against a spike triangle (MATHSPIKES = 0: hitTestPoint(x, y, true)).
-// 16 points on radius width/2 = 10.5 px, taken through the ball's display matrix. How Flash rounds
-// localToGlobal and treats points on an edge is not calibrated yet (docs/STATS_LOGGING.md 3.8); points
-// within SPIKE_EDGE_MARGIN twips of an edge are counted in Sim::displayUncertain.
+// Standardized spikes (Practice Hack CONFIG.MATHSPIKES = 1, the speedrun rule):
+// PlayerBox.HitTestObjectControlPoints -> Shipik.testPoint for 16 control points
+// (10.5 px radius, through the ball's display matrix). Each point, in Level space, must lie in the
+// Shipik's getBounds rectangle; then it is shifted by -dp (the camera step of this frame) and tested
+// strictly against the triangle (0,0) (3,-9.65) (6,0). Native localToGlobal/globalToLocal are modelled
+// as exact doubles (docs/STATS_LOGGING.md 3.8 calibrates them); decisions within SPIKE_EDGE_MARGIN
+// twips of an edge are counted in Sim::displayUncertain.
 constexpr double SPIKE_EDGE_MARGIN = 1.0;
 struct SpikeResult { bool hit; bool uncertain; };
-SpikeResult BallHitsSpike(double spriteXpx, double spriteYpx, double rotationDeg, const SpikeTri& t);
+SpikeResult BallHitsSpike(double spriteXpx, double spriteYpx, double rotationDeg, double dpx, double dpy, const SpikeObj& s);
 
 struct Sim;
 struct LevelScript {
@@ -77,7 +80,7 @@ struct LevelTemplate {
     const RawPlacement& Place(const char* name) const;
     const DisplayObj* Display(const char* name) const;  // nullptr if the level has no such object
     const DisplayObj* aim = nullptr;                    // levelAim
-    const SpikeTri* spikes = nullptr;                   // every top-level Ships10/Shipik triangle
+    const SpikeObj* spikes = nullptr;                   // every top-level Ships10/Shipik spike
     int32_t spikeCount = 0;
     const DisplayObj* cps[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};  // checkPoint0..4
     bool HasPlacement(const char* name) const;
@@ -112,6 +115,12 @@ struct Sim {
     int32_t lastCheckNum = 0;  // Level.lastCheckNum (static in AS3: survives restarts)
     int32_t displayUncertain = 0;  // # of goal/checkpoint tests that flip if a matrix entry is off by one unit
     int32_t aimFrame = 1;      // levelAim.currentFrame (1 = armed)
+    // Camera = Level.x/y, moved by one Tweener step (easeOutExpo, 31 frames, t = 1) per Update.
+    double camX = 0, camY = 0;          // Level.x / Level.y (whole twips)
+    double camTargetX = 0, camTargetY = 0;
+    bool camTween = false;              // a camera tween was added by the previous Update
+    double dpX = 0, dpY = 0;            // Level.dp: camera step of this Update (old - new)
+    bool gless = false;                 // Game.isGless: camera steps at the end of Update, dp = 0
     int32_t cpFrame[5] = {1, 1, 1, 1, 1};  // checkPointN.currentFrame (1 = armed, 5 = already collected)
     int32_t frameCount = 0;
     // display layer: DisplayObject x/y/rotation of each body's sprite (twip-quantised)
@@ -141,7 +150,8 @@ struct Sim {
    private:
     int32_t GetBodyAtPoint(double x, double y, bool includeStatic);
     void LevelUpdate(bool left, bool up, bool right);
-    void DisplayUpdate();  // win check + checkpoints (Level.Update, after the input forces)
+    void DisplayUpdate();
+    void CameraStep();     // Tweener.onEnterFrame via COMM "TweenEvent"  // win check + checkpoints (Level.Update, after the input forces)
     int32_t Geom(const std::string& key, const ShapeDef& def);
     int32_t BeginBody(const char* name);
 };

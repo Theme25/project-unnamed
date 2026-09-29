@@ -38,7 +38,7 @@ LevelTemplate::LevelTemplate(int32_t levelId) : id(levelId) {
     aim = Display("levelAim");
     for (const LevelSpikes& ls : kSpikeTable)
         if (ls.id == id) {
-            spikes = ls.tris;
+            spikes = ls.items;
             spikeCount = ls.count;
         }
     for (int32_t i = 0; i < 5; ++i) {
@@ -92,36 +92,56 @@ Rect BallBounds(double sx, double sy, double rotDeg, int adj) {
     return Rect{x - n, y - n, x + n, y + n};
 }
 
-// Signed distance-like edge test: >0 inside for a triangle given in either winding.
-static double EdgeSide(double px, double py, double ax, double ay, double bx, double by) {
-    return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+// Shipik.sign / PointInTriangle, exactly as written (strict ">" -> a point on an edge is outside).
+static bool ShipikSign(double p1x, double p1y, double p2x, double p2y, double p3x, double p3y) {
+    return (p1x - p3x) * (p2y - p3y) - (p2x - p3x) * (p1y - p3y) > 0;
+}
+static bool ShipikPointInTriangle(double x, double y) {
+    const double w = 6, h = 9.65;  // Shipik.w, Shipik.h
+    const bool d1 = ShipikSign(x, y, 0, 0, w / 2, -h);
+    const bool d2 = ShipikSign(x, y, w / 2, -h, w, 0);
+    const bool d3 = ShipikSign(x, y, w, 0, 0, 0);
+    return d1 == d2 && d2 == d3;
+}
+// distance (px) from (x,y) to the triangle's boundary, for the uncertainty margin
+static double ShipikEdgeDistance(double x, double y) {
+    const double ax[3] = {0, 3, 6}, ay[3] = {0, -9.65, 0};
+    double best = 1e300;
+    for (int e = 0; e < 3; ++e) {
+        const double x0 = ax[e], y0 = ay[e], x1 = ax[(e + 1) % 3], y1 = ay[(e + 1) % 3];
+        const double dx = x1 - x0, dy = y1 - y0, L2 = dx * dx + dy * dy;
+        double t = ((x - x0) * dx + (y - y0) * dy) / L2;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        best = std::fmin(best, std::hypot(x - (x0 + t * dx), y - (y0 + t * dy)));
+    }
+    return best;
 }
 
-SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, const SpikeTri& t) {
-    // Quick reject: the 16 points lie within 210 twips (+ margin) of the ball's position.
-    const double cx = std::llround(sx * 20), cy = std::llround(sy * 20);
-    const double tx0 = std::fmin(t.x0, std::fmin(t.x1, t.x2)), tx1 = std::fmax(t.x0, std::fmax(t.x1, t.x2));
-    const double ty0 = std::fmin(t.y0, std::fmin(t.y1, t.y2)), ty1 = std::fmax(t.y0, std::fmax(t.y1, t.y2));
-    const double reach = 210 + 2 * SPIKE_EDGE_MARGIN;
-    if (cx + reach < tx0 || cx - reach > tx1 || cy + reach < ty0 || cy - reach > ty1) return {false, false};
-    const FlashMatrix m = FlashRotationMatrix(rotDeg);
-    const double a = m.a / 65536.0, b = m.b / 65536.0;  // c = -b, d = a
-    const double orient = EdgeSide(t.x2, t.y2, t.x0, t.y0, t.x1, t.y1) > 0 ? 1 : -1;
-    const double l0 = std::hypot(t.x1 - t.x0, t.y1 - t.y0), l1 = std::hypot(t.x2 - t.x1, t.y2 - t.y1),
-                 l2 = std::hypot(t.x0 - t.x2, t.y0 - t.y2);
-    const double r = PLAYER_SPRITE_WIDTH_TWIPS / 2.0 / 20.0;  // this.width / 2 in px
+SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s) {
+    const double m = SPIKE_EDGE_MARGIN / 20.0;  // px
+    const double bx0 = s.bx0 / 20.0, by0 = s.by0 / 20.0, bx1 = s.bx1 / 20.0, by1 = s.by1 / 20.0;
+    // quick reject: control points are within 10.5 px of the ball
+    if (sx + 10.5 + m < bx0 || sx - 10.5 - m > bx1 || sy + 10.5 + m < by0 || sy - 10.5 - m > by1) return {false, false};
+    const FlashMatrix fm = FlashRotationMatrix(rotDeg);
+    const double a = fm.a / 65536.0, b = fm.b / 65536.0;  // c = -b, d = a
+    const double det = s.a * s.d - s.b * s.c;
+    const double r = PLAYER_SPRITE_WIDTH_TWIPS / 20.0 / 2;  // this.width / 2
+    const double step = 2 * AS3_PI / 16;
     bool hit = false, uncertain = false;
     for (int k = 0; k < 16; ++k) {
-        const double ang = 2 * AS3_PI / 16 * k;
-        const double lx = r * as3_cos(ang) * 20, ly = r * as3_sin(ang) * 20;  // twips, ball-local
-        const double px = cx + a * lx - b * ly, py = cy + b * lx + a * ly;
-        // distance of the point to each edge (twips), positive inside
-        const double d0 = orient * EdgeSide(px, py, t.x0, t.y0, t.x1, t.y1) / l0;
-        const double d1 = orient * EdgeSide(px, py, t.x1, t.y1, t.x2, t.y2) / l1;
-        const double d2 = orient * EdgeSide(px, py, t.x2, t.y2, t.x0, t.y0) / l2;
-        const double dmin = std::fmin(d0, std::fmin(d1, d2));
-        if (dmin > 0) hit = true;
-        if (std::fabs(dmin) < SPIKE_EDGE_MARGIN) uncertain = true;
+        const double lx = r * as3_cos(step * k), ly = r * as3_sin(step * k);  // testPoints[k]
+        const double px = sx + (a * lx - b * ly), py = sy + (b * lx + a * ly);  // Level space
+        // this.getBounds(this.p).containsPoint(point)
+        const bool inB = px >= bx0 && px < bx0 + (bx1 - bx0) && py >= by0 && py < by0 + (by1 - by0);
+        const double bd = std::fmin(std::fmin(std::fabs(px - bx0), std::fabs(px - bx1)), std::fmin(std::fabs(py - by0), std::fabs(py - by1)));
+        const bool nearB = bd < m && px > bx0 - m && px < bx1 + m && py > by0 - m && py < by1 + m;
+        // point.subtract(cover) -> Shipik local
+        const double qx = px - dpx - s.tx, qy = py - dpy - s.ty;
+        const double ux = (s.d * qx - s.c * qy) / det, uy = (-s.b * qx + s.a * qy) / det;
+        const bool inT = ShipikPointInTriangle(ux, uy);
+        const bool nearT = ShipikEdgeDistance(ux, uy) < m;
+        if (inB && inT) hit = true;
+        if ((nearB && (inT || nearT)) || (nearT && (inB || nearB))) uncertain = true;
     }
     return {hit, uncertain};
 }
@@ -394,6 +414,11 @@ void Sim::Restart() {
     spriteX[playerBody] = SpriteCoord(px);
     spriteY[playerBody] = SpriteCoord(py);
     spriteRot[playerBody] = 0;
+    // PlayerBox(): m_spriteIn.x = -this.x + Game.stageWidth / 2 (camera centred on the ball)
+    camX = SpriteCoord(-spriteX[playerBody] + 550.0 / 2);
+    camY = SpriteCoord(-spriteY[playerBody] + 400.0 / 2);
+    camTween = false;
+    dpX = dpY = 0;
 
     // --- Level_N() constructor
     script.construct(*this);
@@ -422,7 +447,26 @@ int32_t Sim::GetBodyAtPoint(double x, double y, bool includeStatic) {
     return -1;
 }
 
+// Tweener.onEnterFrame (driven by COMM "TweenEvent"): the camera tween added by the previous Update is
+// evaluated at t = 1 of d = 31 frames: easeOutExpo = c * 1.001 * (-2^(-10 t / d) + 1) + b, then the
+// DisplayObject setter truncates to twips.
+void Sim::CameraStep() {
+    if (!camTween) return;
+    static const double p = std::pow(2.0, -10 * 1.0 / 31);  // Math.pow(2, -10 * t / d), t = 1
+    const double bx = camX, cx = camTargetX - bx;
+    const double by = camY, cy = camTargetY - by;
+    camX = SpriteCoord(cx * 1.001 * (-p + 1) + bx);
+    camY = SpriteCoord(cy * 1.001 * (-p + 1) + by);
+}
+
 void Sim::LevelUpdate(bool left, bool up, bool right) {
+    // dp[0] = x; broadcast("TweenEvent") unless isGless; dp[0] -= x
+    {
+        const double ox = camX, oy = camY;
+        if (!gless) CameraStep();
+        dpX = ox - camX;
+        dpY = oy - camY;
+    }
     world.Step(LEVEL_TIMESTEP, LEVEL_ITERATIONS);
 
     // sprite sync: every non-static body whose userData is a Sprite
@@ -470,7 +514,14 @@ void Sim::LevelUpdate(bool left, bool up, bool right) {
             world.ApplyForce(playerBody, Vec2(0, -1), world.bodies[playerBody].sweep.c);
         }
     }
+    // Tweener.addTween(m_sprite, {x: scaleX * (-playerBox.x + stageWidth / 2), y: ..., useFrames, time 31,
+    // easeOutExpo}); overwrites the previous camera tween. scaleX/scaleY stay 1 (scaleTimer never runs).
+    camTargetX = 1.0 * (-spriteX[playerBody] + 550.0 / 2);
+    camTargetY = 1.0 * (-spriteY[playerBody] + 400.0 / 2);
+    camTween = true;
+
     DisplayUpdate();
+    if (gless) CameraStep();  // broadcast("TweenEvent") at the end of Level.Update
 
     GetLevelScript(tpl->id).update(*this);  // Level_N.Update after super.Update
 }
@@ -504,7 +555,7 @@ void Sim::DisplayUpdate() {
     // Spikes: Level.Update walks its children; any Shipik/Ships10 hit by a control point kills the ball.
     if (playerAlive) {
         for (int32_t i = 0; i < tpl->spikeCount; ++i) {
-            const SpikeResult r = BallHitsSpike(spriteX[playerBody], spriteY[playerBody], spriteRot[playerBody], tpl->spikes[i]);
+            const SpikeResult r = BallHitsSpike(spriteX[playerBody], spriteY[playerBody], spriteRot[playerBody], dpX, dpY, tpl->spikes[i]);
             if (r.uncertain) ++displayUncertain;
             if (r.hit) {
                 PlayerDie();

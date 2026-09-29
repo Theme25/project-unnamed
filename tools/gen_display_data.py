@@ -22,11 +22,16 @@ for lid,sid in LEVELS.items():
         ex=int(abs(a-1)<1e-12 and abs(d-1)<1e-12 and b==0 and c==0)
         print('    {"%s", %r, %r, %r, %r, %d},'%(n,*[float(x) for x in r],ex))
     print("};")
-# Spikes: every top-level Ships10 (58) / Shipik (57) placement of a level. Level.Update walks its own
-# children, so nested ones would not count. Triangle = shape 56: (0,0) (60,-193) (120,0) twips.
-SHIPIK, SHIPS10, TRI = 57, 58, ((0, 0), (60, -193), (120, 0))
-def spike_tris(lid, sid):
-    tris = []
+# Spikes: every top-level Ships10 (58) / Shipik (57) placement of a level (Level.Update walks its own
+# children). Per Shipik: its transform into Level space (px) and its getBounds(Level) rectangle (twips).
+# Shipik.testPoint (MATHSPIKES = 1) uses the triangle (0,0) (w/2,-h) (w,0), w = 6, h = 9.65 px.
+SHIPIK, SHIPS10 = 57, 58
+SHAPE = (0, -193, 120, 0)  # shape 56 bounds, twips
+def mul(m, n):  # m after n
+    a,b,c,d,tx,ty = m; a2,b2,c2,d2,tx2,ty2 = n
+    return (a*a2 + c*b2, b*a2 + d*b2, a*c2 + c*d2, b*c2 + d*d2, a*tx2 + c*ty2 + tx, b*tx2 + d*ty2 + ty)
+def spikes(sid):
+    out = []
     kind, sp = g.chars[sid]
     for k in g.frame1_children(sp):
         cid = int(k.get('characterId') or -1)
@@ -34,25 +39,30 @@ def spike_tris(lid, sid):
         m = g.mat(k)
         subs = [g.mat(c) for c in g.frame1_children(g.chars[SHIPS10][1])] if cid == SHIPS10 else [(1, 0, 0, 1, 0, 0)]
         for sm in subs:
-            pts = []
-            for x, y in TRI:
-                x1, y1 = sm[0]*x + sm[2]*y + sm[4], sm[1]*x + sm[3]*y + sm[5]
-                pts.append((m[0]*x1 + m[2]*y1 + m[4], m[1]*x1 + m[3]*y1 + m[5]))
-            tris.append((k.get('name') or '', pts))
-    return tris
-print("struct SpikeTri { double x0, y0, x1, y1, x2, y2; };  // Level-local twips (Shipik shape 56)")
-print("struct LevelSpikes { int32_t id; const SpikeTri* tris; int32_t count; };")
+            M = mul(m, sm)
+            if cid == SHIPS10:  # nested box-in-a-box: Shipik box in Ships10 space, rounded, then Ships10's transform
+                inner = g.xrect(SHAPE, sm); inner = tuple(float(round(v)) for v in inner)
+                bx = g.xrect(inner, m)
+            else:
+                bx = g.xrect(SHAPE, M)
+            bx = tuple(float(round(v)) for v in bx)
+            out.append((k.get('name') or '', M, bx))
+    return out
+print("// Shipik in Level space: L = (a*x + c*y + tx, b*x + d*y + ty) px; bounds = getBounds(Level), twips.")
+print("struct SpikeObj { double a, b, c, d, tx, ty; double bx0, by0, bx1, by1; };")
+print("struct LevelSpikes { int32_t id; const SpikeObj* items; int32_t count; };")
 spk = {}
 for lid, sid in LEVELS.items():
-    spk[lid] = spike_tris(lid, sid)
+    spk[lid] = spikes(sid)
     if not spk[lid]: continue
-    print("static const SpikeTri kLevel%dSpikes[] = {" % lid)
-    for name, pts in spk[lid]:
-        print("    {%r, %r, %r, %r, %r, %r},  // %s" % (*[float(v) for pt in pts for v in pt], name))
+    print("static const SpikeObj kLevel%dSpikes[] = {" % lid)
+    for name, M, bx in spk[lid]:
+        a,b,c,d,tx,ty = M
+        print("    {%r, %r, %r, %r, %r, %r, %r, %r, %r, %r},  // %s" % (float(a), float(b), float(c), float(d), tx/20.0, ty/20.0, *bx, name))
     print("};")
 print("static const LevelSpikes kSpikeTable[] = {")
 for lid in LEVELS:
-    if spk[lid]: print("    {%d, kLevel%dSpikes, (int32_t)(sizeof(kLevel%dSpikes) / sizeof(SpikeTri))}," % (lid, lid, lid))
+    if spk[lid]: print("    {%d, kLevel%dSpikes, (int32_t)(sizeof(kLevel%dSpikes) / sizeof(SpikeObj))}," % (lid, lid, lid))
 print("};")
 print("static const LevelDisplay kDisplayTable[] = {")
 for lid in LEVELS: print("    {%d, kLevel%dDisplay, (int32_t)(sizeof(kLevel%dDisplay) / sizeof(DisplayObj))},"%(lid,lid,lid))

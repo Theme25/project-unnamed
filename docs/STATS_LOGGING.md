@@ -218,36 +218,39 @@ matrix after each (`E7c i`), then the same with `-133.7`.
 **Per-frame check (optional, stats log).** Append the ball's `a b` (hex) to each
 frame row; `rbsim verify` will then compare the in-game matrix directly.
 
-### 3.8 Spike dump (`hitTestPoint` shape test and `localToGlobal` precision)
+### 3.8 Standardized spikes (`MATHSPIKES = 1`) and camera
 
-Spikes (`MATHSPIKES = 0`, the original game's test): `PlayerBox.HitTestObjectControlPoints`
-takes 16 points `(10.5 cos(2*pi*i/16), 10.5 sin(2*pi*i/16))` px in ball space, converts each with
-`localToGlobal` and calls `spikeRow.hitTestPoint(gx, gy, true)` against the spike's vector fill
-(shape 56: triangle (0,0) (60,-193) (120,0) twips). `rbsim` models this with exact doubles. Unknown:
-whether `localToGlobal` rounds to twips, and whether a point exactly on an edge (or within a
-fraction of a twip) counts. Run on **Level 3, just loaded, paused**, reload afterwards.
-`L = m_currLevel`, `pb = L.getplayerBox()`, `S = L.ship1` (first triangle: Level px
-(314,425) (317,415.35) (320,425)). Hex doubles throughout.
+The speedrun rule is the Practice Hack's standardized spike check (`mathspikes 1`), which
+`rbsim` implements: for each of the ball's 16 control points, `Shipik.testPoint` requires
+the Level-space point to lie in the spike's `getBounds(Level)` rectangle, then shifts it by
+`-dp` (the camera step of this frame, `Level.dp`) and runs the strict sign test against
+(0,0) (3,-9.65) (6,0) px. The camera is Tweener's easeOutExpo at t = 1 of 31 frames per
+Update (`c * 1.001 * (1 - 2^(-10/31)) + b`, truncated to twips); `dp` reaches ~5.5 px, so the
+camera must be exact. Please record everything below with **mathspikes 1** and say whether
+**isGless** was on (it moves the camera step to the end of Update and makes `dp = 0`).
 
-**E8a - localToGlobal.** For `k = 0 ... 999`: `pb.x = 300 + k*0.0137 + 0.001`,
-`pb.y = 200 + k*0.0091 + 0.001`, `pb.rotation = ((k*0.7317) % 360) - 180`. For each `i = 0 ... 15`
-compute the test point exactly as `PlayerBox` does and log
-`E8a k i` + `pb.localToGlobal(pt)` (x y) + `L.globalToLocal(that)` (x y). Once, log `E8L` +
-`L.x L.y` + `L.transform.concatenatedMatrix` (a b c d tx ty).
+**Per-frame camera columns (stats log).** Append to every frame row, after the extra bodies:
+`hex(Level.x) hex(Level.y) hex(dp[0]) hex(dp[1])`. `rbsim verify` then checks the camera
+every frame.
 
-**E8b - hitTestPoint on one spike.** For Level-local probe points `(x, y)` log
-`E8b hex(x) hex(y) int(S.hitTestPoint(g.x, g.y, true))` where `g = L.localToGlobal(new Point(x, y))`:
-- 7 horizontal lines, `y` in `424.99, 420, 416, 415.4, 415.36, 415.35, 415.34`,
-  `x = 313.9 + j*0.005` for `j = 0 ... 1239`;
-- base line: `x = 317`, `y = 424.9 + j*0.001`, `j = 0 ... 200`;
-- apex: `x = 317`, `y = 415.30 + j*0.0005`, `j = 0 ... 200`.
+**Calibration rows (Level 3, just loaded, paused; reload afterwards).**
+- `E8pow hex(Math.pow(2, -10 * 1 / 31))` (the tween constant).
+- **E8a - native conversions.** For `k = 0 ... 999`: `pb.x = 300 + k*0.0137 + 0.001`,
+  `pb.y = 200 + k*0.0091 + 0.001`, `pb.rotation = ((k*0.7317) % 360) - 180`; for each test
+  point `i = 0 ... 15` (computed as in `PlayerBox`) log `E8a k i` + `g = pb.localToGlobal(pt)`
+  (x y) + `L.globalToLocal(g)` (x y) + `S.globalToLocal(L.localToGlobal(q))` (x y) where
+  `S` is the first `Shipik` of `ship1` and `q = L.globalToLocal(g)` shifted by `(-0.37, 0.61)`.
+- **E8b - testPoint.** Set `S.cover.x = dx`, `S.cover.y = dy` for `(dx, dy)` in
+  `(0,0) (2.35,-1.4) (-5.5,4.8)`. For Level-space probes `(x, y)` log
+  `E8b hex(dx) hex(dy) hex(x) hex(y) int(S.testPoint(L.localToGlobal(new Point(x, y))))`:
+  7 horizontal lines `y` in `424.99, 420, 416, 415.4, 415.36, 415.35, 415.34`,
+  `x = 313.9 + j*0.005` (`j = 0 ... 1239`), each shifted by `(dx, dy)`.
+- **E8c - whole test.** `pb.rotation` in `0, 11.25, 45`; `pb.x = 305 + i*0.1` (`i = 0 ... 249`),
+  `pb.y = 403.8 + j*0.05` (`j = 0 ... 39`); with `S.cover` at `(0,0)`: log `E8c hex(rot)
+  hex(pb.x) hex(pb.y) int(pb.HitTestObjectControlPoints(L.ship1))`.
 
-**E8c - whole test.** `pb.rotation` in `0, 11.25, 45`; `pb.x = 305 + i*0.1` (`i = 0 ... 249`),
-`pb.y = 403.8 + j*0.05` (`j = 0 ... 39`). Log `E8c hex(rot) hex(pb.x) hex(pb.y)
-int(pb.HitTestObjectControlPoints(S))`.
-
-**Level 3 stats runs** (same format as Level 2, extra-body columns for `movePlatform1`,
-`movePlatform2`): idle `n600`; a run that dies on the first spike row; one that falls off
+**Level 3 stats runs** (extra-body columns `movePlatform1`, `movePlatform2`, plus the camera
+columns): idle `n600`; a run that dies on the first spike row; one that falls off
 (y > 650); a win; a checkpoint-1 restart.
 
 ### 3.4 Other dynamic bodies (needed for levels with joints or moving parts)

@@ -17,6 +17,7 @@ using namespace rb;
 
 int CmdVerify(int argc, char** argv);
 int CmdCalib(int argc, char** argv);
+static double SpriteCoordForTest(double v) { return (double)as3_toInt32(v * 20) / 20.0; }
 
 static uint64_t bits(double d) {
     uint64_t u;
@@ -378,25 +379,24 @@ static int CmdTest() {
         const Rect r = BallBounds(500, 300, -179.2683);
         check(r.x0 == 10000 - 212 && r.x1 == 10000 + 212, "rotated ball getBounds half-extent (Flash matrix, round-to-nearest)");
     }
-    // 13. Level 3 + spikes (geometry from the SWF; Flash edge/rounding rules not calibrated yet)
+    // 13. Level 3 + standardized spikes (MATHSPIKES = 1)
     {
         LevelTemplate t3(3);
-        check(t3.spikeCount == 33, "level 3 has 3 spike rows x 11 triangles");
-        const SpikeTri& first = t3.spikes[0];  // ship1: (6280,8500) (6340,8307) (6400,8500)
-        check(first.x1 == 6340 && first.y1 == 8307, "first spike apex at (317, 415.35) px");
-        // ball straight above the apex: bottom control point 5 twips above the tip -> no hit
-        check(!BallHitsSpike(6340 / 20.0, (8307 - 210 - 5) / 20.0, 0, first).hit, "ball clear above a spike tip");
-        // bottom control point 10 twips into the tip -> hit
-        check(BallHitsSpike(6340 / 20.0, (8307 - 200) / 20.0, 0, first).hit, "ball control point inside a spike tip");
-        // ball lowered into a valley: the 21 px ball is wider than the 6 px spike pitch, so the
-        // neighbouring spike's flank catches a side control point
-        check(BallHitsSpike(6400 / 20.0, (8500 - 210 - 20) / 20.0, 0, t3.spikes[1]).hit, "ball in a valley is caught by the next spike's flank");
-        // centred over a valley just above the tips -> clear of both neighbours
-        check(!BallHitsSpike(6400 / 20.0, (8307 - 210 - 5) / 20.0, 0, t3.spikes[0]).hit &&
-                  !BallHitsSpike(6400 / 20.0, (8307 - 210 - 5) / 20.0, 0, t3.spikes[1]).hit,
-              "ball just above the tips over a valley is clear");
+        check(t3.spikeCount == 33, "level 3 has 3 spike rows x 11 spikes");
+        const SpikeObj& first = t3.spikes[0];  // ship1: origin (314, 425) px, apex (317, 415.35)
+        check(first.tx == 314 && first.ty == 425 && first.by0 == 8307 && first.bx1 == 6400, "first spike origin and bounds");
+        // ball straight above the apex, bottom control point 0.25 px above the tip -> no hit
+        check(!BallHitsSpike(317, 415.35 - 10.5 - 0.25, 0, 0, 0, first).hit, "ball clear above a spike tip");
+        // bottom control point 0.5 px into the tip -> hit
+        check(BallHitsSpike(317, 415.35 - 10.5 + 0.5, 0, 0, 0, first).hit, "control point inside a spike tip");
+        // the camera step shifts the test: same ball, dp moving the point up out of the tip -> no hit
+        check(!BallHitsSpike(317, 415.35 - 10.5 + 0.5, 0, 0, 1.0, first).hit, "dp (camera step) shifts the spike test");
+        // but the bounds test uses the unshifted point: a point below the tip's bounds never hits, even if dp moves it in
+        check(!BallHitsSpike(317, 415.35 - 10.5 - 0.5, 0, 0, -1.0, first).hit, "bounds check happens before the dp shift");
         auto s3 = std::make_unique<Sim>();
         s3->Load(&t3);
+        check(s3->camX == -s3->spriteX[s3->playerBody] + 275 && s3->camY == SpriteCoordForTest(-s3->spriteY[s3->playerBody] + 200),
+              "camera starts centred on the ball");
         for (int f = 0; f < 600; ++f) s3->Tick(IN_NONE);
         check(s3->playerAlive && !s3->isTimeStop, "level 3 idle: alive after 600 ticks");
         auto s4 = std::make_unique<Sim>();
