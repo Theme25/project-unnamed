@@ -177,6 +177,37 @@ the transform/rounding itself (E4 then shows the matrix); if only `sqStroke` or
 `circStroke` do, it is the stroke bound; if `nestOut`/`nest2` differ from `sqFill`,
 the box-in-a-box rounding at each level is the cause and E5 shows which level.
 
+### 3.7 Rotation-to-matrix dump (how Flash turns `rotation` into the 16.16 matrix)
+
+Result of the 3.6 dumps (`rb1_calib3_6*.tsv`, FP 11.4): the bounding box is fully
+explained by the display matrix. With `M = pb.transform.matrix` (16.16 fixed
+point, `a == d`, `b == -c`), every level's box half-extent is
+`round_nearest(inner_half * (|a| + |c|))` twips, and nested levels apply this
+one level at a time (inner box rounded to twips first). This matches E1, E5 and
+all six E6 control shapes, 1,500/1,500 each; stroke, curves and children play no
+role. What is *not* known is how `rotation = r` produces `a, b`: the matrix is
+not the rounded exact `cos r, sin r`. Its angle is off by up to 0.19 degrees in a
+sawtooth that resets at every multiple of 10 degrees, and its length is below 1
+(down to 0.9984 near 45 degrees). There are also signs that it depends on the
+previous rotation. This dump separates those. Same setup as 3.5.
+
+For every row log the hex doubles of `m.a m.b m.c m.d` after the assignment.
+
+**E7a - history.** For `j = 0 ... 199`, `r = -180 + j*1.8 + 0.123`. For each
+predecessor `p` in `0, r - 0.7317, r + 0.0036, r + 45, 90` (index 0-4): set
+`pb.rotation = p`, then `pb.rotation = r`; log `E7a j pIndex hex(r)` + matrix.
+Also log a row `E7p j pIndex` with the matrix after setting `p` alone.
+
+**E7b - fresh sprites, fine sweep.** For `j = 0 ... 11999`: create a new `Sprite`,
+set `rotation = -30 + j*0.005 + 0.0003`, log `E7b j hex(rotation)` + matrix
+(no need to add it to the display list).
+
+**E7c - repeated set.** Set `pb.rotation = 17.3` ten times in a row and log the
+matrix after each (`E7c i`), then the same with `-133.7`.
+
+**Per-frame check (optional, stats log).** Append the ball's `a b` (hex) to each
+frame row; `rbsim verify` will then compare the in-game matrix directly.
+
 ### 3.4 Other dynamic bodies (needed for levels with joints or moving parts)
 
 After the 21 standard columns, append one group of 7 columns for every
