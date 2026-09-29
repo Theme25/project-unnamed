@@ -22,6 +22,38 @@ for lid,sid in LEVELS.items():
         ex=int(abs(a-1)<1e-12 and abs(d-1)<1e-12 and b==0 and c==0)
         print('    {"%s", %r, %r, %r, %r, %d},'%(n,*[float(x) for x in r],ex))
     print("};")
+# Spikes: every top-level Ships10 (58) / Shipik (57) placement of a level. Level.Update walks its own
+# children, so nested ones would not count. Triangle = shape 56: (0,0) (60,-193) (120,0) twips.
+SHIPIK, SHIPS10, TRI = 57, 58, ((0, 0), (60, -193), (120, 0))
+def spike_tris(lid, sid):
+    tris = []
+    kind, sp = g.chars[sid]
+    for k in g.frame1_children(sp):
+        cid = int(k.get('characterId') or -1)
+        if cid not in (SHIPIK, SHIPS10): continue
+        m = g.mat(k)
+        subs = [g.mat(c) for c in g.frame1_children(g.chars[SHIPS10][1])] if cid == SHIPS10 else [(1, 0, 0, 1, 0, 0)]
+        for sm in subs:
+            pts = []
+            for x, y in TRI:
+                x1, y1 = sm[0]*x + sm[2]*y + sm[4], sm[1]*x + sm[3]*y + sm[5]
+                pts.append((m[0]*x1 + m[2]*y1 + m[4], m[1]*x1 + m[3]*y1 + m[5]))
+            tris.append((k.get('name') or '', pts))
+    return tris
+print("struct SpikeTri { double x0, y0, x1, y1, x2, y2; };  // Level-local twips (Shipik shape 56)")
+print("struct LevelSpikes { int32_t id; const SpikeTri* tris; int32_t count; };")
+spk = {}
+for lid, sid in LEVELS.items():
+    spk[lid] = spike_tris(lid, sid)
+    if not spk[lid]: continue
+    print("static const SpikeTri kLevel%dSpikes[] = {" % lid)
+    for name, pts in spk[lid]:
+        print("    {%r, %r, %r, %r, %r, %r},  // %s" % (*[float(v) for pt in pts for v in pt], name))
+    print("};")
+print("static const LevelSpikes kSpikeTable[] = {")
+for lid in LEVELS:
+    if spk[lid]: print("    {%d, kLevel%dSpikes, (int32_t)(sizeof(kLevel%dSpikes) / sizeof(SpikeTri))}," % (lid, lid, lid))
+print("};")
 print("static const LevelDisplay kDisplayTable[] = {")
 for lid in LEVELS: print("    {%d, kLevel%dDisplay, (int32_t)(sizeof(kLevel%dDisplay) / sizeof(DisplayObj))},"%(lid,lid,lid))
 print("};\n}  // namespace rb")

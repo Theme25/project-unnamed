@@ -378,6 +378,38 @@ static int CmdTest() {
         const Rect r = BallBounds(500, 300, -179.2683);
         check(r.x0 == 10000 - 212 && r.x1 == 10000 + 212, "rotated ball getBounds half-extent (Flash matrix, round-to-nearest)");
     }
+    // 13. Level 3 + spikes (geometry from the SWF; Flash edge/rounding rules not calibrated yet)
+    {
+        LevelTemplate t3(3);
+        check(t3.spikeCount == 33, "level 3 has 3 spike rows x 11 triangles");
+        const SpikeTri& first = t3.spikes[0];  // ship1: (6280,8500) (6340,8307) (6400,8500)
+        check(first.x1 == 6340 && first.y1 == 8307, "first spike apex at (317, 415.35) px");
+        // ball straight above the apex: bottom control point 5 twips above the tip -> no hit
+        check(!BallHitsSpike(6340 / 20.0, (8307 - 210 - 5) / 20.0, 0, first).hit, "ball clear above a spike tip");
+        // bottom control point 10 twips into the tip -> hit
+        check(BallHitsSpike(6340 / 20.0, (8307 - 200) / 20.0, 0, first).hit, "ball control point inside a spike tip");
+        // ball lowered into a valley: the 21 px ball is wider than the 6 px spike pitch, so the
+        // neighbouring spike's flank catches a side control point
+        check(BallHitsSpike(6400 / 20.0, (8500 - 210 - 20) / 20.0, 0, t3.spikes[1]).hit, "ball in a valley is caught by the next spike's flank");
+        // centred over a valley just above the tips -> clear of both neighbours
+        check(!BallHitsSpike(6400 / 20.0, (8307 - 210 - 5) / 20.0, 0, t3.spikes[0]).hit &&
+                  !BallHitsSpike(6400 / 20.0, (8307 - 210 - 5) / 20.0, 0, t3.spikes[1]).hit,
+              "ball just above the tips over a valley is clear");
+        auto s3 = std::make_unique<Sim>();
+        s3->Load(&t3);
+        for (int f = 0; f < 600; ++f) s3->Tick(IN_NONE);
+        check(s3->playerAlive && !s3->isTimeStop, "level 3 idle: alive after 600 ticks");
+        auto s4 = std::make_unique<Sim>();
+        s4->Load(&t3);
+        std::vector<uint8_t> in = DecodeInputs("d25w1d300");
+        int f = 0;
+        for (uint8_t c : in) {
+            s4->Tick(c);
+            ++f;
+            if (!s4->playerAlive) break;
+        }
+        check(!s4->playerAlive && f < 100 && s4->spriteY[s4->playerBody] < 450, "level 3: jumping into the first spike row kills");
+    }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }

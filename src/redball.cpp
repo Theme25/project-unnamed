@@ -36,6 +36,11 @@ LevelTemplate::LevelTemplate(int32_t levelId) : id(levelId) {
     pd.localPosition.Set(0, 0);
     playerGeom = geoms.Add(pd);
     aim = Display("levelAim");
+    for (const LevelSpikes& ls : kSpikeTable)
+        if (ls.id == id) {
+            spikes = ls.tris;
+            spikeCount = ls.count;
+        }
     for (int32_t i = 0; i < 5; ++i) {
         char buf[32];
         std::snprintf(buf, sizeof buf, "checkPoint%d", i);
@@ -85,6 +90,40 @@ Rect BallBounds(double sx, double sy, double rotDeg, int adj) {
     const int64_t h2 = (int64_t)PLAYER_SPRITE_WIDTH_TWIPS / 2;
     const double n = (double)((h2 * (a + b) + 32768) >> 16);
     return Rect{x - n, y - n, x + n, y + n};
+}
+
+// Signed distance-like edge test: >0 inside for a triangle given in either winding.
+static double EdgeSide(double px, double py, double ax, double ay, double bx, double by) {
+    return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+}
+
+SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, const SpikeTri& t) {
+    // Quick reject: the 16 points lie within 210 twips (+ margin) of the ball's position.
+    const double cx = std::llround(sx * 20), cy = std::llround(sy * 20);
+    const double tx0 = std::fmin(t.x0, std::fmin(t.x1, t.x2)), tx1 = std::fmax(t.x0, std::fmax(t.x1, t.x2));
+    const double ty0 = std::fmin(t.y0, std::fmin(t.y1, t.y2)), ty1 = std::fmax(t.y0, std::fmax(t.y1, t.y2));
+    const double reach = 210 + 2 * SPIKE_EDGE_MARGIN;
+    if (cx + reach < tx0 || cx - reach > tx1 || cy + reach < ty0 || cy - reach > ty1) return {false, false};
+    const FlashMatrix m = FlashRotationMatrix(rotDeg);
+    const double a = m.a / 65536.0, b = m.b / 65536.0;  // c = -b, d = a
+    const double orient = EdgeSide(t.x2, t.y2, t.x0, t.y0, t.x1, t.y1) > 0 ? 1 : -1;
+    const double l0 = std::hypot(t.x1 - t.x0, t.y1 - t.y0), l1 = std::hypot(t.x2 - t.x1, t.y2 - t.y1),
+                 l2 = std::hypot(t.x0 - t.x2, t.y0 - t.y2);
+    const double r = PLAYER_SPRITE_WIDTH_TWIPS / 2.0 / 20.0;  // this.width / 2 in px
+    bool hit = false, uncertain = false;
+    for (int k = 0; k < 16; ++k) {
+        const double ang = 2 * AS3_PI / 16 * k;
+        const double lx = r * as3_cos(ang) * 20, ly = r * as3_sin(ang) * 20;  // twips, ball-local
+        const double px = cx + a * lx - b * ly, py = cy + b * lx + a * ly;
+        // distance of the point to each edge (twips), positive inside
+        const double d0 = orient * EdgeSide(px, py, t.x0, t.y0, t.x1, t.y1) / l0;
+        const double d1 = orient * EdgeSide(px, py, t.x1, t.y1, t.x2, t.y2) / l1;
+        const double d2 = orient * EdgeSide(px, py, t.x2, t.y2, t.x0, t.y0) / l2;
+        const double dmin = std::fmin(d0, std::fmin(d1, d2));
+        if (dmin > 0) hit = true;
+        if (std::fabs(dmin) < SPIKE_EDGE_MARGIN) uncertain = true;
+    }
+    return {hit, uncertain};
 }
 
 bool RectsHit(const Rect& a, const Rect& b) {
@@ -251,12 +290,47 @@ static void L2_Update(Sim& s) {
     s.world.SetLinearVelocity(mp, Vec2(2 * s.lvInt[L2_MOVE_DIRECTION], 0));
 }
 
+// Level_3.as: two vertical moving platforms (prismatic joints), three spike rows (display layer)
+enum { L3_MOVE1 = 0, L3_MOVE2 = 1 };  // lvBody / lvInt (direction)
+static void L3_Construct(Sim& s) {
+    World& w = s.world;
+    s.CreateBody("firstPlatform", "Polygon", 0, DEFAULT_FRICTION, DEFAULT_RESTITUTION, Box(150, 20));
+    s.CreateBody("shipPlatform1", "Polygon", 0, DEFAULT_FRICTION, DEFAULT_RESTITUTION, Box(250, 20));
+    s.CreateBody("shipPlatform2", "Polygon", 0, DEFAULT_FRICTION, DEFAULT_RESTITUTION, Box(250, 20));
+    const int32_t m1 = s.CreateBody("movePlatform1", "Polygon", DEFAULT_DENSITY, DEFAULT_FRICTION, DEFAULT_RESTITUTION, Box(150, 10));
+    const int32_t m2 = s.CreateBody("movePlatform2", "Polygon", DEFAULT_DENSITY, DEFAULT_FRICTION, DEFAULT_RESTITUTION, Box(150, 10));
+    s.CreateBody("exitPlatform", "Polygon", 0, DEFAULT_FRICTION, DEFAULT_RESTITUTION, Box(450, 20));
+    s.lvBody[L3_MOVE1] = m1;
+    s.lvBody[L3_MOVE2] = m2;
+    // one b2PrismaticJointDef, Initialize'd twice (enableLimit/enableMotor set before the first CreateJoint)
+    JointDef pj;
+    w.InitPrismaticJointDef(pj, m1, w.groundBody, w.bodies[m1].sweep.c, Vec2(0, 1));
+    pj.enableLimit = false;
+    pj.enableMotor = false;
+    w.CreateJoint(pj);
+    s.lvInt[L3_MOVE1] = 1;
+    w.InitPrismaticJointDef(pj, m2, w.groundBody, w.bodies[m2].sweep.c, Vec2(0, 1));
+    w.CreateJoint(pj);
+    s.lvInt[L3_MOVE2] = 1;
+}
+static void L3_Update(Sim& s) {
+    if (s.spriteY[s.playerBody] > 650 && s.playerAlive) s.PlayerDie();
+    const int32_t m1 = s.lvBody[L3_MOVE1], m2 = s.lvBody[L3_MOVE2];
+    if (s.spriteY[m1] < 270) s.lvInt[L3_MOVE1] = 1;
+    if (s.spriteY[m1] > 425) s.lvInt[L3_MOVE1] = -1;
+    s.world.SetLinearVelocity(m1, Vec2(0, 3 * s.lvInt[L3_MOVE1]));
+    if (s.spriteY[m2] < 116) s.lvInt[L3_MOVE2] = 1;
+    if (s.spriteY[m2] > 271) s.lvInt[L3_MOVE2] = -1;
+    s.world.SetLinearVelocity(m2, Vec2(0, 3 * s.lvInt[L3_MOVE2]));
+}
+
 static void NotImplemented(Sim&) { fatal("level not implemented yet"); }
 
 const LevelScript& GetLevelScript(int32_t id) {
     static const LevelScript scripts[] = {
         {1, L1_Construct, L1_Update, true},
         {2, L2_Construct, L2_Update, true},
+        {3, L3_Construct, L3_Update, true},
     };
     for (const LevelScript& ls : scripts)
         if (ls.id == id) return ls;
@@ -427,7 +501,17 @@ void Sim::DisplayUpdate() {
     if (playerAlive && tpl->aim && aimFrame == 1) {
         if (test(*tpl->aim)) PlayerWin();
     }
-    // TODO(spikes): Shipik/Ships10 HitTestObjectControlPoints -> PlayerDie (levels with spikes).
+    // Spikes: Level.Update walks its children; any Shipik/Ships10 hit by a control point kills the ball.
+    if (playerAlive) {
+        for (int32_t i = 0; i < tpl->spikeCount; ++i) {
+            const SpikeResult r = BallHitsSpike(spriteX[playerBody], spriteY[playerBody], spriteRot[playerBody], tpl->spikes[i]);
+            if (r.uncertain) ++displayUncertain;
+            if (r.hit) {
+                PlayerDie();
+                break;
+            }
+        }
+    }
     for (int32_t i = 0; i < 5; ++i) {
         const DisplayObj* o = tpl->cps[i];
         if (!o) continue;

@@ -46,6 +46,13 @@ DisplayConfig& GetDisplayConfig();
 // with the matrix nudged by -1/+1 and disagreements are flagged in Sim::displayUncertain.
 Rect BallBounds(double spriteXpx, double spriteYpx, double rotationDeg, int adj = 0);
 bool RectsHit(const Rect& a, const Rect& b);
+// PlayerBox.HitTestObjectControlPoints against a spike triangle (MATHSPIKES = 0: hitTestPoint(x, y, true)).
+// 16 points on radius width/2 = 10.5 px, taken through the ball's display matrix. How Flash rounds
+// localToGlobal and treats points on an edge is not calibrated yet (docs/STATS_LOGGING.md 3.8); points
+// within SPIKE_EDGE_MARGIN twips of an edge are counted in Sim::displayUncertain.
+constexpr double SPIKE_EDGE_MARGIN = 1.0;
+struct SpikeResult { bool hit; bool uncertain; };
+SpikeResult BallHitsSpike(double spriteXpx, double spriteYpx, double rotationDeg, const SpikeTri& t);
 
 struct Sim;
 struct LevelScript {
@@ -70,6 +77,8 @@ struct LevelTemplate {
     const RawPlacement& Place(const char* name) const;
     const DisplayObj* Display(const char* name) const;  // nullptr if the level has no such object
     const DisplayObj* aim = nullptr;                    // levelAim
+    const SpikeTri* spikes = nullptr;                   // every top-level Ships10/Shipik triangle
+    int32_t spikeCount = 0;
     const DisplayObj* cps[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};  // checkPoint0..4
     bool HasPlacement(const char* name) const;
     int32_t CheckpointCount() const;
