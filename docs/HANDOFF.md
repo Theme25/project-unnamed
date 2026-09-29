@@ -51,8 +51,8 @@ identically in the real game.
 | level | status |
 |---|---|
 | 1 | **bit-exact** against Flash logs (FP 11.4: 2/2 runs, 1,204/1,204 frames, incl. TAS win at tick 510) |
-| 3 | implemented: two vertical moving platforms (prismatic), 3 spike rows; spike test = 16 control points through Flash's ball matrix vs the SWF triangles (edge/rounding rules to calibrate, §3.8); **awaiting Flash logs** |
 | 2 | **bit-exact** against Flash logs (FP 11.4: 4 runs, 1,350 frames; pendulum, moving platform, goal and checkpoint timing) |
+| 3 | implemented: two vertical moving platforms (prismatic), 3 spike rows; spike test = 16 control points through Flash's ball matrix vs the SWF triangles (edge/rounding rules to calibrate, §3.8); **awaiting Flash logs** |
 | 3–17 | placements extracted (`src/levels_data.h`); scripts not written |
 
 What is done:
