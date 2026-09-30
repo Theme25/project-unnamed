@@ -221,7 +221,7 @@ int CmdVerify(int argc, char** argv) {
     std::map<int, std::unique_ptr<LevelTemplate>> tpls;
     auto sim = std::make_unique<Sim>();
     int perfect = 0, diverged = 0, unsupported = 0, shown = 0, extraGroupsSeen = 0, deathsMatched = 0;
-    long framesCompared = 0, framesMatched = 0, trailingSkipped = 0, deathInputFromPrev = 0;
+    long framesCompared = 0, framesMatched = 0, trailingSkipped = 0, deathInputFromPrev = 0, postDeathFrames = 0, winsAfterDeath = 0;
     std::map<std::string, int> firstFieldHist;
     std::map<int, int> divergeTickHist;
     for (size_t si = 0; si < segs.size(); ++si) {
@@ -235,9 +235,11 @@ int CmdVerify(int argc, char** argv) {
         sim->Load(tp.get(), sg.checkpoint);
         bool ok = true;
         int endReason = 0;  // 0 = end of log, 1 = death, 2 = win
+        bool diedCounted = false;
         for (size_t ei = 0; ei < sg.entries.size(); ++ei) {
             const Entry& e = sg.entries[ei];
             if (e.restart) {
+                diedCounted = false;
                 // lastCheckNum is static in AS3: it decides which checkpoint the next segment starts at
                 if (si + 1 < segs.size() && segs[si + 1].level == sg.level && segs[si + 1].checkpoint != sim->lastCheckNum) {
                     std::printf("segment %zu: checkpoint carried into the restart differs: flash=%d sim=%d\n", si,
@@ -258,6 +260,46 @@ int CmdVerify(int argc, char** argv) {
                     trailingSkipped += (long)(sg.entries.size() - ei);
                     break;
                 }
+            }
+            // After the death frame: the ball's body is gone and the world holds random debris, so only
+            // what the sim models after death is compared: frame counter, win flag, camera and dp.
+            if (ei > 0 && !sim->playerAlive) {
+                sim->Tick((uint8_t)std::stoi(e.f[2]));
+                std::string detail;
+                char buf[256];
+                if (std::stol(e.f[1]) != sim->frameCount) {
+                    std::snprintf(buf, sizeof buf, "  frame  flash=%s  sim=%d\n", e.f[1].c_str(), sim->frameCount);
+                    detail += buf;
+                }
+                if ((e.f[20] == "1") != sim->isTimeStop) detail += "  ts     flash=" + e.f[20] + "  sim=" + (sim->isTimeStop ? "1" : "0") + "\n";
+                if (e.f.size() >= 27 && (e.f.size() - 21) % 7 == 6) {
+                    const size_t c = e.f.size() - 4;
+                    const double mine[4] = {sim->camX, sim->camY, sim->dpX, sim->dpY};
+                    static const char* fld[4] = {"Level.x", "Level.y", "dp[0]", "dp[1]"};
+                    for (int k = 0; k < 4; ++k) {
+                        const double fl = FromHex(e.f[c + (size_t)k]);
+                        if (!std::isnan(fl) && Bits(fl) != Bits(mine[k])) {
+                            std::snprintf(buf, sizeof buf, "  %-7s flash=%.17g  sim=%.17g\n", fld[k], fl, mine[k]);
+                            detail += buf;
+                        }
+                    }
+                }
+                ++framesCompared;
+                if (detail.empty()) {
+                    ++framesMatched;
+                    ++postDeathFrames;
+                } else {
+                    ok = false;
+                    std::printf("segment %zu (level %d, log line %d): divergence %d ticks after death (tick %s)\n%s\n", si, sg.level,
+                                e.line, sim->deadTicks, e.f[0].c_str(), detail.c_str());
+                    firstFieldHist["post-death"]++;
+                    break;
+                }
+                if (sim->isTimeStop) {
+                    ++winsAfterDeath;
+                    break;
+                }
+                continue;
             }
             uint8_t code = (uint8_t)std::stoi(e.f[2]);
             // Death: Flash logs the 8 playerDiePart* debris bodies from the frame Level.PlayerDie ran.
@@ -327,10 +369,10 @@ int CmdVerify(int argc, char** argv) {
                 endReason = 2;
                 break;
             }
-            if (!sim->playerAlive) {
+            if (!sim->playerAlive && !diedCounted) {
                 endReason = 1;
                 ++deathsMatched;
-                break;
+                diedCounted = true;  // keep going: post-death rows are compared above
             }
         }
         (void)endReason;
@@ -342,6 +384,8 @@ int CmdVerify(int argc, char** argv) {
                 perfect, diverged, unsupported);
     std::printf("frames compared: %ld, matched: %ld  (log lines before first LEVEL skipped: %d)\n", framesCompared,
                 framesMatched, skipped);
+    if (postDeathFrames || winsAfterDeath)
+        std::printf("post-death frames matched (camera, dp, frame, win flag): %ld; wins after death: %ld\n", postDeathFrames, winsAfterDeath);
     if (deathInputFromPrev)
         std::printf("death frames logged as input 0, matched with the previous tick's input: %ld\n", deathInputFromPrev);
     if (trailingSkipped)

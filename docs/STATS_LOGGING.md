@@ -302,6 +302,31 @@ idle `n900`; death on a crusher (`killer1-3`); death on the left-wall spikes (`s
 death on the first kill ramp (`killSpusk`); a run that drives the car; death on `killSpusk2` or
 the finish-area spikes (`shipik7-11`); a checkpoint-1 restart; a win.
 
+### 3.10 Death, death warp and pausing
+
+**What the game does (Practice Hack source).** `PlayerDie` spawns 8 debris bodies with
+`Math.random()`, calls `OutControl()` (clears Left/Right/Up, which is why the death frame logs
+input 0) and `PlayerBox.Kill()` (destroys the body and removes the ball from the display list).
+Nothing restarts the level: `Level.Update` keeps running until R. After death:
+- the camera keeps tweening toward the frozen ball (`-ball.x + 275`, `-ball.y + 200`);
+- the goal and checkpoint `hitTestObject` tests have **no `IsLive()` guard**. The ball has no
+  parent any more, so its "global" box is its frozen Level-local box, while the goal/checkpoints
+  are still shifted by the camera (Game sits at the stage origin: E8a global - local == Level.x/y).
+  A shifted checkpoint sliding over the dead ball sets `lastCheckNum`; an R (F key, logged `R`)
+  then restarts there. A shifted goal triggers `PlayerWin`. This is the death warp.
+- On a spike death the checkpoint loop of the same Update already uses the dead-ball rule.
+- The key handlers only raise a flag on a fresh key press; held keys are dropped by `OutControl`.
+- P (pause) only dims the level and mutes sound; it does not stop `Update`. T (`tPause`) stops the
+  loop entirely, so it changes nothing in the simulation.
+
+`rbsim` models the post-death phase as camera + goal/checkpoint tests (`Sim::DeadUpdate`); the
+debris physics is random and nothing of it survives a restart. `rbsim verify` keeps comparing after
+a death (frame counter, win flag, `Level.x/y`, `dp`): 19,335 post-death frames match.
+
+**Needed:** runs that actually perform a death warp (die, wait for the shifted checkpoint or goal,
+then R), with the level and the frames waited, and, if pausing matters for it, exactly which key
+is pressed (P, T, focus loss) and when.
+
 ### 3.4 Other dynamic bodies (needed for levels with joints or moving parts)
 
 After the 21 standard columns, append one group of 7 columns for every

@@ -581,6 +581,7 @@ void Sim::Restart() {
     camY = SpriteCoord(-spriteY[playerBody] + 400.0 / 2);
     camTween = false;
     dpX = dpY = 0;
+    deadTicks = 0;
 
     // --- Level_N() constructor
     script.construct(*this);
@@ -698,24 +699,25 @@ void Sim::PlayerWin() {
 }
 
 // Level.Update: levelAim win test, spikes (TODO), checkpoints.
+// hitTestObject(playerBox, target) compares global (stage) boxes. Game sits at the stage origin with
+// scale 1 (E8a: global - Level-local == Level.x/y), and the Level's own offset is the camera.
+//  - alive: both are children of the Level, the camera cancels -> compare Level-local boxes;
+//  - dead: PlayerBox.Kill() removed the ball from the display list, so its "global" box is its own
+//    transform (frozen Level-local x/y/rotation), while the target is still shifted by the camera.
+//    Level.Update has no IsLive() guard on the goal or checkpoint tests: this is the death warp.
+bool Sim::BallHitsTarget(const DisplayObj& o) {
+    const double sx = spriteX[playerBody], sy = spriteY[playerBody], rw = spriteRotW[playerBody];
+    const double ox = playerAlive ? 0 : camX * 20, oy = playerAlive ? 0 : camY * 20;
+    const Rect r{o.x0 + ox, o.y0 + oy, o.x1 + ox, o.y1 + oy};
+    const bool lo = RectsHit(BallBounds(sx, sy, rw, -1), r), hi = RectsHit(BallBounds(sx, sy, rw, +1), r);
+    if (lo != hi) ++displayUncertain;
+    return RectsHit(BallBounds(sx, sy, rw, 0), r);
+}
+
+// Level.Update after the camera tween: levelAim test, spikes, checkpoints (in this order).
 void Sim::DisplayUpdate() {
-    // A destroyed PlayerBox is off the display list, so hitTestObject is false.
-    Rect ball{0, 0, 0, 0}, ballLo = ball, ballHi = ball;
-    if (playerAlive) {
-        ball = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], 0);
-        ballLo = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], -1);
-        ballHi = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], +1);
-    }
-    auto test = [&](const DisplayObj& o) {
-        const Rect r{o.x0, o.y0, o.x1, o.y1};
-        const bool lo = RectsHit(ballLo, r), hi = RectsHit(ballHi, r);
-        if (lo != hi) ++displayUncertain;
-        return RectsHit(ball, r);
-    };
-    if (playerAlive && tpl->aim && aimFrame == 1) {
-        if (test(*tpl->aim)) PlayerWin();
-    }
-    // Spikes: Level.Update walks its children; any Shipik/Ships10 hit by a control point kills the ball.
+    if (tpl->aim && aimFrame == 1 && BallHitsTarget(*tpl->aim)) PlayerWin();  // no IsLive() guard
+    // Spikes: any Shipik/Ships10 hit by a control point kills a live ball (PlayerDie is guarded here).
     if (playerAlive) {
         for (int32_t i = 0; i < tpl->spikeCount; ++i) {
             const SpikeResult r = BallHitsSpike(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], dpX, dpY, tpl->spikes[i]);
@@ -726,14 +728,33 @@ void Sim::DisplayUpdate() {
             }
         }
     }
+    // Checkpoints: no IsLive() guard. After a spike death in this same Update the ball is already off
+    // the display list, so the dead-ball rule applies from here on.
     for (int32_t i = 0; i < 5; ++i) {
         const DisplayObj* o = tpl->cps[i];
         if (!o) continue;
-        if (playerAlive && cpFrame[i] == 1 && test(*o)) {
+        if (cpFrame[i] == 1 && BallHitsTarget(*o)) {
             if (i > lastCheckNum) lastCheckNum = i;
             cpFrame[i] = 2;  // checkPoint<i>.play()
         }
     }
+}
+
+// Level.Update while the ball is dead (until R restarts the level). The world keeps stepping in Flash,
+// but only with the random debris and the level's machinery; nothing of it survives a restart, and the
+// ball's sprite is frozen (its body left the world). What matters is simulated: the camera tween toward
+// the frozen ball, and the goal/checkpoint tests with the dead-ball rule.
+void Sim::DeadUpdate() {
+    const double ox = camX, oy = camY;
+    if (!gless) CameraStep();
+    dpX = ox - camX;
+    dpY = oy - camY;
+    camTargetX = 1.0 * (-spriteX[playerBody] + 550.0 / 2);
+    camTargetY = 1.0 * (-spriteY[playerBody] + 400.0 / 2);
+    camTween = true;
+    DisplayUpdate();
+    if (gless) CameraStep();
+    ++deadTicks;
 }
 
 void Sim::Tick(uint8_t input) {
@@ -742,7 +763,8 @@ void Sim::Tick(uint8_t input) {
     bool left = input >= 4;
     bool up = input >= 6 || input == 2 || input == 3;
     bool right = input % 2 == 1;
-    LevelUpdate(left, up, right);
+    if (playerAlive) LevelUpdate(left, up, right);
+    else DeadUpdate();
     if (!isTimeStop) ++frameCount;
 }
 

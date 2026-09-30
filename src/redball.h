@@ -123,6 +123,7 @@ struct Sim {
     double camTargetX = 0, camTargetY = 0;
     bool camTween = false;              // a camera tween was added by the previous Update
     double dpX = 0, dpY = 0;            // Level.dp: camera step of this Update (old - new)
+    int32_t deadTicks = 0;             // Updates run since the ball died
     bool gless = false;                 // Game.isGless: camera steps at the end of Update, dp = 0
     int32_t cpFrame[5] = {1, 1, 1, 1, 1};  // checkPointN.currentFrame (1 = armed, 5 = already collected)
     int32_t frameCount = 0;
@@ -150,6 +151,7 @@ struct Sim {
     int32_t CreateCircleBody(const char* name, double density, double friction, double restitution, double size);
     void PlayerDie();
     void PlayerWin();
+    bool BallHitsTarget(const DisplayObj& o);  // hitTestObject, alive or dead (death-warp rule)
     double SpriteX(int32_t body) const { return spriteX[body]; }
     double SpriteY(int32_t body) const { return spriteY[body]; }
 
@@ -157,6 +159,7 @@ struct Sim {
     int32_t GetBodyAtPoint(double x, double y, bool includeStatic);
     void LevelUpdate(bool left, bool up, bool right);
     void DisplayUpdate();
+    void DeadUpdate();     // Level.Update after PlayerDie (camera + goal/checkpoint tests only)
     void CameraStep();     // Tweener.onEnterFrame via COMM "TweenEvent"  // win check + checkpoints (Level.Update, after the input forces)
     int32_t Geom(const std::string& key, const ShapeDef& def);
     int32_t BeginBody(const char* name);

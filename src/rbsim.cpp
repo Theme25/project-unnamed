@@ -470,6 +470,38 @@ static int CmdTest() {
         }
         check(winTick == 405 && w8->playerAlive, "level 8: logged TAS wins on the Flash tick (405)");
     }
+    // 15. Death warp: after PlayerDie the ball is off the display list, so goal/checkpoint tests compare its
+    //     frozen Level-local box with targets shifted by the camera (Level.Update has no IsLive() guard).
+    {
+        LevelTemplate t8(8);
+        const DisplayObj& cp = *t8.cps[1];
+        const double cx = (cp.x0 + cp.x1) / 2 / 20, cy = (cp.y0 + cp.y1) / 2 / 20;  // checkPoint1 centre, px
+        // dead ball at P with the camera settled at 275 - P (200 - P): the target appears at C + 275 - P
+        const double px = (cx + 275) / 2, py = (cy + 200) / 2;
+        auto place = [&](Sim& s, bool alive) {
+            s.Load(&t8);
+            s.spriteX[s.playerBody] = SpriteCoordForTest(px);
+            s.spriteY[s.playerBody] = SpriteCoordForTest(py);
+            s.spriteRot[s.playerBody] = s.spriteRotW[s.playerBody] = 0;
+            s.camX = SpriteCoordForTest(-s.spriteX[s.playerBody] + 275);
+            s.camY = SpriteCoordForTest(-s.spriteY[s.playerBody] + 200);
+            s.camTargetX = -s.spriteX[s.playerBody] + 275;
+            s.camTargetY = -s.spriteY[s.playerBody] + 200;
+            s.camTween = true;
+            s.playerAlive = alive;
+        };
+        auto d = std::make_unique<Sim>();
+        place(*d, false);
+        check(d->BallHitsTarget(cp) && d->lastCheckNum == 0, "dead ball: checkpoint shifted by the camera overlaps it");
+        d->Tick(IN_NONE);  // DeadUpdate: camera step + checkpoint loop
+        check(d->lastCheckNum == 1 && d->frameCount == 1 && d->deadTicks == 1, "death warp: checkpoint collected after death");
+        d->Restart();
+        check(d->playerAlive && d->lastCheckNum == 1 && std::fabs(d->spriteX[d->playerBody] - (-271.1)) < 30,
+              "R after the death warp restarts at the warped checkpoint");
+        auto a = std::make_unique<Sim>();
+        place(*a, true);
+        check(!a->BallHitsTarget(cp), "same position alive: no hit (camera cancels for a live ball)");
+    }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }
