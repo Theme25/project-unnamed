@@ -456,6 +456,19 @@ static int CmdTest() {
             prevUp = s8->lvInt[0];
         }
         check(s8->playerAlive && reversals >= 20, "level 8 idle: alive, crushers cycle");
+        // rb1_stats_8_11.tsv (FP 11.4, MATHSPIKES = 1): fastest logged Level 8 route, win on tick 405
+        auto w8 = std::make_unique<Sim>();
+        w8->Load(&t8);
+        int winTick = -1, tk = 0;
+        for (uint8_t c : DecodeInputs("d19a3n1a1n12d1a1n21d15e1d1e1d3e22d7e5d30e1d20e7d3e1d9n1d76e2d14a1n1a1n18a3n10a1n18w9n65")) {
+            w8->Tick(c);
+            ++tk;
+            if (w8->isTimeStop) {
+                winTick = tk;
+                break;
+            }
+        }
+        check(winTick == 405 && w8->playerAlive, "level 8: logged TAS wins on the Flash tick (405)");
     }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
