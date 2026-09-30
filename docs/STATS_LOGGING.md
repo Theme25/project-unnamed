@@ -179,6 +179,12 @@ the box-in-a-box rounding at each level is the cause and E5 shows which level.
 
 ### 3.7 Rotation-to-matrix dump (how Flash turns `rotation` into the 16.16 matrix)
 
+**Final rule (Level 8 logs):** the matrix is built from the value *written* to `rotation`
+(the game writes `angle * 180 / PI % 360`, in (-360, 360)), not from the normalised getter
+value: `x = trunc(written * 65536)`, reduced into [-180, 180] degrees in integers, then the table
+sine below. This closes the last near-tie misses: 0 misses on 12,216 in-game matrices, E4
+1,500/1,500 (E4 wrote `-180 + k*0.7317` unwrapped) and E7 13,000/13,000.
+
 **Result (rb1_calib3_7.tsv, FP 11.4):** no history dependence (E7a 200/200 identical
 across predecessors, E7c no drift). `x = trunc(rotation * 65536)`; for `|x| <= 90 deg`:
 `i = |x| >> 14`, `fr = |x| & 16383`, `v = T[i] + ((T[i+1] - T[i]) * fr >> 16)` with
@@ -286,6 +292,10 @@ Flash derives `rotation` from the matrix; `rbsim` provisionally uses `atan2(b, a
 Math.PI / 180`, `sx = 0.5 + (j % 97) / 64`, `sy = 0.5 + (j % 89) / 64`;
 `s.transform.matrix = new Matrix(Math.cos(t)*sx, Math.sin(t)*sx, -Math.sin(t+k)*sy, Math.cos(t+k)*sy, 0, 0)`;
 log `E9b j` + hex of the matrix read back (a b c d) + `s.rotation s.scaleX s.scaleY`.
+
+**Logger artifact (all logged deaths):** the death frame's input field is written as 0 even
+when a key was held; Flash's velocity matches the previous tick's input. `rbsim verify` retries
+a death frame with the previous input and reports it.
 
 **Level 8 stats runs** (same format as Level 3: extra bodies, ball matrix, camera; mathspikes 1):
 idle `n900`; death on a crusher (`killer1-3`); death on the left-wall spikes (`shipik1-6`);

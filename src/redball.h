@@ -36,6 +36,7 @@ using PolyList = std::vector<std::vector<std::pair<double, double>>>;
 struct Rect { double x0, y0, x1, y1; };
 // Flash's rotation -> 16.16 display matrix and the resulting getBounds (docs/STATS_LOGGING.md 3.6/3.7).
 struct FlashMatrix { int32_t a, b; };  // c = -b, d = a (16.16)
+// rotationDeg = the value WRITTEN to DisplayObject.rotation (may lie outside (-180, 180]).
 FlashMatrix FlashRotationMatrix(double rotationDeg);
 // Flash-reported DisplayObject.rotation of rotated timeline clips (docs/STATS_LOGGING.md 3.9).
 bool LookupTimelineRotation(int32_t level, const char* name, double& out);
@@ -127,6 +128,9 @@ struct Sim {
     int32_t frameCount = 0;
     // display layer: DisplayObject x/y/rotation of each body's sprite (twip-quantised)
     double spriteX[CAP_BODIES], spriteY[CAP_BODIES], spriteRot[CAP_BODIES];
+    // The value last written to DisplayObject.rotation (before Flash's normalisation). The display
+    // matrix is built from THIS value (FlashRotationMatrix), not from the normalised getter value.
+    double spriteRotW[CAP_BODIES];
     bool hasSprite[CAP_BODIES];
     // per-level script state (Level_N private fields)
     int32_t lvBody[LV_VARS];

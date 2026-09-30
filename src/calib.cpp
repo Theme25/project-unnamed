@@ -123,7 +123,7 @@ int CmdCalib(int argc, char** argv) {
             const double r = std::atan2(H(f[3]), H(f[2])) * 180 / AS3_PI;
             if (std::fabs(r - H(f[6])) <= 1e-12) ++e9bOk;
         } else if (f[0] == "E4" && f.size() >= 6) {
-            checkM(H(f[2]), f[3], f[4]);
+            checkM(-180 + std::stoi(f[1]) * 0.7317, f[3], f[4]);  // value written (3.6), not the read-back
         } else if (f[0] == "E7a" && f.size() >= 8) {
             checkM(H(f[3]), f[4], f[5]);
         } else if (f[0] == "E7b" && f.size() >= 7) {
@@ -157,7 +157,7 @@ int CmdCalib(int argc, char** argv) {
                 e2inRange);
     std::printf("E3 static bounds vs SWF-derived display_data.h: %ld / %ld identical\n", e3ok, e3n);
     const bool e8ok = e8cOk == e8cN && powOk == powN && e9Ok == e9N && e9RotOk == e9RotN && e9bOk == e9bN;
-    const bool pass = e8ok && e1far == 0 && e2obs == e2 && e2inRange == e2 && e1exact == e1 && (mN == 0 || mN - mOk <= 4);
+    const bool pass = e8ok && e1far == 0 && e2obs == e2 && e2inRange == e2 && e1exact == e1 && (mN == mOk);
     std::printf("%s\n", pass ? "CALIB OK" : "CALIB MISMATCH");
     return pass ? 0 : 1;
 }

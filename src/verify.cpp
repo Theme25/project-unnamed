@@ -131,7 +131,7 @@ bool CompareExtraBodies(const Sim& sim, const std::vector<std::string>& f, std::
     if (f.size() >= 27 && (f.size() - 21) % 7 == 6) {
         const size_t c = f.size() - 6;
         if (sim.playerAlive) {
-            const FlashMatrix m = FlashRotationMatrix(sim.spriteRot[sim.playerBody]);
+            const FlashMatrix m = FlashRotationMatrix(sim.spriteRotW[sim.playerBody]);
             const double fa = FromHex(f[c]), fb = FromHex(f[c + 1]);
             if (std::lround(fa * 65536) != m.a || std::lround(fb * 65536) != m.b) {
                 char buf[200];
@@ -221,7 +221,7 @@ int CmdVerify(int argc, char** argv) {
     std::map<int, std::unique_ptr<LevelTemplate>> tpls;
     auto sim = std::make_unique<Sim>();
     int perfect = 0, diverged = 0, unsupported = 0, shown = 0, extraGroupsSeen = 0, deathsMatched = 0;
-    long framesCompared = 0, framesMatched = 0, trailingSkipped = 0;
+    long framesCompared = 0, framesMatched = 0, trailingSkipped = 0, deathInputFromPrev = 0;
     std::map<std::string, int> firstFieldHist;
     std::map<int, int> divergeTickHist;
     for (size_t si = 0; si < segs.size(); ++si) {
@@ -260,14 +260,33 @@ int CmdVerify(int argc, char** argv) {
                 }
             }
             uint8_t code = (uint8_t)std::stoi(e.f[2]);
-            if (ei > 0) sim->Tick(code);
-            FrameStats st = sim->Stats(code);
-            std::string detail;
-            std::vector<int> bad = Compare(st, e.f, detail);
             // Death: Flash logs the 8 playerDiePart* debris bodies from the frame Level.PlayerDie ran.
             bool flashDied = false;
             for (size_t k = 21; k + 7 <= e.f.size(); k += 7)
                 if (e.f[k].rfind("playerDiePart", 0) == 0) flashDied = true;
+            // Artifact: the logger writes input 0 on the death frame although the game read the keys
+            // (every logged death: Flash's velocity matches the previous tick's input). Try the logged
+            // input first, then the previous one.
+            if (ei > 0 && flashDied && code == 0 && ei >= 2 && !sg.entries[ei - 1].restart) {
+                const uint8_t prevCode = (uint8_t)std::stoi(sg.entries[ei - 1].f[2]);
+                if (prevCode != 0) {
+                    auto trial = std::make_unique<Sim>(*sim);
+                    trial->Tick(code);
+                    std::string dummy;
+                    const std::vector<int> b0 = Compare(trial->Stats(code), e.f, dummy);
+                    bool clean = true;
+                    for (int c : b0)
+                        if (!ignore[(size_t)c] && !((c == 14 || c == 15 || c == 16) && !trial->playerAlive)) clean = false;
+                    if (!clean) {
+                        code = prevCode;
+                        ++deathInputFromPrev;
+                    }
+                }
+            }
+            if (ei > 0) sim->Tick(code);
+            FrameStats st = sim->Stats(code);
+            std::string detail;
+            std::vector<int> bad = Compare(st, e.f, detail);
             const bool simDied = !sim->playerAlive;
             std::vector<int> relevant;
             for (int c : bad) {
@@ -323,6 +342,8 @@ int CmdVerify(int argc, char** argv) {
                 perfect, diverged, unsupported);
     std::printf("frames compared: %ld, matched: %ld  (log lines before first LEVEL skipped: %d)\n", framesCompared,
                 framesMatched, skipped);
+    if (deathInputFromPrev)
+        std::printf("death frames logged as input 0, matched with the previous tick's input: %ld\n", deathInputFromPrev);
     if (trailingSkipped)
         std::printf("trailing rows skipped (logged without the frame advancing, input field unreliable): %ld\n", trailingSkipped);
     if (g_cameraFramesChecked)

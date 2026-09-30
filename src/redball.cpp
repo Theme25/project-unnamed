@@ -15,6 +15,7 @@ static double SpriteCoord(double v) { return (double)as3_toInt32(v * 20) / 20.0;
 // DisplayObject.rotation: the getter returns the written value normalised to
 // (-180, 180] via fmod (VERIFIED, 720 samples). Level.Update writes
 // angle * (180 / Math.PI) % 360.
+static double SpriteRotationWritten(double angle) { return std::fmod(angle * (180 / AS3_PI), 360.0); }
 static double SpriteRotation(double angle) {
     double v = std::fmod(angle * (180 / AS3_PI), 360.0);
     v = std::fmod(v, 360.0);
@@ -71,9 +72,14 @@ static int32_t FlashSinFx(int64_t x) {  // x >= 0, x <= 90 * 65536
     return (int32_t)((v + (1 << 13)) >> 14);
 }
 
+// The written value is converted to 16.16 fixed-point degrees by truncation and reduced into
+// [-180, 180] in integers (so a written 307.77 behaves like floor, not trunc, of -52.23): exact on
+// 12,216 in-game matrices and all 14,500 calibration matrices.
 FlashMatrix FlashRotationMatrix(double rotDeg) {
     const int64_t D90 = 90LL * 65536, D180 = 180LL * 65536;
-    const int64_t xf = (int64_t)std::trunc(rotDeg * 65536);
+    int64_t xf = (int64_t)std::trunc(rotDeg * 65536);
+    while (xf > D180) xf -= 2 * D180;
+    while (xf < -D180) xf += 2 * D180;
     const int64_t x = xf < 0 ? -xf : xf;
     const int32_t sn = FlashSinFx(x > D90 ? D180 - x : x);
     const int32_t cs = x <= D90 ? FlashSinFx(D90 - x) : -FlashSinFx(x - D90);
@@ -257,7 +263,7 @@ int32_t Sim::BeginBody(const char* name) {
     hasSprite[b] = true;
     spriteX[b] = x;
     spriteY[b] = y;
-    spriteRot[b] = PlacementRotation(tpl->id, p);
+    spriteRot[b] = spriteRotW[b] = PlacementRotation(tpl->id, p);
     return b;
 }
 
@@ -531,7 +537,7 @@ void Sim::Restart() {
     if (!script.implemented) fatal("level script not implemented yet");
     for (int32_t i = 0; i < CAP_BODIES; ++i) {
         hasSprite[i] = false;
-        spriteX[i] = spriteY[i] = spriteRot[i] = 0;
+        spriteX[i] = spriteY[i] = spriteRot[i] = spriteRotW[i] = 0;
     }
     for (int32_t i = 0; i < LV_VARS; ++i) lvBody[i] = lvInt[i] = 0;
 
@@ -569,7 +575,7 @@ void Sim::Restart() {
     hasSprite[playerBody] = true;
     spriteX[playerBody] = SpriteCoord(px);
     spriteY[playerBody] = SpriteCoord(py);
-    spriteRot[playerBody] = 0;
+    spriteRot[playerBody] = spriteRotW[playerBody] = 0;
     // PlayerBox(): m_spriteIn.x = -this.x + Game.stageWidth / 2 (camera centred on the ball)
     camX = SpriteCoord(-spriteX[playerBody] + 550.0 / 2);
     camY = SpriteCoord(-spriteY[playerBody] + 400.0 / 2);
@@ -632,6 +638,7 @@ void Sim::LevelUpdate(bool left, bool up, bool right) {
             spriteX[b] = SpriteCoord(bb.xf.position.x * PHYS_SCALE);
             spriteY[b] = SpriteCoord(bb.xf.position.y * PHYS_SCALE);
             spriteRot[b] = SpriteRotation(bb.sweep.a);
+            spriteRotW[b] = SpriteRotationWritten(bb.sweep.a);
         }
     }
 
@@ -695,9 +702,9 @@ void Sim::DisplayUpdate() {
     // A destroyed PlayerBox is off the display list, so hitTestObject is false.
     Rect ball{0, 0, 0, 0}, ballLo = ball, ballHi = ball;
     if (playerAlive) {
-        ball = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRot[playerBody], 0);
-        ballLo = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRot[playerBody], -1);
-        ballHi = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRot[playerBody], +1);
+        ball = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], 0);
+        ballLo = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], -1);
+        ballHi = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], +1);
     }
     auto test = [&](const DisplayObj& o) {
         const Rect r{o.x0, o.y0, o.x1, o.y1};
@@ -711,7 +718,7 @@ void Sim::DisplayUpdate() {
     // Spikes: Level.Update walks its children; any Shipik/Ships10 hit by a control point kills the ball.
     if (playerAlive) {
         for (int32_t i = 0; i < tpl->spikeCount; ++i) {
-            const SpikeResult r = BallHitsSpike(spriteX[playerBody], spriteY[playerBody], spriteRot[playerBody], dpX, dpY, tpl->spikes[i]);
+            const SpikeResult r = BallHitsSpike(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], dpX, dpY, tpl->spikes[i]);
             if (r.uncertain) ++displayUncertain;
             if (r.hit) {
                 PlayerDie();

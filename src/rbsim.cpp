@@ -376,6 +376,14 @@ static int CmdTest() {
             if (f.a != e.a || f.b != e.b) ok = false;
         }
         check(ok, "Flash rotation -> 16.16 matrix reproduces logged matrices");
+        // rb1_stats_8_2.tsv tick 92: the game WROTE 307.76972460547630 (getter: -52.23027539452369);
+        // Flash builds the matrix from the written value: (40127, -51684), not (40127, -51683)
+        uint64_t wb = 0x40733c50cabf7728ULL;
+        double w;
+        std::memcpy(&w, &wb, 8);
+        const FlashMatrix fw = FlashRotationMatrix(w);
+        const FlashMatrix fn = FlashRotationMatrix(w - 360);
+        check(fw.a == 40127 && fw.b == -51684 && fn.b == -51683, "display matrix is built from the written rotation, not the normalised one");
         const Rect r = BallBounds(500, 300, -179.2683);
         check(r.x0 == 10000 - 212 && r.x1 == 10000 + 212, "rotated ball getBounds half-extent (Flash matrix, round-to-nearest)");
     }
