@@ -38,6 +38,8 @@ struct Rect { double x0, y0, x1, y1; };
 struct FlashMatrix { int32_t a, b; };  // c = -b, d = a (16.16)
 // rotationDeg = the value WRITTEN to DisplayObject.rotation (may lie outside (-180, 180]).
 FlashMatrix FlashRotationMatrix(double rotationDeg);
+// Math.pow(2, -10/31) as Flash computes it (camera tween step; E8pow calibration)
+double FlashTweenConstant();
 // Flash-reported DisplayObject.rotation of rotated timeline clips (docs/STATS_LOGGING.md 3.9).
 bool LookupTimelineRotation(int32_t level, const char* name, double& out, bool* measured = nullptr);
 extern int32_t g_provisionalRotations;  // uses of provisional (unmeasured) timeline rotations

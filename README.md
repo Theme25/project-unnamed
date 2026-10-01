@@ -16,6 +16,8 @@ Player 11.4.402.287** with the Practice Hack, `MATHSPIKES = 1`, spike glitch on 
 
 ## Build & run
 
+**Linux / WSL / Codespaces:** `make`. **Windows:** see "Windows" below.
+
 ```
 make                 # see "Build flags" below; do not change them
 ./rbsim test         # 55 self-tests (physics, display layer, spikes, death warps, snapshots, ...)
@@ -31,6 +33,32 @@ make                 # see "Build flags" below; do not change them
 alive and sleep flags per frame (`--hex`: raw IEEE-754 bits). Inputs use the game's RLE format
 (`n d w e a S q W`, `R` = checkpoint restart); the legacy digit format is also accepted.
 
+### Windows
+
+Two ways, both giving a static `rbsim.exe` (no DLLs needed) with the same results as Linux:
+
+1. **Native, with MSYS2:** install [MSYS2](https://www.msys2.org/), open the **MSYS2 UCRT64**
+   shell, then
+   ```
+   pacman -S --needed mingw-w64-ucrt-x86_64-gcc make git
+   git clone <repo> && cd project-unnamed
+   make            # produces rbsim.exe
+   ./rbsim.exe test
+   ```
+   Run it from that shell or from `cmd`/PowerShell (`rbsim.exe optimize ...`).
+2. **Cross-compiled on Linux:** `apt install mingw-w64`, then `make windows`.
+
+MSVC is not supported: Flash's `sin`/`cos` (`src/libm_intel.S`) is GNU assembly. On Windows the
+same routine bodies are used, wrapped so they preserve the registers the Windows x64 calling
+convention requires (`rsi`, `rdi`, `xmm6`, `xmm7`). The simulator does not depend on the host's
+math library: the only libm functions it uses are exact ones (`sqrt`, `fmod`, `floor`, `trunc`);
+the camera's `pow` result is a stored constant.
+
+Checked (cross-compiled build under Wine 9): all 55 self-tests, all 10 calibration files, all
+48 stats logs (59,741 frames, 0 divergences), and `rbsim optimize --threads 1 --seed S --evals N`
+gives byte-identical output to the Linux build. Running `rbsim.exe test` once on a real Windows
+PC is still a good idea.
+
 **Build flags:** use the Makefile's (`-O2 -ffp-contract=off -fno-fast-math
 -fexcess-precision=standard`, `-pthread`). `-O3 -march=native` was tried: it breaks
 bit-exactness on Levels 3, 8 and 12 and is not faster. Never add fast-math, FMA contraction or
@@ -40,7 +68,7 @@ bit-exactness on Levels 3, 8 and 12 and is not faster. Never add fast-math, FMA 
 
 ```
 rbsim optimize --level N --inputs RLE [--checkpoint C] [--time SEC] [--threads N]
-               [--seed S] [--sideways P] [--gless] [--quiet]
+               [--seed S] [--sideways P] [--evals N] [--gless] [--quiet]
 ```
 
 Starts from an existing route (one attempt, no `R`) and searches for edits that collect the flag
@@ -57,8 +85,9 @@ stops as soon as it can no longer match the best.
 - **Output:** each improvement as it is found, then the best route as an RLE string. If any hit
   test on the route was within one matrix unit of flipping, it says so: check that route in Flash.
 - Defaults: mathspikes 1, spike glitch on (`--gless` for glitchless), all hardware threads,
-  30 s. Results with several threads are not reproducible run to run (threads race); a single
-  thread with a fixed `--seed` is.
+  30 s. Results with several threads are not reproducible run to run (threads race). With
+  `--threads 1 --seed S --evals N` (stop after N candidates instead of a time limit) the result
+  is identical on any machine and OS.
 - It is a local search: it improves a known route but proves nothing. Exhaustive methods
   (beam search, window proofs, endgame proofs) are the next step (see Roadmap).
 
@@ -193,9 +222,9 @@ Calibration results:
 which is GPL-2.0-only (Intel copyright). Binaries that include it fall under
 GPLv2.
 
-**Platform note:** `libm_intel.S` is x86-64 System V (Linux, including
-Codespaces). Windows or macOS builds need a small calling-convention
-adaptation.
+**Platform note:** x86-64 only. Linux and Windows (MinGW-w64) are supported and checked;
+macOS (x86-64) would need the assembly's section/symbol directives adapted; ARM machines
+(including Apple Silicon) cannot run the Intel `sin`/`cos` routine.
 
 ## Level status
 

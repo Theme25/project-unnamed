@@ -99,7 +99,7 @@ int CmdCalib(int argc, char** argv) {
             if ((ox == 0 && oy >= 0) || (oy == 0 && ox >= 0)) ++e2touch;
         } else if (f[0] == "E8pow" && f.size() >= 2) {
             ++powN;
-            if (H(f[1]) == std::pow(2.0, -10 * 1.0 / 31)) ++powOk;
+            if (H(f[1]) == FlashTweenConstant()) ++powOk;
         } else if (f[0] == "E8c" && f.size() >= 5) {
             // pb.HitTestObjectControlPoints(L.ship1) with the covers at (0,0): ship1 = first 11 Level 3 spikes
             const double rot = H(f[1]), x = SpriteCoordC(H(f[2])), y = SpriteCoordC(H(f[3]));

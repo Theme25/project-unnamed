@@ -13,7 +13,11 @@
 # FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
 # version 2 for more details.
 .intel_syntax noprefix
+#if defined(_WIN32)
+.section .rdata,"dr"
+#else
 .section .rodata
+#endif
 .balign 16
 libm_ONE:
     .long 0x00000000, 0x3ff00000
@@ -212,10 +216,15 @@ libm_Ctable:
 sin_ALL_ONES:
     .long 0xffffffff, 0x3fefffff
 .text
+#if defined(_WIN32)
+#define RB_SIN rb_libm_sin_body
+#else
+#define RB_SIN rb_libm_sin
 .globl rb_libm_sin
 .type rb_libm_sin, @function
+#endif
 .balign 16
-rb_libm_sin:
+RB_SIN:
     push rbp
     mov rbp, rsp
     push rbx
@@ -634,11 +643,18 @@ rb_libm_sin:
     pop rbx
     leave
     ret
+#if !defined(_WIN32)
 .size rb_libm_sin, .-rb_libm_sin
+#endif
+#if defined(_WIN32)
+#define RB_COS rb_libm_cos_body
+#else
+#define RB_COS rb_libm_cos
 .globl rb_libm_cos
 .type rb_libm_cos, @function
+#endif
 .balign 16
-rb_libm_cos:
+RB_COS:
     push rbp
     mov rbp, rsp
     push rbx
@@ -1049,5 +1065,46 @@ rb_libm_cos:
     pop rbx
     leave
     ret
+#if !defined(_WIN32)
 .size rb_libm_cos, .-rb_libm_cos
+#endif
+#if defined(_WIN32)
+# Windows x64: the bodies above follow the System V convention, which lets a function overwrite
+# rsi, rdi, xmm6 and xmm7. Windows requires them to be preserved, so the exported entry points
+# save and restore them around the bodies (argument and result stay in xmm0 on both ABIs).
+# Stack: entry rsp = 16k + 8; two pushes and sub 40 give a 16-byte aligned rsp at the call.
+.globl rb_libm_sin
+.def rb_libm_sin; .scl 2; .type 32; .endef
+.balign 16
+rb_libm_sin:
+    push rsi
+    push rdi
+    sub rsp, 40
+    movdqu xmmword ptr [rsp], xmm6
+    movdqu xmmword ptr [rsp + 16], xmm7
+    call rb_libm_sin_body
+    movdqu xmm6, xmmword ptr [rsp]
+    movdqu xmm7, xmmword ptr [rsp + 16]
+    add rsp, 40
+    pop rdi
+    pop rsi
+    ret
+.globl rb_libm_cos
+.def rb_libm_cos; .scl 2; .type 32; .endef
+.balign 16
+rb_libm_cos:
+    push rsi
+    push rdi
+    sub rsp, 40
+    movdqu xmmword ptr [rsp], xmm6
+    movdqu xmmword ptr [rsp + 16], xmm7
+    call rb_libm_cos_body
+    movdqu xmm6, xmmword ptr [rsp]
+    movdqu xmm7, xmmword ptr [rsp + 16]
+    add rsp, 40
+    pop rdi
+    pop rsi
+    ret
+#else
 .section .note.GNU-stack,"",@progbits
+#endif

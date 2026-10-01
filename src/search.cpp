@@ -152,13 +152,13 @@ static int Mutate(std::vector<uint8_t>& r, std::mt19937_64& rng, std::vector<int
 }
 
 void WorkerLoop(Shared& sh, Worker w, uint64_t seed, double sidewaysP, std::chrono::steady_clock::time_point deadline,
-                bool verbose) {
+                bool verbose, uint64_t maxEvals) {
     std::mt19937_64 rng(seed);
     std::uniform_real_distribution<double> uni(0, 1);
     std::vector<int> bounds;
     std::vector<uint8_t> cand;
     Sim sim;
-    while (std::chrono::steady_clock::now() < deadline) {
+    while (std::chrono::steady_clock::now() < deadline && (!maxEvals || sh.evals.load() < maxEvals)) {
         {
             std::lock_guard<std::mutex> lk(sh.m);
             if (w.version != sh.version) {
@@ -176,6 +176,7 @@ void WorkerLoop(Shared& sh, Worker w, uint64_t seed, double sidewaysP, std::chro
                 if (f2 >= 0) first = first < 0 ? f2 : std::min(first, f2);
             }
             if (first < 0 || cand == w.route) continue;
+            if (maxEvals && sh.evals.load() >= maxEvals) break;
             const int j = std::min(first / SNAP_EVERY, (int)w.snaps.size() - 1);
             sim = *w.snaps[(size_t)j];
             const Result r = Finish(sim, cand, j * SNAP_EVERY, w.res.win + 1);
@@ -209,7 +210,7 @@ void WorkerLoop(Shared& sh, Worker w, uint64_t seed, double sidewaysP, std::chro
 int CmdOptimize(int argc, char** argv) {
     int level = 0, checkpoint = 0, threads = (int)std::max(1u, std::thread::hardware_concurrency());
     double seconds = 30, sidewaysP = 0.05;
-    uint64_t seed = 1;
+    uint64_t seed = 1, maxEvals = 0;
     bool gless = false, quiet = false;
     std::string inputs;
     for (int i = 2; i < argc; ++i) {
@@ -221,6 +222,10 @@ int CmdOptimize(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--threads")) threads = std::max(1, std::atoi(next()));
         else if (!std::strcmp(argv[i], "--seed")) seed = std::strtoull(next(), nullptr, 10);
         else if (!std::strcmp(argv[i], "--sideways")) sidewaysP = std::atof(next());
+        else if (!std::strcmp(argv[i], "--evals")) {
+            maxEvals = std::strtoull(next(), nullptr, 10);
+            seconds = 1e9;  // stop on the count only
+        }
         else if (!std::strcmp(argv[i], "--gless")) gless = true;
         else if (!std::strcmp(argv[i], "--quiet")) quiet = true;
         else {
@@ -231,7 +236,8 @@ int CmdOptimize(int argc, char** argv) {
     if (!level || inputs.empty()) {
         std::fprintf(stderr,
                      "usage: rbsim optimize --level N --inputs RLE [--checkpoint C] [--time SEC] [--threads N]\n"
-                     "                      [--seed S] [--sideways P] [--gless] [--quiet]\n");
+                     "                      [--seed S] [--sideways P] [--evals N] [--gless] [--quiet]\n"
+                     "  --evals N stops after N candidates (with --threads 1: identical results on any machine)\n");
         return 2;
     }
     std::vector<uint8_t> route = DecodeInputs(inputs);
@@ -255,19 +261,24 @@ int CmdOptimize(int argc, char** argv) {
     route.resize((size_t)std::min((int)route.size(), sh.bestRes.win));
     sh.best = route;
     const int startWin = sh.bestRes.win;
-    std::printf("level %d, start: frame %d%s (%.3f s), flag overlap %.0f twips, %d threads, %.0f s\n", level, startWin,
-                sh.bestRes.death >= 0 ? " (death warp)" : "", startWin / 31.0, sh.bestRes.margin, threads, seconds);
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds((long long)(seconds * 1000));
+    if (maxEvals)
+        std::printf("level %d, start: frame %d%s (%.3f s), flag overlap %.0f twips, %d threads, %llu candidates\n", level, startWin,
+                    sh.bestRes.death >= 0 ? " (death warp)" : "", startWin / 31.0, sh.bestRes.margin, threads, (unsigned long long)maxEvals);
+    else
+        std::printf("level %d, start: frame %d%s (%.3f s), flag overlap %.0f twips, %d threads, %.0f s\n", level, startWin,
+                    sh.bestRes.death >= 0 ? " (death warp)" : "", startWin / 31.0, sh.bestRes.margin, threads, seconds);
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto deadline = t0 + std::chrono::milliseconds((long long)std::min(seconds * 1000, 1e15));
     std::vector<std::thread> pool;
     for (int k = 0; k < threads; ++k) {
         Worker w{&tpl, checkpoint, gless, {}, {}, {}, ~0ULL};
-        pool.emplace_back(WorkerLoop, std::ref(sh), std::move(w), seed * 1000003ULL + (uint64_t)k, sidewaysP, deadline, !quiet);
+        pool.emplace_back(WorkerLoop, std::ref(sh), std::move(w), seed * 1000003ULL + (uint64_t)k, sidewaysP, deadline, !quiet, maxEvals);
     }
     for (auto& t : pool) t.join();
     const Result& b = sh.bestRes;
     std::printf("evaluated %llu candidates (%llu improvements, %llu sideways moves), %.0f frames simulated per second, %.0f per candidate\n",
                 (unsigned long long)sh.evals.load(), (unsigned long long)sh.improvements.load(), (unsigned long long)sh.sideways.load(),
-                g_ticks.load() / seconds, sh.evals.load() ? (double)g_ticks.load() / (double)sh.evals.load() : 0.0);
+                g_ticks.load() / std::max(1e-9, std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count()), sh.evals.load() ? (double)g_ticks.load() / (double)sh.evals.load() : 0.0);
     std::printf("best: frame %d%s (%.3f s), %d frame%s saved, flag overlap %.0f twips\n", b.win, b.death >= 0 ? " (death warp)" : "",
                 b.win / 31.0, startWin - b.win, startWin - b.win == 1 ? "" : "s", b.margin);
     if (b.death >= 0)

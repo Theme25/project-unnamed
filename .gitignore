@@ -3,3 +3,4 @@ rbsim
 tools/trig_flip_search
 *.tsv
 __pycache__/
+rbsim.exe

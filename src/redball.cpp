@@ -118,7 +118,8 @@ static double ShipikEdgeDistance(double x, double y) {
         const double dx = x1 - x0, dy = y1 - y0, L2 = dx * dx + dy * dy;
         double t = ((x - x0) * dx + (y - y0) * dy) / L2;
         t = t < 0 ? 0 : (t > 1 ? 1 : t);
-        best = std::fmin(best, std::hypot(x - (x0 + t * dx), y - (y0 + t * dy)));
+        const double ex = x - (x0 + t * dx), ey = y - (y0 + t * dy);
+        best = std::fmin(best, std::sqrt(ex * ex + ey * ey));  // sqrt is exact everywhere; hypot is not
     }
     return best;
 }
@@ -1124,9 +1125,23 @@ int32_t Sim::GetBodyAtPoint(double x, double y, bool includeStatic) {
 // Tweener.onEnterFrame (driven by COMM "TweenEvent"): the camera tween added by the previous Update is
 // evaluated at t = 1 of d = 31 frames: easeOutExpo = c * 1.001 * (-2^(-10 t / d) + 1) + b, then the
 // DisplayObject setter truncates to twips.
+double FlashTweenConstant() {
+    const uint64_t bits = 0x3fe996a2ea68dd55ULL;
+    double v;
+    std::memcpy(&v, &bits, 8);
+    return v;
+}
+
 void Sim::CameraStep() {
     if (!camTween) return;
-    static const double p = std::pow(2.0, -10 * 1.0 / 31);  // Math.pow(2, -10 * t / d), t = 1
+    // Math.pow(2, -10 * t / d) at t = 1, d = 31, as Flash computes it (E8pow calibration). A constant, so the
+    // result never depends on the host's pow() (Windows and Linux libms may differ in the last bit).
+    static const double p = [] {
+        const uint64_t bits = 0x3fe996a2ea68dd55ULL;
+        double v;
+        std::memcpy(&v, &bits, 8);
+        return v;
+    }();
     const double bx = camX, cx = camTargetX - bx;
     const double by = camY, cy = camTargetY - by;
     camX = SpriteCoord(cx * 1.001 * (-p + 1) + bx);

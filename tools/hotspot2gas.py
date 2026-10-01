@@ -159,7 +159,7 @@ def main():
            "# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or",
            "# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License",
            "# version 2 for more details.",
-           ".intel_syntax noprefix", ".section .rodata"]
+           ".intel_syntax noprefix", "#if defined(_WIN32)", '.section .rdata,"dr"', "#else", ".section .rodata", "#endif"]
     for align, name, nums in tables(f"{d}/stubGenerator_x86_64_constants.cpp"):
         out.append(f".balign {max(align, 16)}")
         out.append(f"libm_{name}:")
@@ -173,11 +173,16 @@ def main():
                 out.append("    .long " + ", ".join(nums[i:i + 4]))
     out.append(".text")
     for fn in ("sin", "cos"):
-        out += [f".globl rb_libm_{fn}", f".type rb_libm_{fn}, @function", ".balign 16", f"rb_libm_{fn}:"]
+        U = fn.upper()
+        out += ["#if defined(_WIN32)", f"#define RB_{U} rb_libm_{fn}_body", "#else", f"#define RB_{U} rb_libm_{fn}",
+                f".globl rb_libm_{fn}", f".type rb_libm_{fn}, @function", "#endif", ".balign 16", f"RB_{U}:"]
         out += translate(f"{d}/stubGenerator_x86_64_{fn}.cpp", fn)
-        out.append(f".size rb_libm_{fn}, .-rb_libm_{fn}")
-    out.append('.section .note.GNU-stack,"",@progbits')
+        out += ["#if !defined(_WIN32)", f".size rb_libm_{fn}, .-rb_libm_{fn}", "#endif"]
+    out.append(WIN64_TAIL)
     print("\n".join(out))
+
+
+WIN64_TAIL = '#if defined(_WIN32)\n# Windows x64: the bodies above follow the System V convention, which lets a function overwrite\n# rsi, rdi, xmm6 and xmm7. Windows requires them to be preserved, so the exported entry points\n# save and restore them around the bodies (argument and result stay in xmm0 on both ABIs).\n# Stack: entry rsp = 16k + 8; two pushes and sub 40 give a 16-byte aligned rsp at the call.\n.globl rb_libm_sin\n.def rb_libm_sin; .scl 2; .type 32; .endef\n.balign 16\nrb_libm_sin:\n    push rsi\n    push rdi\n    sub rsp, 40\n    movdqu xmmword ptr [rsp], xmm6\n    movdqu xmmword ptr [rsp + 16], xmm7\n    call rb_libm_sin_body\n    movdqu xmm6, xmmword ptr [rsp]\n    movdqu xmm7, xmmword ptr [rsp + 16]\n    add rsp, 40\n    pop rdi\n    pop rsi\n    ret\n.globl rb_libm_cos\n.def rb_libm_cos; .scl 2; .type 32; .endef\n.balign 16\nrb_libm_cos:\n    push rsi\n    push rdi\n    sub rsp, 40\n    movdqu xmmword ptr [rsp], xmm6\n    movdqu xmmword ptr [rsp + 16], xmm7\n    call rb_libm_cos_body\n    movdqu xmm6, xmmword ptr [rsp]\n    movdqu xmm7, xmmword ptr [rsp + 16]\n    add rsp, 40\n    pop rdi\n    pop rsi\n    ret\n#else\n.section .note.GNU-stack,"",@progbits\n#endif'
 
 
 if __name__ == "__main__":
