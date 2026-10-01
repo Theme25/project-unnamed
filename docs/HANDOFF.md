@@ -1,413 +1,282 @@
 # rbsim — project handoff (continue here in a new chat)
 
-This document is self-contained. It records everything established so far
-while building a bit-exact simulator of *Red Ball 1* (Flash), so work can
-continue on the remaining levels in a fresh conversation.
-
----
+rbsim is a bit-exact C++ re-implementation of the Flash game *Red Ball 1* (Box2DFlash 2.0.x
+physics + the game's own logic), built so a speedrunning team can brute-force faster routes.
+"Bit-exact" means every logged value of every frame matches Flash Player 11.4 to the last bit.
 
 ## 0. How to start the next chat
 
-Upload these files:
+Upload to the new chat:
 
 | file | why |
 |---|---|
-| this `HANDOFF.md` | context |
-| `Red_Ball_-_Practice_Hack.swf` | the game (the source of truth) |
-| `Red_Ball_-_Tournament_Edition.swf` | optional; physics-identical to the practice build |
-| any new `rb1_stats*.tsv` / `rb1_calib*.tsv` logs | verification data |
+| this file (`docs/HANDOFF.md`) | context |
+| `Red_Ball_-_Practice_Hack.swf` | the game: the source of truth for every level script and placement |
+| any new `rb1_stats_*.tsv` / `rb1_calib_*.tsv` logs | verification data for the work at hand |
 
-Then say something like:
+Then say, for example:
 
-> Read HANDOFF.md. Clone https://github.com/Theme25/project-unnamed, set up the
-> environment (section 9), run `make && ./rbsim test`, then continue with level N.
+> Read HANDOFF.md. Clone https://github.com/Theme25/project-unnamed, set up the environment
+> (section 9), run `make && ./rbsim test`, then continue with <task>.
 
-The repo is **public**. The assistant can clone it but cannot push, so the user
-pushes by pulling a git bundle into an up-to-date clone (section 10).
+The repo is **public**. The assistant can clone it but cannot push; the user pushes by pulling a
+git bundle (section 10). Logs from earlier chats are **not** in the repo; earlier results are
+recorded in README.md ("Verification status") and below.
 
----
+## 1. Who and what
 
-## 1. Goal
+- The user (Mohamad) coordinates a Red Ball 1 speedrunning community; he records Flash logs with
+  a modded SWF and manages the team's machines himself (most have 32 GB RAM, some 16 GB).
+- **Reference setup:** Flash Player **11.4.402.287** (Windows XP), Practice Hack SWF,
+  **`MATHSPIKES = 1`** (standardized spikes, the speedrun rule; now the mod's default) and
+  **`isGless` off** (spike glitch on). A custom ActiveX host (Flash 11.5) has different `sin`/`cos`:
+  never use its logs.
+- The user writes short messages and works level by level. He wants accuracy first, honest
+  statements of what is and is not verified, and asks for README/handoff accuracy checks.
+- Teammate notes (from the user): see section 5 (death warp, timers, spike glitch).
 
-Brute-force the fastest *Red Ball 1* speedrun routes. That requires a
-simulator that reproduces the Flash game **bit-for-bit**: same IEEE-754
-doubles, same contact order, same quirks. Routes found offline must replay
-identically in the real game.
+## 2. Current status (all verified against Flash unless stated)
 
-- Target player: **standard Flash Player 11** (tested 11.4.402.287, Windows
-  XP, x86). Its `Math.sin`/`cos` are reproduced exactly.
-- A custom ActiveX host (Flash 11.5.502.149) uses a *different*, still
-  unidentified `sin`/`cos` (1-ulp differences on ~3.5% of inputs). It is **not**
-  the target unless the user decides otherwise.
-- Language: **C++17** (user's choice). Search design: parallel, one sim per
-  thread, pointer-free memcpy-able snapshots with prefix sharing. GPU/SIMD
-  batching was rejected: control flow diverges and GPUs can't guarantee
-  determinism.
-
----
-
-## 2. Current status
-
-| level | status |
+| area | status |
 |---|---|
-| 1 | **bit-exact** against Flash logs (FP 11.4: 2/2 runs, 1,204/1,204 frames, incl. TAS win at tick 510) |
-| 2 | **bit-exact** against Flash logs (FP 11.4: 4 runs, 1,350 frames; pendulum, moving platform, goal and checkpoint timing) |
-| 3 | **bit-exact** against Flash logs (FP 11.4, MATHSPIKES = 1: 14 segments incl. 10 spike deaths on the Flash tick, a win, a checkpoint-1 restart; camera and ball matrix checked every frame); standardized spike check calibrated exactly (E8a/b/c) |
-| 4 | **bit-exact** against Flash logs (death-warp TASes: any% flag 274, delayed warp 309): crushers, swinging axes (timeline rotations recovered from tick-0 angles), drop platform re-creation, post-death camera and the warp win |
-| 5 | **bit-exact** against Flash logs (4 runs, 4,626 frames: idle, blue switch + win, a second win, fall death; checkpoint/flags column every frame); green switch not yet exercised |
-| 6 | **bit-exact** against Flash logs (idle 5 segments, win 231, drop platform re-created + checkpoint-1 restart + win; spike death (MATHSPIKES 1) on the Flash tick; 3,320 frames); motorised revolute joints verified |
-| 7 | **bit-exact** against Flash logs (5 runs, 4,426 frames: idle, 2 wins, red switch -> R -> `redCheckLevel` carried (wall removed at construction) -> blue switch -> checkpoint 2 -> win, 2 star deaths); jump platforms (prismatic limit + motor), distance joints, `SetAngularVelocity` verified |
-| 8 | **bit-exact** against Flash logs (FP 11.4, MATHSPIKES = 1: 10 runs, 8,114 frames: idle, crusher death and crusher contact without death, wall-spike and ramp deaths, car driving, killSpusk2 death, "flying car", "windshield clip", checkpoint-1 restart, 3 wins); revolute joints verified; `killSpusk2` angle = Flash-reported rotation (§3.9) |
-| 12 | **bit-exact** against Flash logs (5 runs, 5,006 frames: idle, 2 wins, checkpoint-2 restart -> checkpoint 3 -> win, 2 deaths); collision group filtering, kill-star patrol, roller cart verified |
-| 14 | **bit-exact** against Flash logs (3 runs, 2,931 frames: idle, drop platform + win, blue switch -> checkpoint 1 -> R -> drop platform -> death); calib 18/18 placements and bounds |
-| 3–17 | placements extracted (`src/levels_data.h`); scripts not written |
+| physics core | bit-exact (Box2DFlash quirks replicated; Intel LIBM `sin`/`cos`) |
+| levels **1-8, 12, 14** | **bit-exact** against Flash logs (48 logs, 59,741 frames; table in README) |
+| levels 9, 10, 11, 13, 15, 16, 17 | not scripted (section 8) |
+| display layer | exact: rotation matrix, hit tests, camera, standardized spikes (section 6) |
+| death / death warp | exact: post-death camera + unguarded goal/checkpoint/switch tests; 3 logged warps verified |
+| Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical |
+| `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
+| `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-What is done:
-- **Engine:** the full Box2DFlash 2.0.x engine: broadphase, pair manager,
-  contacts, contact solver, TOI, sleeping, distance/prismatic/revolute joints.
-- **Trig:** exact Flash Player 11 `sin`/`cos` (Intel LIBM, `src/libm_intel.S`).
-- **Tools:**
-  - `rbsim verify <log.tsv>` compares every field bit-for-bit
-  - `rbsim log` writes the simulator's log in the Flash mod's format
-  - `tools/trig_flip_search` diagnoses divergences caused by 1-ulp trig differences
-- **Test data:**
-  - ActiveX log: 388 Level 1 runs, 113,938 frames; 376 runs bit-exact with its
-    unknown trig, the rest differ only through trig.
-  - FP 11.4 log: 2 runs, 100% bit-exact.
-
-What is not done:
-1. **The display layer (partly done):** goal (`levelAim`) and checkpoint `hitTestObject` are implemented on a twip bounding-box model (`src/display_data.h`, generated by `tools/gen_display_data.py`) and reproduce every Level 2 win/checkpoint tick. Calibration dump (`rbsim calib rb1_calib_new.tsv`, FP 11.4) settled: **touching edges count as a hit** (5/5), static goal/checkpoint/platform bounds match the SWF (5/5), and a rotated ball's `getBounds` is symmetric with an integral half-extent n that equals `trunc(210(|cos|+|sin|))` in 87.4% of 3,200 rows, +1 twip in 12.5%, −1 in 0.2%. **Cause found (3.6 dumps):** the box is `round_nearest(210*(|a|+|c|))` of Flash's own 16.16 display matrix (exact on E1/E5/E6, nested levels rounded one at a time); the ±1 comes from Flash's rotation→matrix conversion, which is not exact trig (angle error up to 0.19° in a 10° sawtooth, length < 1, possibly history dependent). **Solved (3.7):** Flash's rotation→matrix is a 0.25° sine table (sin×2³⁰, truncated) indexed by the 16.16 fixed-point angle, with a lerp weight of low-14-bits/65536 (a quarter of the proper weight), cos(x)=sin(90−|x|), angles beyond 90° mirrored, rounded to 16.16 — exact on 14,496/14,500 logged matrices (the 4 misses are sub-0.0013 near-ties); with it the ball box is exact on all 3,200 E1 rows. The matrix is built from the value *written* to `rotation` (truncated to 16.16, reduced in integers), not the normalised getter value — `Sim::spriteRotW`; this makes it exact on all 26,716 logged matrices. Implemented as `FlashRotationMatrix` + `BallBounds`; `Sim::displayUncertain` counts goal/checkpoint tests whose outcome flips within ±1 twip so the search can re-check those routes in Flash. Spikes: **standardized check (Practice Hack `MATHSPIKES = 1`, the speedrun rule)** in `BallHitsSpike`: 16 control points through `FlashRotationMatrix`, `getBounds` rectangle test, shift by `-dp` (camera step), strict `Shipik.PointInTriangle`. The camera (`Sim::CameraStep`) is Tweener's easeOutExpo at t = 1 of 31 frames per Update, truncated to twips; `dp` reaches ~5.5 px. Spike data per Shipik (transform + bounds) for all 908 spikes (levels 3, 6–17) in `src/display_data.h`. Calibrated exactly (§3.8: native conversions truncate/round to twips as in Flash; E8c 30,000/30,000) for translated spikes; rotated/scaled Shipiks (later levels) still use exact doubles with `displayUncertain`. `Sim::gless` models `isGless` (off by default, as in the speedrun setup). Death / death warp (§3.10): after `PlayerDie` the level keeps updating; `Sim::DeadUpdate` models the camera and the unguarded goal/checkpoint `hitTestObject` with the dead-ball rule (ball box frozen in Level space vs targets shifted by the camera); verified on 19,335+ post-death frames and on three logged death warps (Level 4 x2, Level 8 checkpoint + flag). Matrix-to-`rotation` for rotated timeline placements: Flash's getter for timeline clips is an unknown approximation (not atan2 of the stored matrix), so `PlacementRotation` uses Flash-reported values from `kTimelineRotations` (filled per level by an E9a dump, §3.9) and fails loudly for rotated body clips not in the table.
-   Original list:
-   - the goal/checkpoint `hitTestObject` tests (rotated ball bounding box)
-   - spikes (`Shipik` hit points)
-   - `DisplayObject.rotation` derived from timeline matrices (needed by
-     levels 3, 4, 8–13, 15, 16)
-3. Level scripts 3–17.
-4. The search itself: snapshot shrinking, thread pool, prefix-shared
-   branching, pruning heuristics.
-
----
+Self-tests: `./rbsim test` → 55 tests, `ALL PASSED`.
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
 | path | contents |
 |---|---|
-| `src/b2math.h` | AS3-exact math: `Vec2`/`Mat22`/`XForm`/`Sweep`; `Number.MIN_VALUE` epsilons; `as3_sin/cos` choke point (`TrigImpl::IntelLibm` default, `Glibc` optional, diagnostic hooks) |
-| `src/b2world.h` | pointer-free state: fixed arrays linked by `int` indices; `World`, `Body`, `Shape`, `Contact`, `Joint`, broadphase, pair manager, listener emulation |
-| `src/b2collision.cpp` | geometry (`GeomTable`), narrow phase, GJK, TOI |
-| `src/b2world.cpp` | broadphase / pair manager / contacts / island / contact solver / `World::Step` |
-| `src/b2joints.cpp` | distance, prismatic, revolute joints; `CreateJoint`/`DestroyJoint` |
-| `src/libm_intel.S` | Flash Player 11 `sin`/`cos` (**GPL-2.0-only**, derived from OpenJDK/Intel) |
+| `src/b2math.h`, `b2collision.cpp`, `b2world.cpp/.h`, `b2joints.cpp` | Box2DFlash 2.0.x port (fixed arrays, `int` links, so `Sim` is trivially copyable) |
+| `src/libm_intel.S` | Flash 11.4's `sin`/`cos` (Intel LIBM via OpenJDK, `tools/hotspot2gas.py`); Win64 wrappers under `_WIN32` |
+| `src/redball.cpp/.h` | `Sim`: level logic, sprite sync, inputs, camera, display layer, spikes, death, level scripts, RLE codec |
 | `src/levels_data.h` | named placements of all 17 levels (generated) |
-| `src/redball.h/.cpp` | game layer: base `Level` logic, level scripts, sprite state, RLE codec |
-| `src/rbsim.cpp` | CLI: `run`, `log`, `test`, `bench`, `verify` |
-| `src/verify.cpp` | log replay and comparison |
-| `tools/hotspot2gas.py` | OpenJDK `MacroAssembler` stub → GAS translator (regenerates `libm_intel.S`) |
-| `tools/extract_levels.py`, `tools/gen_levels_data.py` | SWF XML → `levels.json` → `levels_data.h` |
-| `tools/trig_flip_search.cpp` | greedy ±1-ulp `sin`/`cos` override search |
-| `docs/STATS_LOGGING.md` | how to mod the SWF to produce verification logs |
-
-Build: `make` (Linux x86-64: g++ with `-ffp-contract=off`, SSE2 doubles, no
-fast-math). `libm_intel.S` is System V x86-64 only; a Windows build needs a
-calling-convention adaptation. The user is on Windows and uses Codespaces or WSL.
-
----
+| `src/display_data.h` | bounds of named objects + every spike, per level (`tools/gen_display_data.py`, `tools/swf_geom.py`) |
+| `src/flash_sintab.h` | Flash's display-matrix sine table (`tools/gen_flash_sintab.py`) |
+| `src/snapshot.cpp/.h` | compact snapshots (diff vs level start, ~6 KB, byte-exact, portable) |
+| `src/verify.cpp` | `rbsim verify`: replays stats logs, compares every field |
+| `src/calib.cpp` | `rbsim calib`: checks calibration dumps |
+| `src/search.cpp` | `rbsim optimize` |
+| `src/beam.cpp` | `rbsim beam` |
+| `src/rbsim.cpp` | CLI, self-tests, bench |
+| `docs/STATS_LOGGING.md` | the logging mod spec (§3.0 is the current per-level format) and every calibration result |
+| `docs/WINDOWS.md` | end-user guide for `rbsim.exe` |
+| `README.md` | overview, commands, verification tables (kept accurate; re-check after changes) |
 
 ## 4. Key facts about the game
 
 ### 4.1 Physics setup (`Levels/Level.as`)
 
-**World:**
-- AABB ±1000, gravity (0, 10), `allowSleep` true.
-- `positionCorrection`, `warmStarting` and `continuousPhysics` are all true.
-- Step: `m_world.Step(1/30, 10)` once per frame.
-- Scale: 30 px per metre.
+- World AABB ±1000, gravity (0, 10), `allowSleep`; position correction, warm starting and
+  continuous physics on. `m_world.Step(1/30, 10)` once per frame. 30 px per metre. 31 fps for
+  RTA timing (frames / 31 = seconds).
+- Construction: world, ground body, contact listener, `PlayerBox` at `checkPoints[lastCheckNum]`
+  (CreateBody, SetBullet, CreateShape, SetMassFromShapes), then the `Level_N` constructor's
+  bodies and joints **in AS3 order** (order drives contact/solver order).
+- Ball: radius `21/30/2`, density 1, friction 0.4, restitution 0.2; sprite box 420 twips.
+- `Level.CreateBody(name, kind, density, friction, restitution, data)`: position `sprite.x/30`,
+  angle `sprite.rotation * PI/180` (the **getter**; for timeline-rotated clips Flash's own value,
+  section 6). Polygons in px / 30; `"Circle"`: radius `size/30/2`, localPosition (r, r).
+  Defaults: density 1, friction 1, restitution 0.2. Vertex limit 20.
+- `lastCheckNum` and some level flags (`Level_7.redCheckLevel`, `Level_13.greenCheckLevel`,
+  `Level_16.isStrelka`) are **static**: kept by a checkpoint restart (`R`/F key,
+  `SetLevel(id, true)`), cleared by a fresh level load.
 
-**Construction order:**
-1. World.
-2. Ground body.
-3. Contact listener.
-4. `PlayerBox`, at `checkPoints[lastCheckNum]`: CreateBody → SetBullet(true)
-   → CreateShape → SetMassFromShapes.
-5. The `Level_N` constructor's `CreateBody` calls, in order.
-6. The `Level_N` constructor's joints.
+### 4.2 Per frame (`Game.UpdateHandler` -> `Level.Update` -> `Level_N.Update`)
 
-**Ball:**
-- Radius `21/30/2`; the sprite bounds are 420 twips.
-- Density 1, friction 0.4, restitution 0.2.
+1. Camera: `dp = Level.x`; broadcast "TweenEvent" (Tweener step, unless `isGless`); `dp -= Level.x`.
+2. `m_world.Step(1/30, 10)`.
+3. Sprite sync for non-static bodies with a sprite: x/y truncated to twips; `rotation` written as
+   `angle*180/PI % 360` (the getter normalises to (-180, 180]).
+4. Ground probes; input forces (L/R change vx by 0.5 grounded / 0.25 airborne while |vx| < 5 /
+   2.5; Up: ApplyForce (0,-65) when grounded with contacts, else (0,-1) while vy < 0).
+   The one-frame key-press flags (`aVariable`/`dVariable`/`wVariable`) are cleared after the
+   forces; the held-key flags (`Left`/`Right`/`Up`) are cleared only by `OutControl`.
+5. Camera tween target: `-ball.x + 275`, `-ball.y + 200` (31 frames, easeOutExpo, frame-based).
+6. Goal `hitTestObject` (no `IsLive` guard) -> `PlayerWin`; spikes (only if alive) -> `PlayerDie`;
+   checkpoint `hitTestObject` loop (no `IsLive` guard).
+7. If `isGless`: Tweener step here instead.
+8. `Level_N.Update`: kill lines, kill bodies, moving parts, switches.
 
-**`Level.CreateBody(name, kind, density, friction, restitution, data)`:**
-- Body position is `sprite.x/30, sprite.y/30`; angle is `sprite.rotation*(PI/180)`.
-- `"Polygon"`/`"BluePolygon"`: `data` is a list of polygons in px, and each
-  vertex is divided by 30.
-- `"Circle"`: `data = [size]`, giving radius `size/30/2` and **localPosition
-  (r, r)**.
-- Ends with `SetMassFromShapes`.
-- Defaults: density 1, friction 1, restitution 0.2.
+`PlayerWin` and `PlayerDie` both call `OutControl()` (clears key flags), which is why the logger
+records input 0 on win and death frames. `Game.frameCount` stops on the win and keeps counting
+across `R` restarts.
 
-**Checkpoints:** `checkPoint0..4` are collected until the first missing one.
-`lastCheckNum` is static, so it survives restarts (`R`).
-
-### 4.2 Per-frame logic (`Game.UpdateHandler` → `Level.Update`)
-
-1. `m_world.Step(1/30, 10)`.
-2. Sprite sync, for every non-static body whose `userData` is a Sprite:
-   - `x = pos.x*30`, `y = pos.y*30`, **truncated to twips** (toward zero).
-   - `rotation = angle*(180/PI) % 360`; the getter returns it
-     `fmod`-normalised to (−180, 180].
-3. Ground probes: `GetBodyAtPoint(x, y+0.4)`, `(x−0.2, y+0.38)`,
-   `(x+0.2, y+0.38)`, static bodies included.
-   - Each is a world query with an AABB of ±0.001 (max 10 results), followed
-     by `TestPoint`.
-   - The player counts as grounded if any probe hits.
-4. Left:
-   - grounded: if `vx > −5` then `vx −= 0.5`;
-   - airborne: if `vx > −2.5` then `vx −= 0.25`.
-
-   Right is symmetric. Velocity is read live, so pressing L and R on the same
-   frame compounds.
-5. Up:
-   - if `playerContactBodies.length > 0 && grounded`: `ApplyForce((0,−65), worldCenter)`;
-   - else if `vy < 0`: `ApplyForce((0,−1))`.
-6. The win check (`levelAim.hitTestObject`) and spikes. **Not implemented.**
-7. The level's own `Level_N.Update` runs after `super.Update`: death line
-   (`playerBox.y > 550 && IsLive()`), moving parts, and so on.
-
-**Input string (RLE) format:**
-- Letters map to input codes: `a=4 w=2 d=1 q=6 e=3 S=5 W=7 n=0 R=8`.
-- Each code is `4·L + 2·U + R`.
-- `R` restarts from the current checkpoint and does not consume a tick; its
-  count is ignored.
-- A string whose first char code is below 64 uses the legacy one-digit-per-frame
-  format.
-
-**Win:** `PlayerWin` sets `isTimeStop`, `tPause = 0` (the game stops ticking),
-and linear/angular damping 3.
-
-**Death:** `PlayerDie` spawns 8 debris bodies using `Math.random()`. The sim
-treats death as terminal. The practice hack has an invincibility toggle.
+**Input string (RLE):** `n=0 d=1 w=2 e=3 a=4 S=5 q=6 W=7` (code = 4·L + 2·U + R), each followed
+by a count; `R` = checkpoint restart (no tick). TAS strings end at the flag.
 
 ### 4.3 Engine quirks replicated (differ from stock Box2D 2.0 C++)
 
-1. The pair buffer is **not sorted** in `Commit`, so contacts are created in
-   insertion order.
-2. Contact velocity bias for separated points is a hard-coded `−60·separation`.
-3. The friction clamp uses the normal impulse from **before** the current
-   iteration's update.
-4. The restitution bias uses pre-warm-start velocities.
-5. `Number.MIN_VALUE` (a denormal) is used where C++ used `FLT_EPSILON`.
-6. Uninitialized `Number` fields are **NaN**; `int` fields are 0.
-7. Bodies are created static, so the type flip in `SetMassFromShapes` makes
-   `RefilterProxy` recreate proxies (new ids, new pair order).
-8. `MyContactListener.Remove`: `splice(body, 1)` always removes index 0.
-   Add/Remove fire per manifold point and on every feature-key change.
-9. Destroyed bodies stay readable; the game keeps probing a dead ball.
-10. Joints use the 2.0.x **force** formulation (`m_force`, `dt·force`). In the
-    island solver, contacts are solved before joints, and every joint's
-    position solve is always evaluated.
-11. `CreateJoint`/`DestroyJoint` refilter the shapes of the body with fewer
-    shapes (ties go to body2).
-12. The prismatic joint's position solver, in the equal-limits case, uses
-    `b2Max(linearError, |angularC|)`, as in the AS3.
-13. `SetLinearVelocity` does not wake the body.
+1. Pair buffer not sorted in `Commit` (contacts in insertion order). 2. Separated-point velocity
+bias `-60·separation`. 3. Friction clamp uses the pre-update normal impulse. 4. Restitution bias
+from pre-warm-start velocities. 5. `Number.MIN_VALUE` where C++ used `FLT_EPSILON`.
+6. Uninitialised `Number` fields are NaN. 7. Bodies created static; the type flip in
+`SetMassFromShapes` recreates proxies. 8. Listener `splice(body, 1)` always removes index 0; fires
+per manifold point and on feature-key changes. 9. Destroyed bodies stay readable. 10. Joints use
+the 2.0.x force formulation; contacts solved before joints. 11. `CreateJoint`/`DestroyJoint`
+refilter the body with fewer shapes. 12. Prismatic equal-limits position solve uses
+`max(linearError, |angularC|)`. 13. `SetLinearVelocity`/`SetAngularVelocity` do not wake bodies.
 
 ### 4.4 Decompiler warning
 
-JPEXS silently **dropped statements** in `b2Collision.FindMaxSeparation`
-(the bestEdge/bestSeparation update); the p-code confirmed they exist. So:
-- **the p-code is authoritative;**
-- for every newly ported class, cross-check field writes (`setproperty`
-  counts in the p-code vs assignments in the decompiled source). All 48 joint
-  methods passed this check.
-- never recompile `Box2D.*` classes when modding the SWF.
+JPEXS silently dropped statements in `b2Collision.FindMaxSeparation`; the AVM2 p-code is
+authoritative. Cross-check field writes for any newly ported engine code. Never recompile
+`Box2D.*` classes when modding the SWF.
 
----
+## 5. Speedrun mechanics (from the user's teammate; encoded in the sim)
 
-## 5. Flash environment facts (from calibration dumps)
+- **Death warp:** from the frame after a death the ball is off the display list, so its
+  flag/checkpoint hit box is compared in its own frozen coordinates while the targets are shifted
+  by the camera (which keeps easing for ~1 s). A checkpoint hit this way can be respawned at with
+  `R` on the next frame; a flag hit this way wins.
+- **Real-game timers** (not in the TAS hack): respawn 1.2 s after death; next level 2.839 s after
+  the flag. Both run while paused; their actions only happen unpaused; the camera does not move
+  while paused. A death-warp finish needs a pause before the respawn: **flag frame <= death + 38**;
+  optimal unpause = **flag + 88** (`DeathWarpFinishValid`, `RESPAWN_LAST_PAUSE_FRAMES`,
+  `WIN_TIMER_FRAMES`). TAS hack strings stop at the flag; there is no pause in the TAS hack.
+- **Spike glitch** = `isGless` off: the camera steps before physics, so the standardized spike test
+  is shifted by `dp`. In the real game a pause < 1 s enables it, > 1 s disables it. TASes assume it
+  on. Team test cases (Level 3) are self-tests.
+- Team TASes reproduced: Level 4 any% (death 273, flag 274), Level 4 delayed warp (death 285, flag
+  309), Level 8 double warp (checkpoint 200, flag 1084), Level 8 TAS (flag 405).
 
-| item | result |
-|---|---|
-| twips for `x`/`y` | truncation toward zero (2,400/2,400 on both players) |
-| `rotation` getter | written value, `fmod`-normalised to (−180, 180] (720/720) |
-| arithmetic | plain IEEE doubles (SSE2); no x87 extended precision |
-| `Math.sin`/`cos`, FP 11.4 | **Intel LIBM SSE2**, identical to Java `Math.sin`/`cos` on x86-64 (0/4,096 mismatches); ported via `tools/hotspot2gas.py` (0/83,360 vs Java) |
-| `Math.atan2`, FP 11.4 | x87 `fpatan` (0/4,096); needed later for matrix→rotation |
-| ActiveX 11.5 `sin`/`cos` | unidentified: not glibc, x87, fdlibm, or Intel LIBM x64 |
+## 6. Calibration facts (details and numbers in `docs/STATS_LOGGING.md` §3.5-3.10)
 
-Why trig matters: `Mat22.Set(angle)` feeds contact anchors and joint lever
-arms. Without exact trig the Level 1 TAS diverges at tick ~300, is visibly off
-by tick 510, and misses a jump by tick 750.
+- `x`/`y` setters truncate toward zero to twips. `sin`/`cos` = Intel LIBM (FP 11.4).
+- **Display matrix:** built from the value *written* to `rotation`: `x = trunc(w*65536)` reduced
+  into [-180, 180] degrees in integers, then a 0.25-degree sine table (sin·2^30, truncated) with a
+  quarter-weight lerp (low 14 bits / 65536), `cos(x) = sin(90 - |x|)`, rounded to 16.16. Exact on
+  26,716 matrices (`FlashRotationMatrix`, `Sim::spriteRotW`).
+- **Bounding boxes:** rotated half-extent = round-nearest(half · (|a| + |c|)); nested levels are
+  rounded one at a time. `hitTestObject` counts touching edges. Known gap: nested rotated+scaled
+  sprites (two walls 1 twip off, never hit-tested).
+- **`rotation` getter of timeline-placed clips:** not atan2 of the stored matrix (an internal
+  approximation). Measured values go in `kTimelineRotations`; the sim aborts on a rotated body
+  clip without one. Dynamic bodies: recover from a log's tick-0 angle (unique double). Static
+  bodies: need an E9a dump.
+- **Camera:** easeOutExpo at t = 1 of 31 frames, `c*1.001*(1 - 2^(-10/31)) + b`, truncated to
+  twips; the `pow` constant is stored (`FlashTweenConstant`, 0x3fe996a2ea68dd55).
+- **Standardized spikes:** `localToGlobal` truncates the point to twips, applies the matrix,
+  rounds to nearest; `cover.x = dp` is truncated; shifted point truncated; strict triangle test.
+  Exact (E8c 30,000/30,000). Only translated and quarter-turned spikes are calibrated.
+- `TextField` x/y include a 2 px text margin (irrelevant: never bodies).
 
----
+## 7. Search tools
 
-## 6. Verification workflow
+**`rbsim optimize --level N --inputs RLE`** (src/search.cpp): random local edits of a known route,
+replay from cached snapshots, score = flag frame then flag overlap depth, death-warp rule,
+`--threads`, `--evals N` (reproducible). Recovers deliberately slowed routes; no gains on the
+team's TASes in short runs.
 
-1. The user mods the SWF following `docs/STATS_LOGGING.md`.
-   - It logs, per frame: tick, frame, input, position, velocity, angle,
-     angular velocity, sleep time, flags, the 3 probes, the contact-list
-     length and names, the world contact count, and sprite x/y/rotation.
-   - All doubles are logged as big-endian hex.
-   - §3.4 adds **extra-body groups** (`name px py a vx vy w`) for every other
-     dynamic body.
-   - `LEVEL <id> <checkpoint>` lines separate runs; `R` lines mark restarts.
-2. Run `./rbsim verify log.tsv [--verbose N] [--trig intel|glibc]`. For each
-   run it reports the first divergent tick and field.
-3. If a divergence looks like tiny noise (~1e-16), run
-   `tools/trig_flip_search log.tsv <LEVEL line>` to test the trig hypothesis.
-4. Reference output: `./rbsim log --level N --inputs "<rle>"` produces the
-   simulator's log in the same format.
+**`rbsim beam --level N [--checkpoint C] [--prefix RLE] --memory 10G`** (src/beam.cpp):
+- Layer = frame; each state x 8 inputs; children that win are solutions; dying children are
+  played through the death-warp window immediately; exact duplicates merged (hash of the compact
+  encoding).
+- Score = navigation distance to the flag (Dijkstra on a 10 px grid of static geometry, built from
+  the start state) at the position `--lookahead` frames ahead (default 6). Moving bodies ignored.
+- Selection `--select mixed` (default: half by score with per-bucket `--diversity`, half coverage
+  first), `score`, `coverage`. `--seed-route RLE` keeps a known route in the beam. `--explain RLE`
+  prints a route's scores.
+- Width from `--memory` (default 4 GB) or `--width`; links per frame in `DIR/links`, beam saved to
+  `DIR/beam.bin` every `--save-every` minutes, `--resume`. Route rebuilt and replay-checked.
+- **Deterministic** across thread counts, kill -9 + resume, and Windows vs Linux (candidates are
+  ordered by score, parent, input; the hash covers struct padding so it must never be used for
+  ordering; `sqrt` not `hypot`).
+- Results (one core, small widths): Level 2 unseeded 191-215 (TAS 186), seeded 186; Level 4
+  mixed finds a death warp by itself (flag 353; TAS 274), `score` alone dies out at the crushers.
+- **Main limitation:** the score. On Level 2 a 20,000-wide beam was no better than 2,000-wide;
+  `--explain` showed the TAS line is behind the beam's best mid-level and overtakes late.
 
-Level 1 TAS (inputs), which wins at tick 510 on FP 11.4:
-```
-d18e13d2e7d15a1n1a1n1e8q73e8w1e5d18a14d1e1n8a10q6a11q9W8e20a1n17d8e12d9a7d17e1q3e8d1e1d26a19n2a5n1a10d2w5n3a8q3a36d13n1d15n2d3a1e1d8
-```
+Measured: compact state ~1.4 KB (L2) to ~9 KB avg / 17 KB worst (L8); encode ~10 us, decode ~5 us;
+sim speed per thread ~450k frames/s (L2), ~140k (L12 idle), ~36-60k (L8 with the car). Exhaustive
+search grows ~2x per frame even with merging (prototype: last 16 frames of L8 ~207k expansions,
+11 s): proofs are only feasible for short windows/endgames.
 
----
+## 8. Next steps (in the user's order of interest)
 
-## 7. Adding a level (recipe)
-
-1. Read `Levels/Level_N.as`, both the constructor and `Update`.
-2. Transliterate the constructor into a `LN_Construct(Sim&)` in
-   `src/redball.cpp`:
-   - use `s.CreateBody(name, "Polygon", density, friction, restitution, polys)`
-     or `s.CreateCircleBody(...)`, **in the same order** as the AS3;
-   - build joints with `w.InitDistanceJointDef` / `InitPrismaticJointDef` /
-     `InitRevoluteJointDef`, set the motor/limit fields exactly, then call
-     `w.CreateJoint` in order;
-   - keep private fields in `s.lvBody[]` / `s.lvInt[]`; add more `Sim` fields
-     if a level needs doubles.
-3. Transliterate `Update` into `LN_Update(Sim&)`. Use `s.spriteX/Y/Rot[body]`
-   wherever the AS3 reads a sprite's `x`/`y`/`rotation`, because those are
-   twip-quantised. Anything the AS3 calls on bodies must be mirrored exactly,
-   e.g. `SetLinearVelocity` doesn't wake bodies, while `ApplyForce` and
-   `ApplyImpulse` do.
-4. Register the level in `GetLevelScript()`.
-5. Handle rotated placements: 10 levels need `DisplayObject.rotation` from a
-   timeline matrix. The current code aborts on non-identity matrices; see
-   section 8.
-6. Add self-tests to `rbsim test`, then request Flash logs with extra-body
-   columns and run `verify`.
-7. Check the level's AS3 for other `Box2D` API use: `DestroyBody`,
-   `SetXForm`, filters, `ApplyImpulse`, `m_linearDamping`, and so on.
-   `World` has `DestroyBody`, `ApplyImpulse`, `SetLinearVelocity` and
-   `Refilter`; add the rest faithfully from the AS3 or p-code.
-
-### Joint usage per level (`CreateJoint` count; `enableMotor`/`enableLimit` occurrences)
-
-| level | joints |
-|---|---|
-| 2 | distance ×1, prismatic ×1 (mouse def created but never added) |
-| 3 | prismatic |
-| 4 | prismatic, revolute (5 CreateJoint) |
-| 5 | none |
-| 6 | revolute ×4, motors |
-| 7 | distance, prismatic, motors + limits (7 CreateJoint) |
-| 8 | prismatic, revolute (5) |
-| 9 | distance, prismatic, revolute, motor (19 CreateJoint: chains) |
-| 10 | prismatic, revolute, motors ×7, limits ×3 |
-| 11 | distance, revolute, motors ×4 (8) |
-| 12 | distance, prismatic, revolute (4) |
-| 13 | distance, prismatic (4) |
-| 14 | prismatic, revolute (2) |
-| 15 | prismatic, revolute (4) |
-| 16 | prismatic, revolute, motor + limit (4) |
-| 17 | prismatic, revolute, motor + limit (4) |
-
-Only distance, prismatic and revolute joints are ever created; all three are
-implemented. Rotated or scaled placements occur in levels 3, 4, 8, 9, 10, 11,
-12, 13, 15 and 16.
-
-Known level-specific notes:
-- **Level 7:** `redCheck` flags survive `SetLevel(id, true)`.
-- **Level 15:** there is a kill line. Its coin tween is time-based in one
-  build and frame-based in the other, which is cosmetic only.
-- **Level 2:** `movePlatform` is driven by `SetLinearVelocity(2·dir, 0)`,
-  reversing when its sprite x is below 390 or above 550.
-
----
-
-## 8. Open problems / next milestones
-
-1. **Level 2 logs** (with §3.4 extras): L2-idle `n900`, the L2 TAS, manual
-   runs that hit the pendulum and ride the platform, and a checkpoint-1 restart.
-2. **Matrix → `rotation`** for rotated placements:
-   - Flash derives `rotation` from the matrix, probably
-     `atan2(b, a)·180/π` with the 16.16 fixed-point values.
-   - FP 11.4's `atan2` is x87 `fpatan`, which can be reproduced with inline
-     asm or an exact port.
-   - Settle it with a calibration dump: place rotated test sprites in the
-     SWF, or read `rotation` of each level's rotated instances directly, and
-     log the hex values.
-3. **Display layer** for win and checkpoints:
-   - `hitTestObject` compares global bounding boxes. The ball's box depends on
-     its rotation and on transformed shape bounds in twips.
-   - The camera scaling (`scaleTimer`) could matter through twip rounding.
-   - Spikes use `hitTestPoint` shape tests on `Shipik` instances.
-   - Needed so the search can detect a finish without Flash.
-4. **Search:** `rbsim optimize` (src/search.cpp) exists: local search from a known route, multi-threaded, flag frame + flag overlap score, death-warp rule. Still to do:
-   - ~~Shrink the snapshot~~ DONE: `src/snapshot.h` compact snapshots (8-byte-block diff vs the freshly loaded level, byte-exact by construction, portable across processes): avg ~6 KB, max ~17 KB (was 152 KB); encode ~10 us, decode ~5 us.
-   - Work-stealing thread pool, prefix sharing, pruning (e.g. the practice
-     build's `distToGoal`).
-5. Optionally, identify the ActiveX host's `sin`/`cos`; that needs its binary.
-
----
+1. **Better beam score** (biggest lever): account for moving platforms/timing (e.g. time-indexed
+   platform positions in the nav field, or score = elapsed + estimated remaining time); calibrate
+   any change with `--explain` against the team's TASes (L2 186, L4 274, L8 405).
+2. **Exhaustive window proofs** (resumable, splittable across machines) and **endgame proofs**
+   (prove the fastest finish from a state within ~16-20 frames).
+3. **Remaining levels:** 13 and 16 (one rotated dynamic body each: tick-0 angle from a log), 17 (a
+   few rotated/scaled spike rows: calibrate first), then 9, 10, 11, 15 (many transformed spike
+   rows; 10 and 11 have rotated static bodies: need an E9a dump; the mod must run E9a on every
+   level, §3.0).
+4. Physics profiling for contact-heavy levels (must keep bit-exactness).
 
 ## 9. Environment setup (fresh sandbox)
 
 ```bash
-# repo
 git clone https://github.com/Theme25/project-unnamed.git && cd project-unnamed
-make && ./rbsim test          # expect ALL PASSED
+make && ./rbsim test                  # expect ALL PASSED (55)
 
-# JPEXS FFDec (decompiler); Java is usually preinstalled
+# Windows cross build + Wine (to check the Windows build)
+mv /etc/apt/sources.list.d/nodesource* /tmp/ 2>/dev/null   # a broken repo blocks apt-get update
+apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq mingw-w64 wine64
+make windows && WINEDEBUG=-all wine rbsim.exe test
+
+# JPEXS FFDec (decompiler); Java is preinstalled
 mkdir -p ~/tools/ffdec && cd ~/tools/ffdec
-# download the ffdec_*.zip release asset from github.com/jindrapetrik/jpexs-decompiler/releases
-# (version 15.x was used), unzip it, then:
-java -jar ffdec.jar -cli -export script ~/extracted/practice ~/uploads/Red_Ball_-_Practice_Hack.swf
-java -jar ffdec.jar -cli -swf2xml ~/uploads/Red_Ball_-_Practice_Hack.swf ~/extracted/practice_full.xml
-# p-code of one class (authoritative when decompiled code looks odd):
+curl -sL -o ffdec.zip https://github.com/jindrapetrik/jpexs-decompiler/releases/download/version15.1.1/ffdec_15.1.1.zip && unzip -q ffdec.zip
+java -jar ffdec.jar -cli -export script ~/extracted/practice /mnt/user-data/uploads/Red_Ball_-_Practice_Hack.swf
+java -jar ffdec.jar -cli -swf2xml /mnt/user-data/uploads/Red_Ball_-_Practice_Hack.swf ~/extracted/practice_full.xml
+# p-code of one class (authoritative):
 java -jar ffdec.jar -cli -format script:pcode -selectclass Box2D.Collision.b2Collision \
-     -export script ~/extracted/pcode ~/uploads/Red_Ball_-_Practice_Hack.swf
+     -export script ~/extracted/pcode /mnt/user-data/uploads/Red_Ball_-_Practice_Hack.swf
 
-# regenerate level placements from the SWF XML
+# regenerate data from the SWF XML
 make levels SWFXML=~/extracted/practice_full.xml
+python3 tools/gen_display_data.py ~/extracted/practice_full.xml > src/display_data.h
 ```
 
-Useful symbol ids: `Levels.Level_1` is sprite 401, `Level_2` 355, `Level_3`
-575, `Level_4` 561, `Level_5` 125, `Level_6` 434, `Level_7` 287, `Level_8`
-389, `Level_9` 248, `Level_10` 205, `Level_11` 87, `Level_12` 164,
-`Level_13` 601, `Level_14` 536, `Level_15` 474, `Level_16` 328, `Level_17` 493,
-and `PlayerBox` 23.
+Symbol ids: `Levels.Level_1` 401, `_2` 355, `_3` 575, `_4` 561, `_5` 125, `_6` 434, `_7` 287,
+`_8` 389, `_9` 248, `_10` 205, `_11` 87, `_12` 164, `_13` 601, `_14` 536, `_15` 474, `_16` 328,
+`_17` 493; `PlayerBox` 23; `Shipik` 57; `Ships10` 58.
 
-Regenerating `src/libm_intel.S`: download
-`stubGenerator_x86_64_{sin,cos,constants}.cpp` from
-`raw.githubusercontent.com/openjdk/jdk/master/src/hotspot/cpu/x86/`, then run
-`make libm OPENJDK=<dir>`.
+**Pitfalls learned the hard way:**
+- **Never change the build flags.** `-O3 -march=native` broke bit-exactness on Levels 3, 8, 12 and
+  was not faster. Keep `-O2 -ffp-contract=off -fno-fast-math -fexcess-precision=standard`.
+- Avoid host libm functions in anything that affects results (`pow`, `hypot`, `atan2`, ...): they
+  can differ between Linux and Windows. `sqrt`, `fmod`, `floor`, `trunc` are exact.
+- Tool calls time out at 300 s: run long jobs detached
+  (`setsid nohup sh -c '... > log 2>&1' &`) and poll the log. Kill with `pkill -x rbsim`
+  (`pkill -f` can match and kill your own shell).
+- Two runs writing the same beam `--dir`/log corrupt each other.
 
----
+## 10. Verification and delivery workflow
 
-## 10. Delivering changes to the user
+**Verifying a level:** the user records logs per `docs/STATS_LOGGING.md` §3.0/§6 (idle, each death
+kind, checkpoint-1 restart, win/TAS, level-specific cases) and a calibration dump (`E9level`,
+E9a, E10). Run `./rbsim verify <log>` (look for `diverged: 0`) and `./rbsim calib <dump>`
+(`CALIB OK`). Before every commit: `./rbsim test` + verify every log available in the chat.
 
-The assistant cannot push. Its workflow:
-1. Clone the repo.
-2. Commit with the user's identity: `Mohamad Shaikh Khalil
-   <Mohamad.sk.work@gmail.com>`.
-3. Create an **incremental** bundle based on the current remote head:
-   `git bundle create rbsim-update.bundle <remote-head>..main`.
+Known log artifacts handled by `verify`: death and win rows log input 0 (retried with the
+previous input); rows logged after the frame counter stops are skipped (but the first `ts=1` win
+row is compared); frame counter compared segment-relative; static flags carried after `R`.
+Earlier wrong turns worth remembering: an ActiveX-host log looked like a physics bug; logs
+recorded with `MATHSPIKES 0` looked like spike bugs (check the mod settings first).
 
-The user then runs, in an up-to-date clone:
-```
-git pull rbsim-update.bundle main
-git push
-```
-If git reports "Repository lacks these prerequisite commits", the clone is
-behind: run `git fetch origin && git reset --hard origin/main` first, or
-re-clone.
+**Delivering** (the assistant cannot push):
+1. Commit with the user's identity:
+   `git -c user.name="Mohamad Shaikh Khalil" -c user.email="Mohamad.sk.work@gmail.com" commit ...`
+2. `git fetch origin` and bundle everything the remote lacks:
+   `git bundle create /mnt/user-data/outputs/rbsim-update.bundle origin/main..HEAD`
+3. For Windows users also ship `rbsim.exe` (`make windows`) and `docs/WINDOWS.md`.
 
----
+The user runs in an up-to-date clone: `git pull rbsim-update.bundle main` then `git push`.
+"Repository lacks these prerequisite commits" means his clone is behind: `git fetch origin &&
+git reset --hard origin/main`, then pull again. (Last chat's bundles were made from `a1aafab..HEAD`;
+check `origin/main` first, he may have pushed some or all of them.)
 
-## 11. Licensing note
+## 11. Licensing
 
-`src/libm_intel.S` derives from OpenJDK HotSpot code (Intel copyright,
-GPL-2.0-only), so any rbsim binary that includes it is GPLv2. The rest of the
-project is the user's own code and currently has no license chosen.
+`src/libm_intel.S` derives from OpenJDK HotSpot (Intel copyright, GPL-2.0-only), so binaries
+that include it are GPLv2. The rest is the user's own code; no license chosen yet.
