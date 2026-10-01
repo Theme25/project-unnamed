@@ -66,7 +66,9 @@ explain where each piece came from.
    Use 0 for anything the current level does not have. (The older v1 block, without the last
    two fields, is still accepted by `rbsim verify`.)
 
-**Header lines** (start of every exported file): `# inputs<TAB><RLE>` as now, plus
+**Header lines** (start of every exported file): `# inputs<TAB><RLE>` as now. The mod now
+defaults to mathspikes 1, so the following line is optional (without it `rbsim verify`
+assumes mathspikes 1, gless 0):
 `# config<TAB>mathspikes<TAB><CONFIG.MATHSPIKES><TAB>gless<TAB><int(Game.isGless)>` written at export
 time. `rbsim verify` uses `gless` for the run and refuses to compare spike decisions of a
 `mathspikes 0` run (Level 6 `L6_4` was recorded that way: Flash died on the first frame the

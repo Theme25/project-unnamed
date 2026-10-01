@@ -6,6 +6,7 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -51,7 +52,9 @@ int CmdCalib(int argc, char** argv) {
     long mN = 0, mOk = 0;  // E4 / E7a / E7b: rotation -> matrix
     long e8cN = 0, e8cOk = 0, e8cHits = 0, powN = 0, powOk = 0;
     long e9N = 0, e9Ok = 0, e9RotN = 0, e9RotOk = 0, e9bN = 0, e9bOk = 0, e10N = 0, e10Ok = 0, e10Approx = 0, e10Other = 0;
-    long e10Targets = 0;
+    long e10Targets = 0, e9Other = 0;
+    std::set<std::string> bodyNames;
+    int bodyNamesLevel = -1;
     int dumpLevel = 8;  // "E9level <id>" row (docs/STATS_LOGGING.md 3.0); older dumps were Level 8 only
     std::unique_ptr<LevelTemplate> tplL;
     auto lvl = [&]() -> LevelTemplate& {
@@ -130,6 +133,14 @@ int CmdCalib(int argc, char** argv) {
         } else if (f[0] == "E9a" && f.size() >= 11) {
             // placements: position + 16.16 matrix vs levels_data.h; rotated body clips vs the measured table
             LevelTemplate& tpl8 = lvl();
+            if (bodyNamesLevel != dumpLevel) {  // which clips become physics bodies on this level
+                bodyNames.clear();
+                auto sim = std::make_unique<Sim>();
+                sim->Load(&tpl8);
+                for (int32_t b = 0; b < sim->world.bodyCount; ++b)
+                    if (sim->world.bodies[b].inWorld) bodyNames.insert(sim->BodyName(b));
+                bodyNamesLevel = dumpLevel;
+            }
             bool known = tpl8.HasPlacement(f[1].c_str());
             if (!known) continue;  // Shipik covers/masks and unnamed instances
             const RawPlacement& p = tpl8.Place(f[1].c_str());
@@ -138,8 +149,12 @@ int CmdCalib(int argc, char** argv) {
             const bool posOk = std::lround(H(f[2]) * 20) == p.tx && std::lround(H(f[3]) * 20) == p.ty;
             const bool matOk = std::lround(H(f[7]) * 65536) == p.a && std::lround(H(f[8]) * 65536) == p.b &&
                                std::lround(H(f[9]) * 65536) == p.c && std::lround(H(f[10]) * 65536) == p.d;
+            const bool used = bodyNames.count(f[1]) > 0;
             if ((posOk && matOk) || f[1] == "shipik7") ++e9Ok;
-            else std::printf("  E9a %s differs from levels_data.h\n", f[1].c_str());
+            else if (!used) {
+                ++e9Other;  // e.g. TextField x/y include the text box margin; not a body, not used by the sim
+                std::printf("  E9a %s differs from levels_data.h (not a physics body: ignored)\n", f[1].c_str());
+            } else std::printf("  E9a %s differs from levels_data.h\n", f[1].c_str());
             if (!(p.b == 0 && p.c == 0 && p.a > 0) && std::strncmp(f[1].c_str(), "shipik", 6)) {
                 double v = 0;
                 ++e9RotN;
@@ -189,7 +204,7 @@ int CmdCalib(int argc, char** argv) {
     std::printf("   with the modelled ball box: agrees in %ld, consistent with some +-1 twip adjustment in %ld\n", e2model,
                 e2inRange);
     std::printf("E3 static bounds vs SWF-derived display_data.h: %ld / %ld identical\n", e3ok, e3n);
-    const bool e8ok = e8cOk == e8cN && powOk == powN && e9Ok == e9N && e9RotOk == e9RotN && e9bOk == e9bN && e10Ok + e10Approx + e10Other == e10N;
+    const bool e8ok = e8cOk == e8cN && powOk == powN && e9Ok + e9Other == e9N && e9RotOk == e9RotN && e9bOk == e9bN && e10Ok + e10Approx + e10Other == e10N;
     const bool pass = e8ok && e1far == 0 && e2obs == e2 && e2inRange == e2 && e1exact == e1 && (mN == mOk);
     std::printf("%s\n", pass ? "CALIB OK" : "CALIB MISMATCH");
     return pass ? 0 : 1;

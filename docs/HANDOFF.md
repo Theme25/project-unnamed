@@ -58,7 +58,7 @@ identically in the real game.
 | 6 | **bit-exact** against Flash logs (idle 5 segments, win 231, drop platform re-created + checkpoint-1 restart + win; spike death (MATHSPIKES 1) on the Flash tick; 3,320 frames); motorised revolute joints verified |
 | 7 | **bit-exact** against Flash logs (5 runs, 4,426 frames: idle, 2 wins, red switch -> R -> `redCheckLevel` carried (wall removed at construction) -> blue switch -> checkpoint 2 -> win, 2 star deaths); jump platforms (prismatic limit + motor), distance joints, `SetAngularVelocity` verified |
 | 8 | **bit-exact** against Flash logs (FP 11.4, MATHSPIKES = 1: 10 runs, 8,114 frames: idle, crusher death and crusher contact without death, wall-spike and ramp deaths, car driving, killSpusk2 death, "flying car", "windshield clip", checkpoint-1 restart, 3 wins); revolute joints verified; `killSpusk2` angle = Flash-reported rotation (§3.9) |
-| 12 | implemented: collision group -1 (main platform, kill star), patrolling kill star, roller cart on distance joints; **awaiting Flash logs** |
+| 12 | **bit-exact** against Flash logs (5 runs, 5,006 frames: idle, 2 wins, checkpoint-2 restart -> checkpoint 3 -> win, 2 deaths); collision group filtering, kill-star patrol, roller cart verified |
 | 14 | implemented: moving platform, catapult (revolute), blue switch, drop platform, kill ball impulse at x > 1410; **awaiting Flash logs** |
 | 3–17 | placements extracted (`src/levels_data.h`); scripts not written |
 
