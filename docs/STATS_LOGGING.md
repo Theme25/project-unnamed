@@ -78,6 +78,11 @@ and `R` for every input-code-8 restart (§3.2).
 - The level-independent sections (T/X/Y/R, E1-E7) only need to run once per Flash Player
   version. E8 and E9b are not needed again.
 
+**Bounds note (Level 5 E10):** every hit-test target matches. One wall (`rightBarier`, a
+rotated and scaled sprite nested in a scaled one) differs by 1 twip: Flash's rounding of
+nested rotated/scaled boxes is not modelled yet. `rbsim calib` only fails on hit-test targets
+(goal, checkpoints, switches); a rotated/scaled *target* in a later level would need this.
+
 **Runs per level** (§6): idle, every kind of death the level has, a checkpoint-1 restart, a win
 or the current TAS, plus the level-specific cases listed there. Record with **mathspikes 1** and
 **isGless off** unless a run is about the spike glitch (then say which).

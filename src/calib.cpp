@@ -50,7 +50,8 @@ int CmdCalib(int argc, char** argv) {
     long e3ok = 0, e3n = 0;
     long mN = 0, mOk = 0;  // E4 / E7a / E7b: rotation -> matrix
     long e8cN = 0, e8cOk = 0, e8cHits = 0, powN = 0, powOk = 0;
-    long e9N = 0, e9Ok = 0, e9RotN = 0, e9RotOk = 0, e9bN = 0, e9bOk = 0, e10N = 0, e10Ok = 0, e10Approx = 0;
+    long e9N = 0, e9Ok = 0, e9RotN = 0, e9RotOk = 0, e9bN = 0, e9bOk = 0, e10N = 0, e10Ok = 0, e10Approx = 0, e10Other = 0;
+    long e10Targets = 0;
     int dumpLevel = 8;  // "E9level <id>" row (docs/STATS_LOGGING.md 3.0); older dumps were Level 8 only
     std::unique_ptr<LevelTemplate> tplL;
     auto lvl = [&]() -> LevelTemplate& {
@@ -113,9 +114,18 @@ int CmdCalib(int argc, char** argv) {
             if (!o) continue;
             ++e10N;
             const long x0 = Tw(H(f[2])), y0 = Tw(H(f[3])), x1 = Tw(H(f[2]) + H(f[4])), y1 = Tw(H(f[3]) + H(f[5]));
+            // only goals, checkpoints and switch clips are hit-tested by the sim (spikes have their own data)
+            const std::string& nm = f[1];
+            const bool target = nm == "levelAim" || nm.rfind("checkPoint", 0) == 0 || nm == "blueCheck" || nm == "greenCheck" ||
+                                nm == "redCheck";
+            if (target) ++e10Targets;
             if (x0 == std::lround(o->x0) && y0 == std::lround(o->y0) && x1 == std::lround(o->x1) && y1 == std::lround(o->y1)) ++e10Ok;
             else if (!o->exact) ++e10Approx;  // rotated/scaled: display_data.h holds an approximation
-            else std::printf("  E10 L%d %-14s flash=[%ld %ld %ld %ld]  swf=[%.0f %.0f %.0f %.0f]\n", dumpLevel, f[1].c_str(), x0, y0, x1, y1,
+            else if (!target) {
+                ++e10Other;
+                std::printf("  E10 L%d %-14s (not hit-tested) flash=[%ld %ld %ld %ld]  generated=[%.0f %.0f %.0f %.0f]\n", dumpLevel,
+                            f[1].c_str(), x0, y0, x1, y1, o->x0, o->y0, o->x1, o->y1);
+            } else std::printf("  E10 L%d %-14s flash=[%ld %ld %ld %ld]  swf=[%.0f %.0f %.0f %.0f]\n", dumpLevel, f[1].c_str(), x0, y0, x1, y1,
                              o->x0, o->y0, o->x1, o->y1);
         } else if (f[0] == "E9a" && f.size() >= 11) {
             // placements: position + 16.16 matrix vs levels_data.h; rotated body clips vs the measured table
@@ -168,8 +178,9 @@ int CmdCalib(int argc, char** argv) {
         std::printf("Level %d placements (E9a): %ld / %ld match; rotated body clips with a measured rotation: %ld / %ld\n", dumpLevel,
                     e9Ok, e9N, e9RotOk, e9RotN);
     if (e10N)
-        std::printf("Level %d object bounds (E10): %ld / %ld exact, %ld rotated/scaled (approximate in display_data.h)\n", dumpLevel, e10Ok,
-                    e10N, e10Approx);
+        std::printf("Level %d object bounds (E10): %ld / %ld exact (hit-test targets: %ld, all must match); %ld other objects differ, %ld "
+                    "rotated/scaled approximate\n",
+                    dumpLevel, e10Ok, e10N, e10Targets, e10Other, e10Approx);
     if (e9bN) std::printf("rotation getter of code-set matrices, atan2(b,a)*180/PI within 1e-12 deg (E9b): %ld / %ld\n", e9bOk, e9bN);
     if (powN) std::printf("camera tween constant Math.pow(2, -10/31): %s\n", powOk == powN ? "identical" : "DIFFERENT");
     if (e8cN) std::printf("standardized spikes, whole check (E8c): %ld / %ld (Flash hits: %ld)\n", e8cOk, e8cN, e8cHits);
@@ -178,7 +189,7 @@ int CmdCalib(int argc, char** argv) {
     std::printf("   with the modelled ball box: agrees in %ld, consistent with some +-1 twip adjustment in %ld\n", e2model,
                 e2inRange);
     std::printf("E3 static bounds vs SWF-derived display_data.h: %ld / %ld identical\n", e3ok, e3n);
-    const bool e8ok = e8cOk == e8cN && powOk == powN && e9Ok == e9N && e9RotOk == e9RotN && e9bOk == e9bN && e10Ok + e10Approx == e10N;
+    const bool e8ok = e8cOk == e8cN && powOk == powN && e9Ok == e9N && e9RotOk == e9RotN && e9bOk == e9bN && e10Ok + e10Approx + e10Other == e10N;
     const bool pass = e8ok && e1far == 0 && e2obs == e2 && e2inRange == e2 && e1exact == e1 && (mN == mOk);
     std::printf("%s\n", pass ? "CALIB OK" : "CALIB MISMATCH");
     return pass ? 0 : 1;

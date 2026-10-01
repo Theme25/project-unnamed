@@ -125,7 +125,7 @@ adaptation.
 | 2 | **bit-exact** against Flash logs (FP 11.4: 4 runs, 1,350 frames: idle, TAS-style win, long manual win, checkpoint-1 restart + win); joints, goal and checkpoint timing verified |
 | 3 | **bit-exact** against Flash logs (FP 11.4, MATHSPIKES = 1: 14 segments incl. 10 spike deaths on the Flash tick, a win, a checkpoint-1 restart; camera and ball matrix checked every frame); standardized spike check calibrated exactly (E8a/b/c) |
 | 4 | **bit-exact** against Flash logs (death-warp TASes: any% flag 274, delayed warp 309): crushers, swinging axes (timeline rotations recovered from tick-0 angles), drop platform re-creation, post-death camera and the warp win |
-| 5 | implemented: switches (blue/green, `DestroyBody`, also under the dead-ball rule), circle bodies; **awaiting Flash logs** |
+| 5 | **bit-exact** against Flash logs (4 runs, 4,626 frames: idle, blue switch + win, a second win, fall death; checkpoint/flags column every frame); green switch not yet exercised |
 | 6 | implemented: motorised revolute spinner + back balls, three drop platforms (re-created at the clip's state); **awaiting Flash logs** |
 | 7 | implemented: jump platforms (prismatic limit + motor, force switched by contact), moving and swinging platforms, spinning star, red switch with static `redCheckLevel` (kept across checkpoint restarts), blue switch; **awaiting Flash logs** |
 | 8 | **bit-exact** against Flash logs (FP 11.4, MATHSPIKES = 1: 10 runs, 8,114 frames: idle, crusher death and crusher contact without death, wall-spike and ramp deaths, car driving, killSpusk2 death, "flying car", "windshield clip", checkpoint-1 restart, 3 wins); revolute joints verified; `killSpusk2` angle = Flash-reported rotation (§3.9) |
