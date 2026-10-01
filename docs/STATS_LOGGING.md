@@ -66,6 +66,13 @@ explain where each piece came from.
    Use 0 for anything the current level does not have. (The older v1 block, without the last
    two fields, is still accepted by `rbsim verify`.)
 
+**Header lines** (start of every exported file): `# inputs<TAB><RLE>` as now, plus
+`# config<TAB>mathspikes<TAB><CONFIG.MATHSPIKES><TAB>gless<TAB><int(Game.isGless)>` written at export
+time. `rbsim verify` uses `gless` for the run and refuses to compare spike decisions of a
+`mathspikes 0` run (Level 6 `L6_4` was recorded that way: Flash died on the first frame the
+*unshifted* triangle is touched, tick 167, while the standardized check would have shifted the
+test points 15.2 px up).
+
 **Event lines:** `LEVEL <id> <lastCheckNum>` after every `SetLevel` (followed by the tick-0 line),
 and `R` for every input-code-8 restart (§3.2).
 

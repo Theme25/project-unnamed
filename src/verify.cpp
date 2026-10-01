@@ -203,9 +203,25 @@ int CmdVerify(int argc, char** argv) {
     std::vector<Segment> segs;
     std::string line;
     int ln = 0, skipped = 0;
+    int cfgMathSpikes = -1, cfgGless = -1;  // -1: not stated in the log
     while (std::getline(in, line)) {
         ++ln;
         if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind("# config", 0) == 0) {  // # config<TAB>mathspikes<TAB>N<TAB>gless<TAB>N  (docs/STATS_LOGGING.md 3.0)
+            std::vector<std::string> c;
+            size_t a = 0;
+            for (;;) {
+                size_t b = line.find('\t', a);
+                c.push_back(line.substr(a, b == std::string::npos ? std::string::npos : b - a));
+                if (b == std::string::npos) break;
+                a = b + 1;
+            }
+            for (size_t k = 1; k + 1 < c.size(); k += 2) {
+                if (c[k] == "mathspikes") cfgMathSpikes = std::stoi(c[k + 1]);
+                if (c[k] == "gless") cfgGless = std::stoi(c[k + 1]);
+            }
+            continue;
+        }
         if (line.empty() || line[0] == '#') continue;
         if (line.rfind("LEVEL", 0) == 0) {
             int lv = 0, cp = 0;
@@ -238,6 +254,12 @@ int CmdVerify(int argc, char** argv) {
     }
 
     std::map<int, std::unique_ptr<LevelTemplate>> tpls;
+    if (cfgMathSpikes == 0) {
+        std::printf("this log was recorded with MATHSPIKES 0 (original shape-test spikes): rbsim simulates the standardized\n"
+                    "check only (MATHSPIKES 1), so spike decisions in it are not comparable. Re-record with mathspikes 1.\n");
+    }
+    if (cfgMathSpikes >= 0 || cfgGless >= 0)
+        std::printf("log config: mathspikes %d, gless %d\n", cfgMathSpikes, cfgGless);
     auto sim = std::make_unique<Sim>();
     int perfect = 0, diverged = 0, unsupported = 0, shown = 0, extraGroupsSeen = 0, deathsMatched = 0;
     long framesCompared = 0, framesMatched = 0, trailingSkipped = 0, deathInputFromPrev = 0, postDeathFrames = 0, winsAfterDeath = 0;
@@ -255,6 +277,7 @@ int CmdVerify(int argc, char** argv) {
         const bool afterR = si > 0 && segs[si - 1].level == sg.level && !segs[si - 1].entries.empty() &&
                             segs[si - 1].entries.back().restart;
         sim->Load(tp.get(), sg.checkpoint, afterR);
+        if (cfgGless >= 0) sim->gless = cfgGless != 0;
         bool ok = true;
         int endReason = 0;  // 0 = end of log, 1 = death, 2 = win
         bool diedCounted = false;
