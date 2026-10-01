@@ -16,7 +16,7 @@ Player 11.4.402.287** with the Practice Hack, `MATHSPIKES = 1`, spike glitch on 
 
 ## Build & run
 
-**Linux / WSL / Codespaces:** `make`. **Windows:** see "Windows" below.
+**Linux / WSL / Codespaces:** `make`. **Windows:** see "Windows" below, or [`docs/WINDOWS.md`](docs/WINDOWS.md) to just run the exe.
 
 ```
 make                 # see "Build flags" below; do not change them
@@ -35,7 +35,10 @@ alive and sleep flags per frame (`--hex`: raw IEEE-754 bits). Inputs use the gam
 
 ### Windows
 
-Two ways, both giving a static `rbsim.exe` (no DLLs needed) with the same results as Linux:
+**Just want to run it?** See [`docs/WINDOWS.md`](docs/WINDOWS.md): using the ready-made
+`rbsim.exe`, the common commands, PowerShell vs Command Prompt, and troubleshooting.
+
+Two ways to build, both giving a static `rbsim.exe` (no DLLs needed) with the same results as Linux:
 
 1. **Native, with MSYS2:** install [MSYS2](https://www.msys2.org/), open the **MSYS2 UCRT64**
    shell, then
