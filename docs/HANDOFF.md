@@ -41,14 +41,14 @@ recorded in README.md ("Verification status") and below.
 |---|---|
 | physics core | bit-exact (Box2DFlash quirks replicated; Intel LIBM `sin`/`cos`) |
 | levels **1-8, 12, 14** | **bit-exact** against Flash logs (48 logs, 59,741 frames; table in README) |
-| levels 9, 10, 11, 13, 15, 16, 17 | not scripted (section 8) |
+| levels 9, 10, 11, 13, 15, 16, 17 | **scripted from the AS3, NOT verified** (no Flash logs yet; `rbsim` warns when one is used; section 8) |
 | display layer | exact: rotation matrix, hit tests, camera, standardized spikes (section 6) |
 | death / death warp | exact: post-death camera + unguarded goal/checkpoint/switch tests; 3 logged warps verified |
 | Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical |
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-Self-tests: `./rbsim test` → 55 tests, `ALL PASSED`.
+Self-tests: `./rbsim test` → 62 tests, `ALL PASSED` (also under Wine; Linux and Wine logs of the new levels are identical).
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
@@ -58,6 +58,7 @@ Self-tests: `./rbsim test` → 55 tests, `ALL PASSED`.
 | `src/libm_intel.S` | Flash 11.4's `sin`/`cos` (Intel LIBM via OpenJDK, `tools/hotspot2gas.py`); Win64 wrappers under `_WIN32` |
 | `src/redball.cpp/.h` | `Sim`: level logic, sprite sync, inputs, camera, display layer, spikes, death, level scripts, RLE codec |
 | `src/levels_data.h` | named placements of all 17 levels (generated) |
+| `src/level_polys.h` | polygon tables of levels 9-17 exactly as in the AS3 (`tools/gen_level_polys.py <scripts/Levels dir>`; the numeric literals are copied as text) |
 | `src/display_data.h` | bounds of named objects + every spike, per level (`tools/gen_display_data.py`, `tools/swf_geom.py`) |
 | `src/flash_sintab.h` | Flash's display-matrix sine table (`tools/gen_flash_sintab.py`) |
 | `src/snapshot.cpp/.h` | compact snapshots (diff vs level start, ~6 KB, byte-exact, portable) |
@@ -199,31 +200,57 @@ sim speed per thread ~450k frames/s (L2), ~140k (L12 idle), ~36-60k (L8 with the
 search grows ~2x per frame even with merging (prototype: last 16 frames of L8 ~207k expansions,
 11 s): proofs are only feasible for short windows/endgames.
 
-## 8. Next steps (in the user's order of interest)
+## 8. Next steps
 
-1. **Better beam score** (biggest lever): account for moving platforms/timing (e.g. time-indexed
-   platform positions in the nav field, or score = elapsed + estimated remaining time); calibrate
-   any change with `--explain` against the team's TASes (L2 186, L4 274, L8 405).
-2. **Exhaustive window proofs** (resumable, splittable across machines) and **endgame proofs**
-   (prove the fastest finish from a state within ~16-20 frames).
-3. **Remaining levels:** 13 and 16 (one rotated dynamic body each: tick-0 angle from a log), 17 (a
-   few rotated/scaled spike rows: calibrate first), then 9, 10, 11, 15 (many transformed spike
-   rows; 10 and 11 have rotated static bodies: need an E9a dump; the mod must run E9a on every
-   level, §3.0).
-4. Physics profiling for contact-heavy levels (must keep bit-exactness).
+The bruteforcer (beam/optimize work in section 7) is now someone else's task; this chat line is about
+**finishing the simulator on every level**.
+
+**Done in the last chat (unverified):** levels 9, 10, 11, 13, 15, 16, 17 are scripted from the AS3
+(`Level_N.as` of the Practice Hack SWF). Bodies and joints are in AS3 order; polygons come from
+`src/level_polys.h`. `LevelVerified()` / `WarnIfUnverified()` make every run, optimize and beam on such a
+level print a warning. README "Level status" lists the open items per level. AS3 quirks found and
+reproduced: uninitialised direction ints (Level 9 `killRollBall`/`greenPlatform`, Level 16 `killRollBall2`,
+Level 17 `movePlatform2`), Level 17 `movePlatform1` direction set twice, Level 16 `wrongWay` resetting
+`lastCheckNum` (alive or dead), Level 15 `luk` only at `lastCheckNum == 0`, no-op repeated `DestroyBody`,
+and Level 11's `levelAim` being a **dynamic body** (`Sim::aimBody`, `Sim::GoalTarget`).
+
+**To verify (per level, in this order: 13, 16, 17, then 9, 10, 11, 15):**
+1. The user records the standard set (docs/STATS_LOGGING.md 6.0: idle, each death kind, checkpoint-1
+   restart, a win) plus an E9level/E9a/E10 dump; Level 11 also needs a run that pushes the flag.
+2. `./rbsim verify <log>` (`diverged: 0`) and `./rbsim calib <dump>` (`CALIB OK`).
+3. Replace the provisional entries of `kTimelineRotations` (measured = false; `atan2` of the placement
+   matrix) with Flash's values: static clips from E9a (Level 10 `afterJump`, Level 11 `triangle`),
+   dynamic clips from the log's tick-0 angle (unique double: Level 9 cranks, Level 13 `kingStar1`,
+   Level 16 `axe1`, the Level 11 train line: all 36 clips share one matrix, so one measurement fits).
+4. Spike calibration for rotated/scaled Shipik rows (Levels 17, 9, 10, 11, 15; the E8c method of
+   docs/STATS_LOGGING.md), `wrongWay` (Level 16) and Level 11's turned-flag box rounding.
+5. Known simplifications to check against logs: Level 11 does not step the world after death while
+   Flash keeps stepping it (matters only for a flag still moving at death); Level 15 `killLine` is
+   modelled as its static box shifted by the patrol (it is a PlaceObject3 clip: check E10).
+6. When a level is verified: add it to `LevelVerified()`, move it in the README tables, add its logs'
+   numbers to "Verification status".
+
+Observed (unverified) idle behaviour, a useful first comparison: with no input the ball dies on Level 9
+(frame 130, rolls into spikes), Level 13 (145, the loose star hits it) and Level 17 (78, rolls off the
+crown spike it starts on); it survives 600 frames on Levels 10, 11, 15 and 16.
+
+**Search-side next steps** (for whoever takes the bruteforcer): better beam score (moving platforms /
+timing, calibrate with `--explain` against L2 186, L4 274, L8 405); exhaustive window proofs and endgame
+proofs; physics profiling for contact-heavy levels (must stay bit-exact).
 
 ## 9. Environment setup (fresh sandbox)
 
 ```bash
 git clone https://github.com/Theme25/project-unnamed.git && cd project-unnamed
-make && ./rbsim test                  # expect ALL PASSED (55)
+make && ./rbsim test                  # expect ALL PASSED (62)
 
 # Windows cross build + Wine (to check the Windows build)
 mv /etc/apt/sources.list.d/nodesource* /tmp/ 2>/dev/null   # a broken repo blocks apt-get update
 apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq mingw-w64 wine64
 make windows && WINEDEBUG=-all wine rbsim.exe test
 
-# JPEXS FFDec (decompiler); Java is preinstalled
+# JPEXS FFDec (decompiler); Java is preinstalled. Regenerate level_polys.h after exporting the scripts:
+#   python3 tools/gen_level_polys.py ~/extracted/practice/scripts/Levels > src/level_polys.h
 mkdir -p ~/tools/ffdec && cd ~/tools/ffdec
 curl -sL -o ffdec.zip https://github.com/jindrapetrik/jpexs-decompiler/releases/download/version15.1.1/ffdec_15.1.1.zip && unzip -q ffdec.zip
 java -jar ffdec.jar -cli -export script ~/extracted/practice /mnt/user-data/uploads/Red_Ball_-_Practice_Hack.swf

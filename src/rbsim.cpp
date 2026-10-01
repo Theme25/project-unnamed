@@ -105,6 +105,7 @@ static int CmdLog(int argc, char** argv) {
         return 2;
     }
     LevelTemplate tpl(level);
+    WarnIfUnverified(level);
     auto sim = std::make_unique<Sim>();
     sim->Load(&tpl, checkpoint);
     std::printf("# inputs\t%s\n", inputs.c_str());
@@ -134,6 +135,7 @@ static int CmdRun(int argc, char** argv) {
         return 2;
     }
     LevelTemplate tpl(level);
+    WarnIfUnverified(level);
     auto sim = std::make_unique<Sim>();
     sim->Load(&tpl, checkpoint);
     std::vector<uint8_t> in = DecodeInputs(inputs);
@@ -584,6 +586,74 @@ static int CmdTest() {
         a->Load(&t7, 0, false);
         const bool backAfterFresh = a->world.bodies[a->lvBody[5]].inWorld && !a->staticFlag[0];
         check(wallThere && goneAfterR && backAfterFresh, "level 7 redCheckLevel: survives a checkpoint restart, cleared by a fresh load");
+    }
+    // 18b. Levels 9, 10, 11, 13, 15, 16, 17: scripted from the AS3, NOT yet checked against Flash logs
+    {
+        bool idleOk = true, detOk = true;
+        for (int lv : {9, 10, 11, 13, 15, 16, 17}) {
+            LevelTemplate t(lv);
+            auto a = std::make_unique<Sim>(), b = std::make_unique<Sim>(), c = std::make_unique<Sim>();
+            a->Load(&t);
+            b->Load(&t);
+            c->Load(&t);
+            for (int f = 0; f < 600; ++f) {
+                a->Tick(IN_NONE);
+                const uint8_t in = f % 90 < 45 ? IN_R : IN_NONE;  // a wandering run (may die: only determinism is checked)
+                b->Tick(in);
+                c->Tick(in);
+            }
+            const FrameStats x = a->Stats(0), y = b->Stats(0), z = c->Stats(0);
+            // Informational only (no Flash log yet): an idle ball dies on levels 9 (spike rows below the start slope),
+            // 13 (the loose heavy star rolls into it) and 17 (the start sits on a crown spike that slopes away).
+            if (!a->playerAlive) std::printf("       note: level %d idle ball dies at frame %d (unverified)\n", lv, a->deathFrame);
+            if (!std::isfinite(x.px) || !std::isfinite(x.py) || !std::isfinite(y.px) || !std::isfinite(y.py)) idleOk = false;
+            if (std::memcmp(&y.px, &z.px, 8) || std::memcmp(&y.py, &z.py, 8) || y.contactCount != z.contactCount) detOk = false;
+        }
+        check(idleOk, "levels 9, 10, 11, 13, 15, 16, 17: 600 idle ticks run, positions finite");
+        check(detOk, "levels 9, 10, 11, 13, 15, 16, 17: two runs are bit-identical");
+
+        // uninitialised AS3 ints are 0: the Level 9 roll ball (x = 972, inside 740..1200) keeps direction 0 and no spin
+        LevelTemplate t9(9);
+        auto s9 = std::make_unique<Sim>();
+        s9->Load(&t9);
+        for (int f = 0; f < 30; ++f) s9->Tick(IN_NONE);
+        const int32_t roll = s9->lvBody[2];
+        check(s9->lvInt[1] == 0 && s9->world.bodies[roll].angularVelocity == 0, "level 9: killRollBall direction stays 0 inside its range (spin zeroed each frame)");
+
+        // Level 17: movePlatform1 direction is set twice (ends -1); movePlatform2's direction starts 0
+        LevelTemplate t17(17);
+        auto s17 = std::make_unique<Sim>();
+        s17->Load(&t17);
+        check(s17->lvInt[0] == -1 && s17->lvInt[1] == 0, "level 17: movePlatform1 direction -1 (set twice), movePlatform2 direction 0 (uninitialised)");
+
+        // Level 13 greenCheckLevel is static: the barrier is not built after a checkpoint restart, back after a fresh load
+        LevelTemplate t13(13);
+        auto s13 = std::make_unique<Sim>();
+        s13->Load(&t13);
+        const bool barrierThere = s13->world.bodies[s13->lvBody[3]].inWorld;
+        s13->staticFlag[1] = true;
+        s13->Load(&t13, 0, true);
+        const bool barrierGone = !s13->world.bodies[s13->lvBody[3]].inWorld;
+        s13->Load(&t13, 0, false);
+        check(barrierThere && barrierGone && s13->world.bodies[s13->lvBody[3]].inWorld && !s13->staticFlag[1],
+              "level 13 greenCheckLevel: survives a checkpoint restart, cleared by a fresh load");
+
+        // Level 15: the loose plank "luk" exists only from checkpoint 0 (one body fewer from checkpoint 1)
+        LevelTemplate t15(15);
+        auto s15a = std::make_unique<Sim>(), s15b = std::make_unique<Sim>();
+        s15a->Load(&t15, 0);
+        s15b->Load(&t15, 1);
+        check(s15a->world.bodyCount == s15b->world.bodyCount + 1, "level 15: luk is built only when lastCheckNum == 0");
+
+        // Level 11: the goal is a dynamic body; its hit box moves with the sprite
+        LevelTemplate t11(11);
+        auto s11 = std::make_unique<Sim>();
+        s11->Load(&t11);
+        const DisplayObj g0 = s11->GoalTarget();
+        for (int f = 0; f < 120; ++f) s11->Tick(IN_NONE);
+        const DisplayObj g1 = s11->GoalTarget();
+        check(s11->aimBody >= 0 && g0.x0 == t11.aim->x0 && g0.y0 == t11.aim->y0 && (g1.x0 != g0.x0 || g1.y0 != g0.y0),
+              "level 11: levelAim follows its dynamic body (hit box starts at the placement, then moves)");
     }
     // 19. Compact snapshots (src/snapshot.h): byte-exact round trip, identical continuation, portable base
     {

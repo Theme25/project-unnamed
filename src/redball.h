@@ -86,6 +86,11 @@ struct LevelScript {
     void (*deadUpdate)(Sim&) = nullptr;
 };
 const LevelScript& GetLevelScript(int32_t id);
+// True for the levels whose scripts reproduce Flash logs bit-for-bit (README "Verification status"). The others are
+// ported from the AS3 only: runs, searches and routes on them must be re-checked in Flash.
+bool LevelVerified(int32_t id);
+// Prints a one-line warning on stderr when the level is scripted but not verified (run/log/optimize/beam).
+void WarnIfUnverified(int32_t id);
 
 // Immutable per-level data shared by every simulation instance (and snapshot).
 // Geometry is registered on first construction and reused afterwards.
@@ -124,7 +129,7 @@ struct FrameStats {
     bool timeStop;             // Level.isTimeStop (win)
 };
 
-constexpr int32_t LV_VARS = 8;
+constexpr int32_t LV_VARS = 16;
 
 // Complete, copyable game state (World + game-side fields).
 struct Sim {
@@ -161,6 +166,9 @@ struct Sim {
     // per-level script state (Level_N private fields)
     int32_t lvBody[LV_VARS];
     int32_t lvInt[LV_VARS];
+    // Level 11 only: levelAim is a dynamic body (Level_11 calls CreateBody("levelAim", ...)), so the goal's hit box
+    // follows its sprite (x, y, rotation). -1: the goal is the static clip from display_data.h.
+    int32_t aimBody = -1;
     // last-frame diagnostics
     bool probeC = false, probeL = false, probeR = false;
 
@@ -184,6 +192,7 @@ struct Sim {
     int32_t createAtSprite = -1;  // >= 0: next CreateBody uses this body's sprite state (AS3 CreateBody on a moved clip)
     bool BallHitsTarget(const DisplayObj& o);  // hitTestObject, alive or dead (death-warp rule)
     double TargetOverlap(const DisplayObj& o) const;  // min(x, y) overlap of the boxes in twips (< 0: apart)
+    DisplayObj GoalTarget();  // levelAim's current hit box (moves with its body when aimBody >= 0)
     double SpriteX(int32_t body) const { return spriteX[body]; }
     double SpriteY(int32_t body) const { return spriteY[body]; }
 
