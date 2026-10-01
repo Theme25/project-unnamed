@@ -19,6 +19,7 @@ using namespace rb;
 int CmdVerify(int argc, char** argv);
 int CmdCalib(int argc, char** argv);
 int CmdOptimize(int argc, char** argv);
+int CmdBeam(int argc, char** argv);
 static double SpriteCoordForTest(double v) { return (double)as3_toInt32(v * 20) / 20.0; }
 
 static uint64_t bits(double d) {
@@ -685,7 +686,7 @@ int main(int argc, char** argv) {
             else { std::fprintf(stderr, "--trig intel|glibc\n"); return 2; }
         }
     if (argc < 2) {
-        std::fprintf(stderr, "usage: rbsim run|log|test|bench|verify|calib|optimize [options]\n");
+        std::fprintf(stderr, "usage: rbsim run|log|test|bench|verify|calib|optimize|beam [options]\n");
         return 2;
     }
     if (!std::strcmp(argv[1], "run")) return CmdRun(argc, argv);
@@ -695,6 +696,7 @@ int main(int argc, char** argv) {
     if (!std::strcmp(argv[1], "verify")) return CmdVerify(argc, argv);
     if (!std::strcmp(argv[1], "calib")) return CmdCalib(argc, argv);
     if (!std::strcmp(argv[1], "optimize")) return CmdOptimize(argc, argv);
+    if (!std::strcmp(argv[1], "beam")) return CmdBeam(argc, argv);
     std::fprintf(stderr, "unknown command %s\n", argv[1]);
     return 2;
 }

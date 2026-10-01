@@ -14,7 +14,7 @@ ifeq ($(OS),Windows_NT)
   EXE      := .exe
   CXXFLAGS += $(WINFLAGS)
 endif
-SRC = src/libm_intel.S src/b2collision.cpp src/b2world.cpp src/b2joints.cpp src/redball.cpp src/rbsim.cpp src/verify.cpp src/calib.cpp src/search.cpp src/snapshot.cpp
+SRC = src/libm_intel.S src/b2collision.cpp src/b2world.cpp src/b2joints.cpp src/redball.cpp src/rbsim.cpp src/verify.cpp src/calib.cpp src/search.cpp src/snapshot.cpp src/beam.cpp
 HDR = src/b2math.h src/b2world.h src/redball.h src/levels_data.h src/display_data.h src/flash_sintab.h src/snapshot.h
 
 rbsim$(EXE): $(SRC) $(HDR)

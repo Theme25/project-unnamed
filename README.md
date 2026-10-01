@@ -12,7 +12,7 @@ Player 11.4.402.287** with the Practice Hack, `MATHSPIKES = 1`, spike glitch on 
 |---|---|
 | levels bit-exact against Flash logs | **1, 2, 3, 4, 5, 6, 7, 8, 12, 14** (10 of 17) |
 | levels not yet scripted | 9, 10, 11, 13, 15, 16, 17 |
-| search | `rbsim optimize` (local search from a known route); compact snapshots for the planned beam search |
+| search | `rbsim beam` (route finding from any start, resumable), `rbsim optimize` (improves a known route) |
 
 ## Build & run
 
@@ -26,7 +26,8 @@ make                 # see "Build flags" below; do not change them
 ./rbsim bench        # ~0.8-0.9M frames/s/thread on Level 1 incl. full-state restores
 ./rbsim verify rb1_stats.tsv [--verbose N] [--ignore sr,...] [--trig intel|glibc]
 ./rbsim calib rb1_calib.tsv                # checks a calibration dump (docs/STATS_LOGGING.md)
-./rbsim optimize --level N --inputs RLE    # local route search, see below
+./rbsim optimize --level N --inputs RLE    # improve a known route, see below
+./rbsim beam --level N --memory 10G        # find a route from any start, see below
 ```
 
 `run` prints position, velocity, angle, angular velocity, ground probes (L/C/R), contact count,
@@ -99,6 +100,62 @@ about 60,000 on Level 8 (the car adds up to 53 contacts). Tested by slowing know
 Level 8 424 -> 405 frames in 60 s, Level 2 200 -> 189 in 30 s (one thread). The team's
 Level 2, 4 and 8 TASes are not improved by short runs.
 
+## Finding routes from any start: `rbsim beam`
+
+```
+rbsim beam --level N [--checkpoint C] [--prefix RLE] [--memory 10G | --width W] [--threads N]
+           [--max-frames F] [--diversity K] [--lookahead T] [--select mixed|score|coverage]
+           [--seed-route RLE] [--explain RLE] [--dir DIR] [--save-every MIN] [--resume] [--gless]
+```
+
+A breadth-first beam search: starting from the level start, a checkpoint, or the state after
+`--prefix` inputs, it keeps up to W states after every frame, expanding each with all 8 inputs.
+It does not need a known route.
+
+- **Score:** distance to the flag along the level's static geometry (a navigation grid built once
+  from the start state), measured from where the ball would be `--lookahead` frames ahead at its
+  current velocity (default 6). Moving bodies are not part of the grid.
+- **Per frame:** children that collect the flag are solutions; children that die are played
+  through the death-warp window at once and kept only if they warp to the flag in time for a
+  real run. Exact duplicate states are merged.
+- **Selection** (`--select`): `score` keeps the best scores (at most `--diversity`, default 16, per
+  region/velocity bucket); `coverage` keeps the best state of every bucket first, so lines that
+  are behind now but ahead later (waiting for a crusher, timing a platform) survive; `mixed`
+  (default) fills half the beam each way.
+- **`--seed-route RLE`:** a known route whose states are kept in the beam every frame, so the
+  result can only match or beat it while the beam explores around and away from it.
+- **`--explain RLE`:** prints the score a known route gets every 10 frames (no search); compare it
+  with the beam's progress lines to see where a beam would have dropped that route.
+- **Width:** `--memory` (default 4 GB) sets W from the measured state sizes, re-checked every
+  frame; `--width` fixes it instead.
+- **Stops** when no state can reach the flag before the best solution found, at `--max-frames`
+  (default 3000), or if the beam empties. The route is rebuilt from per-frame link files and
+  re-checked by a replay from scratch before it is printed.
+- **Long runs:** the beam is saved to `DIR/beam.bin` every `--save-every` minutes (default 10)
+  and at the end; `--resume` (same `--level/--checkpoint/--prefix/--gless`) continues an
+  interrupted run. `DIR` defaults to `beam_L<level>`.
+- **Deterministic:** the result does not depend on the thread count, on interruptions (a run
+  killed with `kill -9` and resumed prints the same route), or on the OS (the Windows build
+  prints the same route). Checked on Level 2.
+
+Results so far (one core, small widths; the TASes are 186 on Level 2 and 274 on Level 4):
+
+| run | result |
+|---|---|
+| Level 2, width 400-20,000 | flag on frame 191-215 (varies with width and tie-breaking) |
+| Level 2, width 2,000, `--seed-route` TAS | frame 186 (TAS matched, deeper flag overlap) |
+| Level 4, width 2,000, `score` | beam dies out at frame 126 (all states walk into the crushers) |
+| Level 4, width 2,000, `coverage` | **finds a death warp by itself**: flag on frame 371 |
+| Level 4, width 2,000, `mixed` | death warp, flag on frame 353 |
+
+A beam search finds strong routes but proves nothing, and its quality depends mostly on the
+score: on Level 2 a 20,000-wide beam did no better than a 2,000-wide one. `--explain` showed
+why: the TAS line is *behind* the beam's best states mid-level and only overtakes them near the
+end.
+
+Memory per state (average along real routes): Level 2 ~1.4 KB, Level 4 ~3.3 KB, Level 12
+~6 KB, Level 8 ~9 KB. A 1M-wide beam is ~3 GB on Level 2 and ~20 GB on Level 8.
+
 **Compact snapshots** (`src/snapshot.h`): a state is stored as the 8-byte blocks that differ from
 the freshly loaded level (average ~6 KB, worst ~17 KB, vs 152 KB for a full `Sim`). Restoring
 copies the base and patches the blocks back, so it is byte-identical by construction; encodings
@@ -120,6 +177,7 @@ possible. Encode ~10 us, decode ~5 us.
 | `src/flash_sintab.h` | Flash's display-matrix sine table (`tools/gen_flash_sintab.py`) |
 | `src/snapshot.cpp` / `snapshot.h` | compact, portable, byte-exact snapshots |
 | `src/search.cpp` | `rbsim optimize` |
+| `src/beam.cpp` | `rbsim beam` (navigation field, beam, links, save/resume) |
 | `src/verify.cpp` | replays stats logs and compares every field bit-for-bit |
 | `src/calib.cpp` | checks calibration dumps (trig, bounds, matrices, spikes, placements) |
 | `src/rbsim.cpp` | CLI, self-tests, benchmark |
@@ -248,7 +306,7 @@ Joint code: every field write in all 48 joint methods was cross-checked against 
 
 ## Roadmap
 
-1. Search: resumable beam search from any start (level start, checkpoint, mid-route frame or a
-   logged state); resumable, splittable window proofs; endgame proofs. Physics profiling for
-   contact-heavy levels.
+1. Search: a better beam score (account for moving platforms and timing; calibrate against known
+   TASes with `--explain`); resumable, splittable window proofs; endgame proofs; physics profiling
+   for contact-heavy levels.
 2. Levels 13, 16, then 17, then 9, 10, 11, 15 (rotated/scaled spike calibration first).

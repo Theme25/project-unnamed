@@ -64,7 +64,23 @@ hack. Frame counts are converted to seconds at 31 fps.
 
 Save the output to a file by adding `> result.txt` at the end of the command.
 
-## 3. Checking a recording against the simulator
+## 3. Finding a route without a known one (beam search)
+
+```
+rbsim.exe beam --level 4 --memory 10G
+```
+
+Keeps the best states after every frame and expands them with all inputs, starting from the
+level start (`--checkpoint C`: a checkpoint; `--prefix "..."`: after some inputs). It prints a
+progress line every few seconds and the route at the end. `--memory` is the RAM it may use
+(default 4G); leave room for Windows. `--seed-route "..."` keeps a known route in the beam so the
+result can only match or beat it.
+
+Long runs save progress to a folder (`beam_L4` here) every 10 minutes. If the PC restarts or
+you press `Ctrl+C`, run the same command again with `--resume` added to continue. The result is
+the same as an uninterrupted run, on any PC.
+
+## 4. Checking a recording against the simulator
 
 If you recorded a stats log or calibration dump with the logging mod (`docs/STATS_LOGGING.md`):
 
@@ -79,7 +95,7 @@ simulator matches Flash exactly. `calib` ends with `CALIB OK` or `CALIB MISMATCH
 
 If a path contains spaces, put it in quotes: `rbsim.exe verify "C:\My Logs\run 1.tsv"`.
 
-## 4. Other commands
+## 5. Other commands
 
 ```
 rbsim.exe run --level 2 --inputs "d18e1w1n1w5" --every 10
