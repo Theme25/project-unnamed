@@ -344,7 +344,7 @@ Known level-specific notes:
    - The camera scaling (`scaleTimer`) could matter through twip rounding.
    - Spikes use `hitTestPoint` shape tests on `Shipik` instances.
    - Needed so the search can detect a finish without Flash.
-4. **Search:**
+4. **Search:** `rbsim optimize` (src/search.cpp) exists: local search from a known route, multi-threaded, flag frame + flag overlap score, death-warp rule. Still to do:
    - Shrink the snapshot (now ~152 KB; copy only the used prefixes of arrays).
    - Work-stealing thread pool, prefix sharing, pruning (e.g. the practice
      build's `distToGoal`).

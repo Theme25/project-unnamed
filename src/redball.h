@@ -146,6 +146,7 @@ struct Sim {
     int32_t switchFrame[4] = {1, 1, 1, 1};  // level switch clips (blueCheck/greenCheck/redCheck) currentFrame
     int32_t deathFrame = -1;           // frameCount when PlayerDie ran (-1: alive)
     int32_t winFrame = -1;             // frameCount of the Update that called PlayerWin
+    double winMargin = 0;              // overlap depth (twips, min of x/y overlap) of ball and flag at the win
     bool gless = false;                 // Game.isGless: camera steps at the end of Update, dp = 0
     int32_t cpFrame[5] = {1, 1, 1, 1, 1};  // checkPointN.currentFrame (1 = armed, 5 = already collected)
     int32_t frameCount = 0;
@@ -180,6 +181,7 @@ struct Sim {
     int32_t LoggedFlags() const;
     int32_t createAtSprite = -1;  // >= 0: next CreateBody uses this body's sprite state (AS3 CreateBody on a moved clip)
     bool BallHitsTarget(const DisplayObj& o);  // hitTestObject, alive or dead (death-warp rule)
+    double TargetOverlap(const DisplayObj& o) const;  // min(x, y) overlap of the boxes in twips (< 0: apart)
     double SpriteX(int32_t body) const { return spriteX[body]; }
     double SpriteY(int32_t body) const { return spriteY[body]; }
 

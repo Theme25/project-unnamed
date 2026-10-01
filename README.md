@@ -5,6 +5,39 @@ A C++17 port of the Box2DFlash 2.0.x engine embedded in *Red Ball 1*
 the game-side control logic, built as the foundation for brute-force route
 search.
 
+## Searching for faster routes: `rbsim optimize`
+
+```
+rbsim optimize --level N --inputs RLE [--checkpoint C] [--time SEC] [--threads N]
+               [--seed S] [--sideways P] [--gless] [--quiet]
+```
+
+Starts from an existing route (one attempt, no `R`) and searches for edits that collect the flag
+earlier. Each thread repeatedly applies a random edit to the current best route (flip a frame,
+move a run boundary by 1-3 frames, delete or insert a frame, overwrite a 2-8 frame block, or two
+of these), replays it from a cached snapshot taken just before the first changed frame, and
+stops as soon as it can no longer match the best.
+
+- **Score:** the flag frame; ties are broken by how deep the ball is inside the flag's box on that
+  frame (twips; deeper = closer to the next frame). Equal routes are also accepted sideways
+  with probability `--sideways` (default 0.05) to cross plateaus.
+- **Death warps** count only if usable in a real run (flag no later than death + 38 frames);
+  the output gives the pause/unpause frames.
+- **Output:** each improvement as it is found, then the best route as an RLE string. If any hit
+  test on the route was within one matrix unit of flipping, it says so: check that route in Flash.
+- Defaults: mathspikes 1, spike glitch on (`--gless` for glitchless), all hardware threads,
+  30 s. Results with several threads are not reproducible run to run (threads race); a single
+  thread with a fixed `--seed` is.
+
+Throughput depends on the level: one thread simulates about 450,000 frames/s on Level 2 and
+about 60,000 on Level 8 (the car adds up to 53 contacts). Tested by slowing known routes:
+Level 8 424 -> 405 frames in 60 s, Level 2 200 -> 189 in 30 s (one thread). The team's
+Level 2, 4 and 8 TASes are not improved by short runs.
+
+**Build flags:** use the Makefile's flags (`-O2 -ffp-contract=off -fno-fast-math
+-fexcess-precision=standard`). `-O3 -march=native` was tried: it breaks bit-exactness on
+Levels 3, 8 and 12 and is not faster. Never add fast-math, FMA contraction or `-march` flags.
+
 ## Build & run
 
 ```

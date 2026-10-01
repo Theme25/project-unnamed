@@ -4,8 +4,8 @@
 #  x86-64 uses SSE2 scalar doubles (no x87 extended precision)
 CXX      ?= g++
 CXXFLAGS ?= -O2 -g
-CXXFLAGS += -std=c++17 -Wall -Wextra -ffp-contract=off -fno-fast-math -fexcess-precision=standard
-SRC = src/libm_intel.S src/b2collision.cpp src/b2world.cpp src/b2joints.cpp src/redball.cpp src/rbsim.cpp src/verify.cpp src/calib.cpp
+CXXFLAGS += -pthread -std=c++17 -Wall -Wextra -ffp-contract=off -fno-fast-math -fexcess-precision=standard
+SRC = src/libm_intel.S src/b2collision.cpp src/b2world.cpp src/b2joints.cpp src/redball.cpp src/rbsim.cpp src/verify.cpp src/calib.cpp src/search.cpp
 HDR = src/b2math.h src/b2world.h src/redball.h src/levels_data.h src/display_data.h src/flash_sintab.h
 
 rbsim: $(SRC) $(HDR)

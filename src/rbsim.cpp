@@ -17,6 +17,7 @@ using namespace rb;
 
 int CmdVerify(int argc, char** argv);
 int CmdCalib(int argc, char** argv);
+int CmdOptimize(int argc, char** argv);
 static double SpriteCoordForTest(double v) { return (double)as3_toInt32(v * 20) / 20.0; }
 
 static uint64_t bits(double d) {
@@ -629,6 +630,7 @@ int main(int argc, char** argv) {
     if (!std::strcmp(argv[1], "bench")) return CmdBench(argc, argv);
     if (!std::strcmp(argv[1], "verify")) return CmdVerify(argc, argv);
     if (!std::strcmp(argv[1], "calib")) return CmdCalib(argc, argv);
+    if (!std::strcmp(argv[1], "optimize")) return CmdOptimize(argc, argv);
     std::fprintf(stderr, "unknown command %s\n", argv[1]);
     return 2;
 }

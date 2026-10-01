@@ -1092,6 +1092,7 @@ void Sim::Restart() {
     dpX = dpY = 0;
     deadTicks = 0;
     deathFrame = winFrame = -1;
+    winMargin = 0;
 
     // --- Level_N() constructor
     script.construct(*this);
@@ -1225,9 +1226,20 @@ bool Sim::BallHitsTarget(const DisplayObj& o) {
     return RectsHit(BallBounds(sx, sy, rw, 0), r);
 }
 
+double Sim::TargetOverlap(const DisplayObj& o) const {
+    const double ox = playerAlive ? 0 : camX * 20, oy = playerAlive ? 0 : camY * 20;
+    const Rect b = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], 0);
+    const double wx = std::fmin(b.x1, o.x1 + ox) - std::fmax(b.x0, o.x0 + ox);
+    const double wy = std::fmin(b.y1, o.y1 + oy) - std::fmax(b.y0, o.y0 + oy);
+    return std::fmin(wx, wy);
+}
+
 // Level.Update after the camera tween: levelAim test, spikes, checkpoints (in this order).
 void Sim::DisplayUpdate() {
-    if (tpl->aim && aimFrame == 1 && BallHitsTarget(*tpl->aim)) PlayerWin();  // no IsLive() guard
+    if (tpl->aim && aimFrame == 1 && BallHitsTarget(*tpl->aim)) {  // no IsLive() guard
+        winMargin = TargetOverlap(*tpl->aim);
+        PlayerWin();
+    }
     // Spikes: any Shipik/Ships10 hit by a control point kills a live ball (PlayerDie is guarded here).
     if (playerAlive) {
         for (int32_t i = 0; i < tpl->spikeCount; ++i) {
