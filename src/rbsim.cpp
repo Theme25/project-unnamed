@@ -558,6 +558,30 @@ static int CmdTest() {
             }
         check(ok, "spike glitch on/off: all four team cases (dies/lives) reproduced");
     }
+    // 18. Levels 5, 6, 7, 12, 14 (scripts; awaiting Flash logs)
+    {
+        bool ok = true;
+        for (int lv : {5, 6, 7, 12, 14}) {
+            LevelTemplate t(lv);
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);
+            for (int f = 0; f < 600; ++f) s->Tick(IN_NONE);
+            if (!s->playerAlive || s->isTimeStop) ok = false;
+        }
+        check(ok, "levels 5, 6, 7, 12, 14: idle 600 ticks, ball alive");
+        // Level_7.redCheckLevel: static; a checkpoint restart (keepStatics) builds the level without the red wall
+        LevelTemplate t7(7);
+        auto a = std::make_unique<Sim>();
+        a->Load(&t7);
+        const int32_t wall = a->lvBody[5];
+        const bool wallThere = a->world.bodies[wall].inWorld;
+        a->staticFlag[0] = true;  // as if the red switch had been hit
+        a->Load(&t7, 0, true);
+        const bool goneAfterR = !a->world.bodies[a->lvBody[5]].inWorld;
+        a->Load(&t7, 0, false);
+        const bool backAfterFresh = a->world.bodies[a->lvBody[5]].inWorld && !a->staticFlag[0];
+        check(wallThere && goneAfterR && backAfterFresh, "level 7 redCheckLevel: survives a checkpoint restart, cleared by a fresh load");
+    }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }

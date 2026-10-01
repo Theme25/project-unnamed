@@ -379,6 +379,15 @@ struct World {
     void ApplyImpulse(int32_t body, const Vec2& impulse, const Vec2& point);
     bool IsConnected(int32_t body, int32_t other) const;
     void SetLinearVelocity(int32_t body, const Vec2& v) { bodies[body].linearVelocity = v; }  // no wake-up (AS3)
+    void SetAngularVelocity(int32_t body, double w) { bodies[body].angularVelocity = w; }    // no wake-up (AS3)
+    void SetMaxMotorForce(int32_t joint, double f) { joints[joint].maxMotorForce = f; }       // b2PrismaticJoint
+    // b2Shape.SetFilterData(f) + Refilter for every shape of a body, in GetShapeList() order
+    void SetBodyFilter(int32_t body, const FilterData& f) {
+        for (int32_t sh = bodies[body].shapeList; sh != -1; sh = shapes[sh].next) {
+            shapes[sh].filter = f;
+            Refilter(sh);
+        }
+    }
     Vec2 GetLocalPoint(int32_t body, const Vec2& worldPoint) const { return b2MulXT(bodies[body].xf, worldPoint); }
     Vec2 GetLocalVector(int32_t body, const Vec2& v) const {  // b2MulTMV
         const Mat22& R = bodies[body].xf.R;

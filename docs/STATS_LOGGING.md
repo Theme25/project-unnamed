@@ -39,6 +39,49 @@ against Flash.
 
 ## 3. What to log
 
+### 3.0 Logging for every level (current format; read this first)
+
+The mod must log the same way on **every level**. Nothing below may depend on the level id,
+and the calibration hotkey works on whatever level is loaded. The older sections (3.1 to 3.10)
+explain where each piece came from.
+
+**Per-frame line** (after every `m_currLevel.Update`), tab separated, in this order:
+1. the 21 standard columns of §3.1;
+2. one 7-column group `name px py a vx vy w` for **every** non-static body other than the
+   player whose `m_userData` is a `DisplayObject` (§3.4). This covers platforms, crushers,
+   spinners, cars, boxes and re-created drop platforms. Debris (`playerDiePart*`) may appear;
+3. the trailing block, **v2**, 8 fields:
+   `hex(ball.transform.matrix.a) hex(ball.transform.matrix.b) hex(L.x) hex(L.y) hex(L.dp[0]) hex(L.dp[1]) lastCheckNum flags`.
+   `lastCheckNum` is `Level.lastCheckNum` (decimal). `flags` is a decimal bitmask:
+
+   | bit | meaning |
+   |---|---|
+   | 0 | `Level_7.redCheckLevel` |
+   | 1 | `Level_13.greenCheckLevel` |
+   | 2 | `Level_16.isStrelka` |
+   | 8 | the level has a `blueCheck` clip and its `currentFrame != 1` |
+   | 9 | same for `greenCheck` |
+   | 10 | same for `redCheck` |
+
+   Use 0 for anything the current level does not have. (The older v1 block, without the last
+   two fields, is still accepted by `rbsim verify`.)
+
+**Event lines:** `LEVEL <id> <lastCheckNum>` after every `SetLevel` (followed by the tick-0 line),
+and `R` for every input-code-8 restart (§3.2).
+
+**Calibration hotkey (any level).** Write `E9level <id>` first, then:
+- **E9a:** one row per child `o` of `L` (in `getChildAt` order):
+  `E9a o.name` + hex of `o.x o.y o.rotation o.scaleX o.scaleY` + `o.transform.matrix` (a b c d).
+  This gives the timeline rotation of static rotated bodies, which the logs cannot show.
+- **E10:** for every **named** child: `E10 o.name` + hex of `o.getBounds(L)` (x y width height).
+  This checks every goal, checkpoint, switch and spike bounding box `rbsim` uses.
+- The level-independent sections (T/X/Y/R, E1-E7) only need to run once per Flash Player
+  version. E8 and E9b are not needed again.
+
+**Runs per level** (§6): idle, every kind of death the level has, a checkpoint-1 restart, a win
+or the current TAS, plus the level-specific cases listed there. Record with **mathspikes 1** and
+**isGless off** unless a run is about the spike glitch (then say which).
+
 ### 3.1 Per frame — one line immediately after every `m_currLevel.Update(...)` call
 
 | # | Field | AS3 expression (inside `Game`) | Why |
@@ -270,6 +313,8 @@ columns): idle `n600`; a run that dies on the first spike row; one that falls of
 
 ### 3.9 Level 8: rotation getter of timeline clips, and Level 8 runs
 
+(E9a now runs on every level: §3.0.)
+
 **Result (rb1_calib_l8.tsv, FP 11.4):** all 32 named Level 8 placements match the SWF data.
 For matrices set from code the getter is `atan2(b, a) * 180 / Math.PI` on the stored entries
 (E9b 10,000/10,000 within 1e-12 deg, 7,824 bit-exact). For **timeline** clips it is not:
@@ -499,7 +544,34 @@ calls `dbgExport()`, and one runs the §3.3 calibration dumps and saves them as
 `rb1_calib.tsv`. The game already uses `FileReference` for exporting strings,
 so this pattern is proven to work in this build.
 
-## 6. Test runs to record (Level 1, then your real TAS)
+## 6. Test runs to record
+
+### 6.0 Standard set for every level
+
+| name | start | input | exercises |
+|---|---|---|---|
+| idle | checkpoint 0 | `n900` | construction, every moving part free-running |
+| deaths | checkpoint 0 | one run per kind of death the level has (fall, spikes, each kill body) | death tick, post-death camera |
+| cp1 | reach checkpoint 1, then `R` | any | `LEVEL <id> 1`, `lastCheckNum`, static flags |
+| win | checkpoint 0 | the level's TAS (or any win) | the whole route, win frame |
+
+One calibration dump per level (§3.0: `E9level`, E9a, E10), loaded and paused.
+
+### 6.1 Level-specific cases (levels 5, 6, 7, 12, 14)
+
+| level | case | why |
+|---|---|---|
+| 5 | press the blue switch, then the green switch; let the ball roll on the jump platform and against both balls | `DestroyBody` of the barrier/platform, circle bodies |
+| 5 | die (fall) right after a switch is near the camera-shifted ball | switches use `hitTestObject` with no `IsLive()` guard: dead-ball rule |
+| 6 | stand on each drop platform until it falls; touch it again while it falls | destroy + re-create at the clip's current position |
+| 6 | touch the spinner and the three back balls | motorised revolute joints |
+| 7 | ride both jump platforms (stay on them for a while) | prismatic limit + motor, `SetMaxMotorForce` by contact |
+| 7 | hit the red switch, then `R` from checkpoint 1 | `Level_7.redCheckLevel` survives the restart (flags bit 0) |
+| 7 | swing platform, box pile, touch the spinning star (death) | distance joints, `SetAngularVelocity` |
+| 12 | let the kill star patrol; touch it (death); ride the roller cart | collision group -1, prismatic patrol, distance-joint cart |
+| 14 | blue switch, drop platform, catapult, pass x = 1410 (kill ball impulse) | revolute catapult, `ApplyImpulse`, re-created platform |
+
+### 6.2 Level 1 basics (first logs, kept for reference)
 
 Start each run from a **fresh Level 1** with `lastCheckNum = 0`, played back
 through the instant `LoadState` path. Export one file per run.
@@ -533,8 +605,9 @@ Also export the calibration dump (§3.3) once.
 
 ## 7. What to hand back
 
-- `rb1_stats_T1.tsv` … `rb1_stats_T8.tsv`: tab-separated, one header line,
-  then `LEVEL`/`R` event lines and frame lines.
+- `rb1_stats_*.tsv`: tab-separated, one header line (`# inputs <RLE>`), then `LEVEL`/`R`
+  event lines and frame lines in the §3.0 format.
+- `rb1_calib_*.tsv` per level: `E9level`, E9a, E10 rows (§3.0).
 - `rb1_calib.tsv`: the sin/cos/atan2, twip and rotation tables, plus the
   environment line.
 - The exact input string used for each run. The mod can also dump

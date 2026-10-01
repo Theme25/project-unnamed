@@ -79,6 +79,9 @@ struct LevelScript {
     void (*construct)(Sim&);  // body of Level_N() after super()
     void (*update)(Sim&);     // body of Level_N.Update() after super.Update()
     bool implemented;
+    // The part of Level_N.Update() that still matters after death: unguarded hitTestObject switches
+    // (dead-ball rule) and their persistent effects. nullptr: nothing.
+    void (*deadUpdate)(Sim&) = nullptr;
 };
 const LevelScript& GetLevelScript(int32_t id);
 
@@ -137,6 +140,10 @@ struct Sim {
     bool camTween = false;              // a camera tween was added by the previous Update
     double dpX = 0, dpY = 0;            // Level.dp: camera step of this Update (old - new)
     int32_t deadTicks = 0;             // Updates run since the ball died
+    // AS3 static level flags: Level_7.redCheckLevel (later: Level_13.greenCheckLevel, Level_16.isStrelka).
+    // Cleared by a fresh SetLevel, kept by SetLevel(id, true).
+    bool staticFlag[4] = {false, false, false, false};
+    int32_t switchFrame[4] = {1, 1, 1, 1};  // level switch clips (blueCheck/greenCheck/redCheck) currentFrame
     int32_t deathFrame = -1;           // frameCount when PlayerDie ran (-1: alive)
     int32_t winFrame = -1;             // frameCount of the Update that called PlayerWin
     bool gless = false;                 // Game.isGless: camera steps at the end of Update, dp = 0
@@ -154,7 +161,9 @@ struct Sim {
     // last-frame diagnostics
     bool probeC = false, probeL = false, probeR = false;
 
-    void Load(LevelTemplate* t, int32_t checkpoint = 0);  // Game.SetLevel(id) -> new Level_N()
+    // keepStatics: AS3 static level flags survive (R / F restart via SetLevel(id, true) and log segments
+    // that follow one); a fresh level load clears them.
+    void Load(LevelTemplate* t, int32_t checkpoint = 0, bool keepStatics = false);  // Game.SetLevel(id) -> new Level_N()
     void Restart();                                       // "R": SetLevel(id, true)
     void Tick(uint8_t input);                             // one Game.UpdateHandler iteration
     FrameStats Stats(uint8_t input) const;
@@ -166,6 +175,9 @@ struct Sim {
     int32_t CreateCircleBody(const char* name, double density, double friction, double restitution, double size);
     void PlayerDie();
     void PlayerWin();
+    // flags column of the v2 log block: bit0 Level_7.redCheckLevel, bit1 Level_13.greenCheckLevel,
+    // bit2 Level_16.isStrelka; bit8 blueCheck, bit9 greenCheck, bit10 redCheck taken (currentFrame != 1)
+    int32_t LoggedFlags() const;
     int32_t createAtSprite = -1;  // >= 0: next CreateBody uses this body's sprite state (AS3 CreateBody on a moved clip)
     bool BallHitsTarget(const DisplayObj& o);  // hitTestObject, alive or dead (death-warp rule)
     double SpriteX(int32_t body) const { return spriteX[body]; }

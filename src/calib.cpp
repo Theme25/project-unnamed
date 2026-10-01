@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -49,8 +50,13 @@ int CmdCalib(int argc, char** argv) {
     long e3ok = 0, e3n = 0;
     long mN = 0, mOk = 0;  // E4 / E7a / E7b: rotation -> matrix
     long e8cN = 0, e8cOk = 0, e8cHits = 0, powN = 0, powOk = 0;
-    long e9N = 0, e9Ok = 0, e9RotN = 0, e9RotOk = 0, e9bN = 0, e9bOk = 0;
-    LevelTemplate tpl8(8);
+    long e9N = 0, e9Ok = 0, e9RotN = 0, e9RotOk = 0, e9bN = 0, e9bOk = 0, e10N = 0, e10Ok = 0, e10Approx = 0;
+    int dumpLevel = 8;  // "E9level <id>" row (docs/STATS_LOGGING.md 3.0); older dumps were Level 8 only
+    std::unique_ptr<LevelTemplate> tplL;
+    auto lvl = [&]() -> LevelTemplate& {
+        if (!tplL || tplL->id != dumpLevel) tplL.reset(new LevelTemplate(dumpLevel));
+        return *tplL;
+    };
     LevelTemplate tpl3(3);
     auto checkM = [&](double rot, const std::string& ha, const std::string& hb) {
         const FlashMatrix m = FlashRotationMatrix(rot);
@@ -99,8 +105,21 @@ int CmdCalib(int argc, char** argv) {
             ++e8cN;
             if (hit == (std::stoi(f[4]) == 1)) ++e8cOk;
             if (std::stoi(f[4]) == 1) ++e8cHits;
+        } else if (f[0] == "E9level" && f.size() >= 2) {
+            dumpLevel = std::stoi(f[1]);
+        } else if (f[0] == "E10" && f.size() >= 6) {
+            // getBounds(L) of a named first-frame object vs display_data.h
+            const DisplayObj* o = lvl().Display(f[1].c_str());
+            if (!o) continue;
+            ++e10N;
+            const long x0 = Tw(H(f[2])), y0 = Tw(H(f[3])), x1 = Tw(H(f[2]) + H(f[4])), y1 = Tw(H(f[3]) + H(f[5]));
+            if (x0 == std::lround(o->x0) && y0 == std::lround(o->y0) && x1 == std::lround(o->x1) && y1 == std::lround(o->y1)) ++e10Ok;
+            else if (!o->exact) ++e10Approx;  // rotated/scaled: display_data.h holds an approximation
+            else std::printf("  E10 L%d %-14s flash=[%ld %ld %ld %ld]  swf=[%.0f %.0f %.0f %.0f]\n", dumpLevel, f[1].c_str(), x0, y0, x1, y1,
+                             o->x0, o->y0, o->x1, o->y1);
         } else if (f[0] == "E9a" && f.size() >= 11) {
-            // Level 8 placements: position + 16.16 matrix vs levels_data.h; rotated clips vs the measured table
+            // placements: position + 16.16 matrix vs levels_data.h; rotated body clips vs the measured table
+            LevelTemplate& tpl8 = lvl();
             bool known = tpl8.HasPlacement(f[1].c_str());
             if (!known) continue;  // Shipik covers/masks and unnamed instances
             const RawPlacement& p = tpl8.Place(f[1].c_str());
@@ -114,7 +133,7 @@ int CmdCalib(int argc, char** argv) {
             if (!(p.b == 0 && p.c == 0 && p.a > 0) && std::strncmp(f[1].c_str(), "shipik", 6)) {
                 double v = 0;
                 ++e9RotN;
-                if (LookupTimelineRotation(8, f[1].c_str(), v) && v == H(f[4])) ++e9RotOk;
+                if (LookupTimelineRotation(dumpLevel, f[1].c_str(), v) && v == H(f[4])) ++e9RotOk;
                 else std::printf("  E9a %s rotation %.17g not in the measured table\n", f[1].c_str(), H(f[4]));
             }
         } else if (f[0] == "E9b" && f.size() >= 9) {
@@ -146,8 +165,11 @@ int CmdCalib(int argc, char** argv) {
                 e1far);
     if (mN) std::printf("rotation -> 16.16 matrix (E4/E7a/E7b): %ld / %ld exact\n", mOk, mN);
     if (e9N)
-        std::printf("Level 8 placements (E9a): %ld / %ld match; rotated body clips with a measured rotation: %ld / %ld\n", e9Ok, e9N,
-                    e9RotOk, e9RotN);
+        std::printf("Level %d placements (E9a): %ld / %ld match; rotated body clips with a measured rotation: %ld / %ld\n", dumpLevel,
+                    e9Ok, e9N, e9RotOk, e9RotN);
+    if (e10N)
+        std::printf("Level %d object bounds (E10): %ld / %ld exact, %ld rotated/scaled (approximate in display_data.h)\n", dumpLevel, e10Ok,
+                    e10N, e10Approx);
     if (e9bN) std::printf("rotation getter of code-set matrices, atan2(b,a)*180/PI within 1e-12 deg (E9b): %ld / %ld\n", e9bOk, e9bN);
     if (powN) std::printf("camera tween constant Math.pow(2, -10/31): %s\n", powOk == powN ? "identical" : "DIFFERENT");
     if (e8cN) std::printf("standardized spikes, whole check (E8c): %ld / %ld (Flash hits: %ld)\n", e8cOk, e8cN, e8cHits);
@@ -156,7 +178,7 @@ int CmdCalib(int argc, char** argv) {
     std::printf("   with the modelled ball box: agrees in %ld, consistent with some +-1 twip adjustment in %ld\n", e2model,
                 e2inRange);
     std::printf("E3 static bounds vs SWF-derived display_data.h: %ld / %ld identical\n", e3ok, e3n);
-    const bool e8ok = e8cOk == e8cN && powOk == powN && e9Ok == e9N && e9RotOk == e9RotN && e9bOk == e9bN;
+    const bool e8ok = e8cOk == e8cN && powOk == powN && e9Ok == e9N && e9RotOk == e9RotN && e9bOk == e9bN && e10Ok + e10Approx == e10N;
     const bool pass = e8ok && e1far == 0 && e2obs == e2 && e2inRange == e2 && e1exact == e1 && (mN == mOk);
     std::printf("%s\n", pass ? "CALIB OK" : "CALIB MISMATCH");
     return pass ? 0 : 1;

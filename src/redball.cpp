@@ -586,7 +586,426 @@ static void L4_Update(Sim& s) {
     }
 }
 
+// ---------------------------------------------------------------- shared helpers for levels 5-14
+// Level.DestroyBody: only if the body is still in the world; removes its clip, then m_world.DestroyBody.
+static void LevelDestroyBody(Sim& s, int32_t b) {
+    if (b < 0 || !s.world.bodies[b].inWorld) return;
+    s.hasSprite[b] = false;
+    s.world.DestroyBody(b);
+}
+// m_world.DestroyBody(old) + CreateBody(name, ...) on the same clip (drop platforms of levels 4/6/14)
+static int32_t RecreateBody(Sim& s, int32_t old, const char* name, double density, const PolyList& polys) {
+    s.world.DestroyBody(old);
+    s.createAtSprite = old;
+    const int32_t b = s.CreateBody(name, "Polygon", density, DEFAULT_FRICTION, DEFAULT_RESTITUTION, polys);
+    s.createAtSprite = -1;
+    s.hasSprite[old] = false;
+    return b;
+}
+// playerBox.hitTestObject(clip) for a level's switch clip (alive or dead rule)
+static bool SwitchHit(Sim& s, const char* clip) {
+    const DisplayObj* o = s.tpl->Display(clip);
+    return o && s.BallHitsTarget(*o);
+}
+
+// Level_5.as: blue switch removes a barrier, green switch removes a platform.
+enum { L5_BLUEBARIER = 0, L5_GREENPLAT = 1 };
+static void L5_Construct(Sim& s) {
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    s.CreateBody("firstPlatform", "Polygon", 0, F, R,
+                 {{{298.45, 0}, {298.45, 0.3}, {0, 20}, {0, 0}}, {{298.45, 0.3}, {300, 0.3}, {300, 20}, {0, 20}}});
+    s.lvBody[L5_BLUEBARIER] = s.CreateBody("blueBarier", "Polygon", 0, F, R, {{{0, 0}, {10, 0}, {10, 100}, {0, 100}}});
+    s.CreateBody("mainPlatform", "Polygon", 0, F, R, {{{594.9, 0}, {594.9, 136}, {0, 136}, {0, 116}, {195.95, 0}}});
+    s.CreateBody("rightBarier", "Polygon", 0, F, R,
+                 {{{0, 0}, {30, 0}, {1.05, 251}, {0, 251}}, {{1.05, 251}, {30, 0}, {30, 251.95}, {1.05, 251.95}}});
+    s.CreateBody("jumpPlatform", "Polygon", D, F, R, {{{226.95, 0}, {226.95, 7}, {0, 7}, {0, 0}}});
+    s.lvBody[L5_GREENPLAT] = s.CreateBody("greenPlatform", "Polygon", 0, F, R, {{{85, 0}, {85, 15}, {0, 15}, {0, 0}}});
+    s.CreateCircleBody("littleBall", D, F, R, 13);
+    s.CreateCircleBody("bigBall", 2 * D, F, R, 83.5);
+}
+static void L5_Switches(Sim& s) {
+    if (s.switchFrame[0] == 1 && SwitchHit(s, "blueCheck")) {
+        s.switchFrame[0] = 2;
+        LevelDestroyBody(s, s.lvBody[L5_BLUEBARIER]);
+    }
+    if (s.switchFrame[1] == 1 && SwitchHit(s, "greenCheck")) {
+        s.switchFrame[1] = 2;
+        LevelDestroyBody(s, s.lvBody[L5_GREENPLAT]);
+    }
+}
+static void L5_Update(Sim& s) {
+    if (s.spriteY[s.playerBody] > 650 && s.playerAlive) s.PlayerDie();
+    L5_Switches(s);
+}
+
+// Level_6.as: motorised spinner and three spinning "back balls" (revolute motors), three drop platforms.
+enum { L6_DROP1 = 0, L6_DROP2 = 1, L6_DROP3 = 2 };
+static const PolyList kL6Plat = {{{100, 0}, {100, 20}, {0, 20}, {0, 0}}};
+static void L6_Construct(Sim& s) {
+    World& w = s.world;
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    s.CreateBody("rampa", "Polygon", 0, F, R,
+                 {{{66.9, 0}, {66.9, 22.15}, {0, 0}}, {{66.9, 22.15}, {69.8, 47.2}, {0, 0}}, {{69.8, 47.2}, {72.9, 68.15}, {0, 0}},
+                  {{72.9, 68.15}, {77.9, 90.15}, {0, 0}}, {{77.9, 90.15}, {83.9, 108.15}, {0, 0}}, {{83.9, 108.15}, {92.9, 127.15}, {0, 0}},
+                  {{92.9, 127.15}, {103.9, 146.15}, {0, 0}}, {{103.9, 146.15}, {114.9, 162.15}, {0, 261.1}, {0, 0}},
+                  {{114.9, 162.15}, {127.9, 174.15}, {0, 261.1}}, {{127.9, 174.15}, {146.35, 187.35}, {0, 261.1}},
+                  {{146.35, 187.35}, {165.9, 194.65}, {0, 261.1}}, {{165.9, 194.65}, {183.4, 197.65}, {279.9, 261.1}, {0, 261.1}},
+                  {{279.9, 138.15}, {279.9, 261.1}, {271.9, 155.65}}, {{271.9, 155.65}, {279.9, 261.1}, {261.9, 171.65}},
+                  {{261.9, 171.65}, {279.9, 261.1}, {250.4, 183.65}}, {{250.4, 183.65}, {279.9, 261.1}, {234.9, 194.15}},
+                  {{234.9, 194.15}, {279.9, 261.1}, {218.9, 198.15}}, {{218.9, 198.15}, {279.9, 261.1}, {200.4, 198.65}},
+                  {{200.4, 198.65}, {279.9, 261.1}, {183.4, 197.65}}});
+    s.CreateBody("afterJump", "Polygon", 0, F, R, {{{182, 0}, {182, 20}, {0, 20}, {0, 0}}});
+    s.lvBody[L6_DROP1] = s.CreateBody("drop1", "Polygon", 0, F, R, kL6Plat);
+    s.lvBody[L6_DROP2] = s.CreateBody("drop2", "Polygon", 0, F, R, kL6Plat);
+    s.lvBody[L6_DROP3] = s.CreateBody("drop3", "Polygon", 0, F, R, kL6Plat);
+    const int32_t spin = s.CreateBody(
+        "spin", "Polygon", D, F, R,
+        {{{60.55, -65.5}, {67.75, -58.6}, {26.3, -30.2}}, {{5, -89.5}, {5, -39.75}, {-5, -39.75}, {-5, -89.5}},
+         {{5, -39.75}, {26.3, -30.2}, {-24.35, -31.4}, {-24.6, -31.65}, {-5, -39.75}},
+         {{-24.6, -31.65}, {-24.35, -31.4}, {-31.7, -24.5}, {-67.9, -57.8}, {-61.1, -65.2}},
+         {{-24.35, -31.4}, {26.3, -30.2}, {-31.45, 24.8}, {-39.8, 4.3}, {-39.65, -5.7}, {-31.7, -24.5}},
+         {{-88.95, -6.1}, {-39.65, -5.7}, {-39.8, 4.3}, {-89.05, 3.9}},
+         {{26.3, -30.2}, {67.75, -58.6}, {32.8, -23}, {-24.65, 31.55}, {-66.7, 60.1}, {-31.45, 24.8}},
+         {{-31.7, 24.55}, {-31.45, 24.8}, {-66.7, 60.1}}, {{-59.6, 67.1}, {-66.7, 60.1}, {-24.65, 31.55}},
+         {{-4.2, 39.8}, {-24.65, 31.55}, {-4.2, 39.4}}, {{-4.85, 89.4}, {-4.2, 39.8}, {5.15, 89.5}},
+         {{-4.2, 39.8}, {-4.2, 39.4}, {5.8, 39.6}, {5.15, 89.5}},
+         {{-4.2, 39.4}, {-24.65, 31.55}, {32.4, 23}, {32.65, 23.2}, {26.15, 30.3}, {5.8, 39.6}},
+         {{25.9, 30.6}, {26.15, 30.3}, {32.65, 23.2}, {70.2, 55.6}, {63.7, 63.2}}, {{32.65, 23.2}, {32.4, 23}, {39.75, 4.45}},
+         {{32.4, 23}, {-24.65, 31.55}, {32.8, -23}, {39.65, -5.55}, {39.75, 4.45}},
+         {{89.05, 4}, {39.75, 4.45}, {39.65, -5.55}, {88.95, -6}}, {{33, -22.8}, {32.8, -23}, {67.75, -58.6}}});
+    s.CreateBody("voronkaLeft", "Polygon", 0, 0, R,
+                 {{{0, 284.45}, {105.5, 224}, {107.5, 227}, {1.5, 288}}, {{105.5, 224}, {112.5, 216.5}, {115.5, 219}, {107.5, 227}},
+                  {{112.5, 216.5}, {115.5, 208}, {115.5, 219}}, {{115.5, 208}, {115.5, 68.5}, {115.5, 219}},
+                  {{115.5, 219}, {115.5, 68.5}, {119.5, 67.5}, {119.5, 208}}, {{115.5, 68.5}, {88.5, 34.5}, {92.5, 32}, {119.5, 67.5}},
+                  {{88.5, 34.5}, {83.5, 0}, {88, 0}, {92.5, 32}}});
+    s.CreateBody("voronkaRight", "Polygon", 0, 0, R,
+                 {{{0, 306.2}, {105.5, 245.75}, {107.5, 248.75}, {1.5, 309.75}}, {{105.5, 245.75}, {113.65, 240.2}, {107.5, 248.75}},
+                  {{113.65, 240.2}, {120.4, 233.95}, {115.4, 243.2}, {107.5, 248.75}},
+                  {{120.4, 233.95}, {124.9, 226.45}, {123.4, 235.7}, {115.4, 243.2}},
+                  {{124.9, 226.45}, {128.65, 216.95}, {127.9, 227.45}, {123.4, 235.7}},
+                  {{128.65, 216.95}, {130.25, 207.95}, {131.9, 218.2}, {127.9, 227.45}},
+                  {{130.25, 207.95}, {130.25, 67.5}, {134.25, 68.5}, {134.25, 207.95}, {133.4, 212.95}, {131.9, 218.2}},
+                  {{130.25, 67.5}, {157.25, 32}, {161.25, 34.5}, {134.25, 68.5}}, {{157.25, 32}, {161.75, 0}, {166.25, 0}, {161.25, 34.5}}});
+    s.CreateBody("rampa2", "Polygon", 0, F, R,
+                 {{{129.9, 0}, {129.9, 26.4}, {58.9, 26.4}, {0, 0}}, {{279.9, 191.15}, {279.9, 284.1}, {271.9, 208.65}},
+                  {{271.9, 208.65}, {279.9, 284.1}, {261.9, 224.65}}, {{261.9, 224.65}, {279.9, 284.1}, {250.4, 236.65}},
+                  {{250.4, 236.65}, {279.9, 284.1}, {234.9, 247.15}}, {{234.9, 247.15}, {279.9, 284.1}, {218.9, 251.15}},
+                  {{279.9, 284.1}, {0, 284.1}, {200.4, 251.65}, {218.9, 251.15}}, {{200.4, 251.65}, {0, 284.1}, {183.4, 250.65}},
+                  {{183.4, 250.65}, {0, 284.1}, {165.9, 247.65}}, {{165.9, 247.65}, {0, 284.1}, {146.35, 240.35}},
+                  {{146.35, 240.35}, {0, 284.1}, {127.9, 227.15}}, {{127.9, 227.15}, {0, 284.1}, {114.9, 215.15}},
+                  {{114.9, 215.15}, {0, 284.1}, {103.9, 199.15}}, {{103.9, 199.15}, {0, 284.1}, {92.9, 180.15}},
+                  {{0, 284.1}, {0, 0}, {83.9, 161.15}, {92.9, 180.15}}, {{83.9, 161.15}, {0, 0}, {77.9, 143.15}},
+                  {{77.9, 143.15}, {0, 0}, {72.9, 121.15}}, {{72.9, 121.15}, {0, 0}, {58.9, 26.4}}});
+    s.CreateBody("beforeBackBalls", "Polygon", 0, F, R, {{{182, 0}, {182, 20}, {0, 20}, {0, 0}}});
+    const PolyList backBall = {
+        {{14.75, -16.85}, {18.5, -12.7}, {22.25, -3.1}, {22.35, 2.5}, {18.3, 13}, {14.65, 16.95}, {3.25, 22.15}, {-2.4, 22.25},
+         {-13.85, 17.7}, {-17.65, 13.9}, {-22.35, 2.4}, {-22.25, -3.15}, {-17.8, -13.65}, {-13.8, -17.65}, {-2.85, -22.15}, {2.8, -22.15}},
+        {{2.8, -50}, {2.8, -22.15}, {-2.85, -22.15}, {-2.85, -50}},
+        {{-49.95, -3.4}, {-22.25, -3.15}, {-22.35, 2.4}, {-50, 2.2}},
+        {{-2.75, 49.95}, {-2.4, 22.25}, {3.25, 22.15}, {2.85, 50}},
+        {{50, 2.25}, {22.35, 2.5}, {22.25, -3.1}, {49.9, -3.35}}};
+    const int32_t bb1 = s.CreateBody("backBall1", "Polygon", D, F, R, backBall);
+    const int32_t bb2 = s.CreateBody("backBall2", "Polygon", D, F, R, backBall);
+    const int32_t bb3 = s.CreateBody("backBall3", "Polygon", D, F, R, backBall);
+    s.CreateBody("finishPlatform", "Polygon", 0, F, R, kL6Plat);
+    JointDef rj;  // one b2RevoluteJointDef reused
+    w.InitRevoluteJointDef(rj, spin, w.groundBody, Vec2(722 / PHYS_SCALE, 323 / PHYS_SCALE));
+    rj.motorSpeed = 0.3 * -AS3_PI;
+    rj.maxMotorTorque = 5000;
+    rj.enableMotor = true;
+    w.CreateJoint(rj);
+    for (int32_t b : {bb1, bb2, bb3}) {
+        w.InitRevoluteJointDef(rj, b, w.groundBody, w.bodies[b].xf.position);
+        rj.motorSpeed = 0.2 * AS3_PI;
+        rj.maxMotorTorque = 5000;
+        rj.enableMotor = true;
+        w.CreateJoint(rj);
+    }
+}
+static void L6_Update(Sim& s) {
+    if (s.spriteY[s.playerBody] > 1060 && s.playerAlive) s.PlayerDie();
+    static const char* names[3] = {"drop1", "drop2", "drop3"};
+    for (int k = L6_DROP1; k <= L6_DROP3; ++k)
+        if (PlayerTouches(s, s.lvBody[k])) s.lvBody[k] = RecreateBody(s, s.lvBody[k], names[k], 3 * DEFAULT_DENSITY, kL6Plat);
+}
+
+// Level_7.as: jump platforms (prismatic, limit + motor whose force is switched by contact), moving
+// platforms, swinging platform (two distance joints), spinning star (distance joint, kills), red switch
+// (static Level_7.redCheckLevel: removes the red wall, survives checkpoint restarts), blue switch.
+enum { L7_STAR = 0, L7_JP1 = 1, L7_JP2 = 2, L7_MP1 = 3, L7_MP2 = 4, L7_REDWALL = 5, L7_BLUEPLAT = 6 };
+enum { L7I_JP1JOINT = 0, L7I_JP2JOINT = 1, L7I_MP1DIR = 2, L7I_MP2DIR = 3 };
+static void L7_Construct(Sim& s) {
+    World& w = s.world;
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    s.CreateBody("firstPlatform", "Polygon", 0, F, R, {{{150, 0}, {150, 20}, {0, 20}, {0, 0}}});
+    s.lvBody[L7_JP1] = s.CreateBody("jumpPlatform1", "Polygon", D, F, R, {{{100, 0}, {100, 20}, {0, 20}, {0, 0}}});
+    s.CreateBody("bigPlatform", "Polygon", 0, F, R,
+                 {{{228.2, -82.45}, {228.2, -59.45}, {-264.8, -47.45}, {-264.8, -82.45}},
+                  {{-264.8, -47.45}, {228.2, -59.45}, {-339.8, 11.55}},
+                  {{-441.75, 11.55}, {-339.8, 11.55}, {-527.75, 61.5}},
+                  {{-339.8, 11.55}, {228.2, -59.45}, {254.2, -59.45}, {254.2, -36.45}, {-527.75, 82.5}, {-527.75, 61.5}},
+                  {{527.75, 29}, {527.75, 82.5}, {512.1, 42.5}}, {{512.1, 42.5}, {527.75, 82.5}, {492.9, 51.2}},
+                  {{492.9, 51.2}, {527.75, 82.5}, {475.55, 53.2}}, {{527.75, 82.5}, {-527.75, 82.5}, {457.5, 51.7}, {475.55, 53.2}},
+                  {{457.5, 51.7}, {-527.75, 82.5}, {415.55, 41.25}}, {{415.55, 41.25}, {-527.75, 82.5}, {309.2, 8.55}},
+                  {{309.2, 8.55}, {-527.75, 82.5}, {280.2, -14.45}, {309.2, -14.45}},
+                  {{280.2, -14.45}, {-527.75, 82.5}, {254.2, -36.45}, {280.2, -36.45}}});
+    const int32_t potolok = s.CreateBody("potolok", "Polygon", 0, F, R,
+                                         {{{257, -78}, {257, -19}, {-200, 44}, {-257, -10}, {-257, -78}},
+                                          {{-200, 44}, {257, -19}, {205, 33}, {-200, 78}},
+                                          {{205, 78}, {-200, 78}, {205, 33}}});
+    s.CreateBody("triangle", "Polygon", 0, F, R,
+                 {{{-375.95, -58}, {-155.95, -36.75}, {257.1, 31.15}, {-373.9, 55}},
+                  {{404, 55}, {-373.9, 55}, {257.1, 31.15}, {404, 31.2}},
+                  {{257.1, 31.15}, {-155.95, -36.75}, {112.1, -53.75}},
+                  {{112.1, -53.75}, {-155.95, -36.75}, {-0.4, -126.95}}});
+    const PolyList mp = {{{75, -5}, {75, 5}, {-75, 5}, {-75, -5}}};
+    s.lvBody[L7_MP1] = s.CreateBody("movePlatform1", "Polygon", D, F, R, mp);
+    s.lvBody[L7_MP2] = s.CreateBody("movePlatform2", "Polygon", D, F, R, mp);
+    s.lvBody[L7_JP2] = s.CreateBody("jumpPlatform2", "Polygon", D, F, R, {{{100, 0}, {100, 20}, {0, 20}, {0, 0}}});
+    s.CreateBody("vanna", "Polygon", 0, F, R,
+                 {{{415.5, -92.5}, {415.5, -59.05}, {194.55, 92.45}, {164.55, 50.45}, {234.55, -92.5}},
+                  {{-156.45, -89.5}, {-63.45, 50.45}, {-74.45, 92.45}, {-415.45, -59.55}, {-415.45, -89.5}},
+                  {{-63.45, 50.45}, {164.55, 50.45}, {194.55, 92.45}, {-74.45, 92.45}}});
+    s.lvBody[L7_REDWALL] = s.CreateBody("redWall", "Polygon", 0, F, R, {{{1.5, -61.5}, {1.5, 61.5}, {-18.5, 61.5}, {-18.5, -61.5}}});
+    if (s.staticFlag[0]) LevelDestroyBody(s, s.lvBody[L7_REDWALL]);  // redCheckLevel
+    const int32_t big = s.CreateBody("bigMovePlatform", "Polygon", D, F, R, {{{-75, -5}, {75, -5}, {75, 5}, {-75, 5}}});
+    s.CreateBody("endPlatform", "Polygon", 0, F, R, {{{150, 0}, {150, 20}, {0, 20}, {0, 0}}});
+    for (int k = 1; k <= 18; ++k) {
+        char name[16];
+        std::snprintf(name, sizeof name, "box%d", k);
+        s.CreateBody(name, "Polygon", 0.3, F, R, {{{10, -10}, {10, 10}, {-10, 10}, {-10, -10}}});
+    }
+    s.lvBody[L7_BLUEPLAT] = s.CreateBody("bluePlatform", "Polygon", 0, F, R, {{{140, 0}, {140, 20}, {0, 20}, {0, 0}}});
+    const int32_t star = s.CreateBody("star", "Polygon", D, F, R,
+                                      {{{-0.25, 15}, {2, 27.85}, {-2.15, 27.95}},
+                                       {{2, 27.85}, {15, 29.75}, {2.1, 32}, {-2.05, 32.1}, {-15, 30.2}, {-2.15, 27.95}},
+                                       {{0.2, 45}, {-2.05, 32.1}, {2.1, 32}}});
+    s.lvBody[L7_STAR] = star;
+    w.SetAngularVelocity(star, -4);
+    JointDef dj;
+    w.InitDistanceJointDef(dj, big, w.groundBody, Vec2(3077 / PHYS_SCALE, -190 / PHYS_SCALE), Vec2(3005 / PHYS_SCALE, -305 / PHYS_SCALE));
+    w.CreateJoint(dj);
+    w.InitDistanceJointDef(dj, big, w.groundBody, Vec2(2944 / PHYS_SCALE, -190 / PHYS_SCALE), Vec2(2873 / PHYS_SCALE, -305 / PHYS_SCALE));
+    w.CreateJoint(dj);
+    w.InitDistanceJointDef(dj, star, potolok, Vec2(619 / PHYS_SCALE, -51.5 / PHYS_SCALE), Vec2(552 / PHYS_SCALE, -111 / PHYS_SCALE));
+    w.CreateJoint(dj);
+    JointDef pj;  // one b2PrismaticJointDef reused
+    for (int k : {L7_JP1, L7_JP2}) {
+        const int32_t jb = s.lvBody[k];
+        w.InitPrismaticJointDef(pj, jb, w.groundBody, w.bodies[jb].sweep.c, Vec2(0, 1));
+        pj.lowerTranslation = 0;
+        pj.upperTranslation = 1;
+        pj.enableLimit = true;
+        pj.maxMotorForce = 0;
+        pj.motorSpeed = 200;
+        pj.enableMotor = true;
+        s.lvInt[k == L7_JP1 ? L7I_JP1JOINT : L7I_JP2JOINT] = w.CreateJoint(pj);
+    }
+    w.InitPrismaticJointDef(pj, s.lvBody[L7_MP1], w.groundBody, w.bodies[s.lvBody[L7_MP1]].sweep.c, Vec2(0, 1));
+    pj.enableLimit = false;
+    pj.enableMotor = false;
+    w.CreateJoint(pj);
+    s.lvInt[L7I_MP1DIR] = 1;
+    w.InitPrismaticJointDef(pj, s.lvBody[L7_MP2], w.groundBody, w.bodies[s.lvBody[L7_MP2]].sweep.c, Vec2(1, 0));
+    pj.enableLimit = false;
+    pj.enableMotor = false;
+    w.CreateJoint(pj);
+    s.lvInt[L7I_MP2DIR] = 1;
+}
+static void L7_Switches(Sim& s) {
+    if (s.switchFrame[0] == 1 && SwitchHit(s, "redCheck")) {
+        s.switchFrame[0] = 2;
+        LevelDestroyBody(s, s.lvBody[L7_REDWALL]);
+        s.staticFlag[0] = true;  // Level_7.redCheckLevel
+    }
+    if (s.switchFrame[1] == 1 && SwitchHit(s, "blueCheck")) {
+        s.switchFrame[1] = 2;
+        LevelDestroyBody(s, s.lvBody[L7_BLUEPLAT]);
+    }
+}
+static void L7_Update(Sim& s) {
+    World& w = s.world;
+    if ((s.spriteY[s.playerBody] > 500 || PlayerTouches(s, s.lvBody[L7_STAR])) && s.playerAlive) s.PlayerDie();
+    w.SetMaxMotorForce(s.lvInt[L7I_JP1JOINT], PlayerTouches(s, s.lvBody[L7_JP1]) ? 150 : 0);
+    w.SetMaxMotorForce(s.lvInt[L7I_JP2JOINT], PlayerTouches(s, s.lvBody[L7_JP2]) ? 170 : 0);
+    const int32_t m1 = s.lvBody[L7_MP1], m2 = s.lvBody[L7_MP2];
+    if (s.spriteY[m1] < -30) s.lvInt[L7I_MP1DIR] = 1;
+    if (s.spriteY[m1] > 115) s.lvInt[L7I_MP1DIR] = -1;
+    w.SetLinearVelocity(m1, Vec2(0, 3 * s.lvInt[L7I_MP1DIR]));
+    if (s.spriteX[m2] < 1495) s.lvInt[L7I_MP2DIR] = 1;
+    if (s.spriteX[m2] > 1645) s.lvInt[L7I_MP2DIR] = -1;
+    w.SetLinearVelocity(m2, Vec2(3 * s.lvInt[L7I_MP2DIR], 0));
+    L7_Switches(s);
+}
+
+// Level_12.as: collision group -1 on the main platform and the kill star (prismatic, patrols in x),
+// a little cart on two rollers held by distance joints.
+enum { L12_STAR = 0 };
+enum { L12I_DIR = 0 };
+static void L12_Construct(Sim& s) {
+    World& w = s.world;
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    FilterData group;
+    group.groupIndex = -1;
+    s.CreateBody("steps", "Polygon", 0, F, R,
+                 {{{256, 0}, {256, 18}, {164, 18}, {138, 0}}, {{112, 18}, {138, 18}, {164, 106}, {112, 37}},
+                  {{87, 37}, {112, 37}, {164, 106}, {87, 55}}, {{62, 55}, {87, 55}, {62, 72}}, {{38.5, 72}, {62, 72}, {38.5, 88.5}},
+                  {{62, 72}, {87, 55}, {164, 106}, {38.5, 88.5}}, {{0, 88.5}, {38.5, 88.5}, {164, 106}, {0, 106}},
+                  {{138, 18}, {138, 0}, {164, 18}, {164, 106}}});
+    const int32_t main = s.CreateBody(
+        "mainPlatform", "Polygon", 0, F, R,
+        {{{1962.2, 0}, {1962.2, 18.05}, {1817.45, 7.75}, {1817.45, 0}},
+         {{1817.45, 7.75}, {1962.2, 18.05}, {1799.45, 15.75}, {1799.45, 7.75}},
+         {{1799.45, 15.75}, {1962.2, 18.05}, {1883.2, 18.05}, {1779.95, 15.75}},
+         {{1761.2, 24}, {1779.95, 24}, {1761.2, 31.5}}, {{1741.95, 31.5}, {1761.2, 31.5}, {1741.95, 39.25}},
+         {{1761.2, 31.5}, {1779.95, 24}, {1883.2, 193.25}, {1741.95, 39.25}},
+         {{1431.65, 39.25}, {1741.95, 39.25}, {1883.2, 193.25}, {1431.65, 127.4}},
+         {{884.25, 127.4}, {1431.65, 127.4}, {1883.2, 193.25}, {884.25, 168.2}},
+         {{533, 127.2}, {533, 168.2}, {511.5, 168.25}, {511.5, 127.2}},
+         {{533, 168.2}, {884.25, 168.2}, {1883.2, 193.25}, {0, 193.25}, {511.5, 168.25}},
+         {{0, 168.25}, {511.5, 168.25}, {0, 193.25}},
+         {{1779.95, 24}, {1779.95, 15.75}, {1883.2, 18.05}, {1883.2, 193.25}}});
+    w.SetBodyFilter(main, group);
+    s.CreateBody("boxPlatform", "Polygon", 0, F, R, {{{100, 0}, {100, 18}, {0, 18}, {0, 0}}});
+    for (int k = 0; k < 3; ++k) {
+        char name[16];
+        std::snprintf(name, sizeof name, "box%d", k);
+        s.CreateBody(name, "Polygon", D / 5, F, R, {{{20, 0}, {20, 20}, {0, 20}, {0, 0}}});
+    }
+    s.CreateBody("ceil", "Polygon", 0, F, R, {{{184, 0}, {184, 140.25}, {0, 140.25}, {0, 0}}});
+    s.CreateBody("bigBox", "Polygon", D / 8, F, R, {{{0, 0}, {40, 0}, {40, 40}, {0, 40}}});
+    const int32_t star = s.CreateCircleBody("killStar", D, F, R, 40);
+    s.lvBody[L12_STAR] = star;
+    w.SetBodyFilter(star, group);
+    s.CreateBody("rampa", "Polygon", 0, 0.1, R,
+                 {{{11.6, -14.25}, {11.6, -8.2}, {5.6, -8.2}, {0, -14.25}}, {{435.5, 84.5}, {354.5, 64.5}, {451, 87.5}},
+                  {{354.5, 64.5}, {210.95, 30}, {505.5, 94}, {483.5, 92.5}, {451, 87.5}},
+                  {{210.95, 30}, {157.95, 18}, {450, 81.5}, {505.5, 94}}, {{996, 70.6}, {1015, 70.6}, {1009, 76.6}, {996, 76.6}},
+                  {{1015, 70.6}, {1015, 94}, {1009, 88.5}, {1009, 76.6}}, {{1015, 94}, {505.5, 94}, {507.5, 88.5}, {1009, 88.5}},
+                  {{507.5, 88.5}, {505.5, 94}, {483, 86.5}}, {{483, 86.5}, {505.5, 94}, {450, 81.5}},
+                  {{450, 81.5}, {157.95, 18}, {420, 74.5}}, {{420, 74.5}, {157.95, 18}, {211, 23.5}, {353.5, 57.5}},
+                  {{157.95, 18}, {110, 12}, {158, 11.5}, {211, 23.5}}, {{110, 12}, {58.75, 7}, {110, 5.5}, {158, 11.5}},
+                  {{58.75, 7}, {0, 7}, {5.6, 0}, {58.75, 0}, {110, 5.5}}, {{0, 7}, {0, -14.25}, {5.6, -8.2}, {5.6, 0}}});
+    const int32_t r1 = s.CreateCircleBody("roll1", D, 0.1, R, 8);
+    const int32_t r2 = s.CreateCircleBody("roll2", D, 0.1, R, 8);
+    const int32_t go = s.CreateBody("goPlat", "Polygon", D, F, R,
+                                    {{{5.45, 0.75}, {5.45, 10.1}, {0, 15.75}, {0, 0.75}},
+                                     {{5.45, 10.1}, {54.05, 10.1}, {59.75, 15.75}, {0, 15.75}},
+                                     {{54.05, 10.1}, {54.05, 0}, {59.75, 0}, {59.75, 15.75}}});
+    JointDef pj;
+    const Vec2 sp = w.bodies[star].xf.position;
+    w.InitPrismaticJointDef(pj, star, w.groundBody, Vec2(sp.x + 20 / PHYS_SCALE, sp.y + 20 / PHYS_SCALE), Vec2(1, 0));
+    w.CreateJoint(pj);
+    JointDef dj;
+    const Vec2 gp = w.bodies[go].xf.position, p1 = w.bodies[r1].xf.position, p2 = w.bodies[r2].xf.position;
+    w.InitDistanceJointDef(dj, go, r1, Vec2(gp.x + 3 / PHYS_SCALE, gp.y + 1 / PHYS_SCALE), Vec2(p1.x + 4 / PHYS_SCALE, p1.y + 4 / PHYS_SCALE));
+    w.CreateJoint(dj);
+    w.InitDistanceJointDef(dj, go, r2, Vec2(gp.x + 57 / PHYS_SCALE, gp.y + 1 / PHYS_SCALE), Vec2(p2.x + 4 / PHYS_SCALE, p2.y + 4 / PHYS_SCALE));
+    w.CreateJoint(dj);
+    w.InitDistanceJointDef(dj, r1, r2, Vec2(p1.x + 4 / PHYS_SCALE, p1.y + 4 / PHYS_SCALE), Vec2(p2.x + 4 / PHYS_SCALE, p2.y + 4 / PHYS_SCALE));
+    w.CreateJoint(dj);
+    s.lvInt[L12I_DIR] = 1;  // killStarDirection:int = 1
+}
+static void L12_Update(Sim& s) {
+    if ((s.spriteY[s.playerBody] > 500 || PlayerTouches(s, s.lvBody[L12_STAR])) && s.playerAlive) s.PlayerDie();
+    const int32_t st = s.lvBody[L12_STAR];
+    if (s.spriteX[st] < -1050) s.lvInt[L12I_DIR] = 1;
+    if (s.spriteX[st] > -824) s.lvInt[L12I_DIR] = -1;
+    s.world.SetLinearVelocity(st, Vec2(4 * s.lvInt[L12I_DIR], 0));
+}
+
+// Level_14.as: moving platform, catapult (revolute on a static pivot), blue switch, drop platform,
+// a rolling kill ball kicked once the ball passes x = 1410.
+enum { L14_MP1 = 0, L14_BLUEPLAT = 1, L14_DROP = 2, L14_ROLL = 3 };
+enum { L14I_DIR = 0, L14I_ROLLGO = 1 };
+static const PolyList kL14Drop = {{{-62, 5}, {-62, -5}, {62, -5}, {62, 5}}};
+static void L14_Construct(Sim& s) {
+    World& w = s.world;
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    s.CreateBody("firstPlatform", "Polygon", 0, F, R, {{{140, 10}, {-110, 10}, {-110, -10}, {140, -10}}});
+    s.lvBody[L14_MP1] = s.CreateBody("movePlatform1", "Polygon", D, F, R,
+                                     {{{-60, -5.35}, {-52.1, -17.1}, {-52.1, -5}, {-60, 5}}, {{60, 5}, {-60, 5}, {-52.1, -5}, {60, -5}}});
+    s.CreateBody("catapultPlat", "Polygon", 0, F, R,
+                 {{{94.8, -44}, {247.5, -44}, {-16.1, -12.95}}, {{-247.5, -12.95}, {-16.1, -12.95}, {-247.5, 44}},
+                  {{-16.1, -12.95}, {247.5, -44}, {247.5, 44}, {-247.5, 44}}});
+    s.CreateCircleBody("ball40", 2, 0.2, R, 45);
+    const int32_t opora = s.CreateBody("catapultOpora", "Polygon", 0, F, R, {{{-0.25, -4.75}, {18.25, 24.75}, {-18.25, 24.75}}});
+    const int32_t cat = s.CreateBody(
+        "catapult", "Polygon", 0.5, F, R,
+        {{{-72.05, -16.75}, {-71.3, -10.4}, {-77.25, -16.75}},
+         {{-71.3, -10.4}, {-69.4, -5.75}, {-70.25, 1}, {-74.25, -3.65}, {-76.55, -10.1}, {-77.25, -16.75}},
+         {{-70.25, 1}, {-69.4, -5.75}, {-65.15, -3}, {-65, 3}}, {{54.4, 3}, {-65, 3}, {-46.65, -3}, {54.4, -3}},
+         {{-46.65, -3}, {-65, 3}, {-53.8, -3}, {-44.1, -7.1}}, {{-42.6, -11.9}, {-44.1, -7.1}, {-47.15, -13.55}, {-47.15, -17}, {-41.9, -17}},
+         {{-47.15, -13.55}, {-44.1, -7.1}, {-48.15, -9.7}}, {{-48.15, -9.7}, {-44.1, -7.1}, {-50.25, -5.75}},
+         {{-50.25, -5.75}, {-44.1, -7.1}, {-53.8, -3}}, {{-53.8, -3}, {-65, 3}, {-60, -2.25}}, {{-60, -2.25}, {-65, 3}, {-65.15, -3}}});
+    s.CreateBody("floor", "Polygon", 0, F, R, {{{-199.9, 9}, {-199.9, -9}, {257.1, -9}, {257.1, 9}}});
+    s.lvBody[L14_BLUEPLAT] = s.CreateBody("bluePlat", "Polygon", 0, F, R,
+                                          {{{-44.8, -5}, {39.05, -5}, {47.6, 5}, {-44.8, 5}}, {{39.05, -5}, {39.05, -17.3}, {47.6, -4.9}, {47.6, 5}}});
+    s.CreateBody("checkPlat", "Polygon", 0, F, R, {{{158, -10}, {158, 10}, {-62, 10}, {-62, -10}}});
+    s.lvBody[L14_DROP] = s.CreateBody("dropPlat", "Polygon", 0, F, R, kL14Drop);
+    s.CreateBody("finishPlat", "Polygon", 0, F, R,
+                 {{{79.9, -10}, {162.5, -10}, {162.5, 83.5}, {17.9, 27.1}}, {{-135.25, 27.1}, {17.9, 27.1}, {162.5, 83.5}, {-118.25, 59.5}},
+                  {{-250.45, 59.5}, {-118.25, 59.5}, {162.5, 83.5}, {-250.45, 79.5}}});
+    s.lvBody[L14_ROLL] = s.CreateCircleBody("killRollBall", D, F, R, 50);
+    s.CreateBody("barier", "Polygon", 0, F, R, {{{0, 0}, {20, 0}, {20, 50}, {0, 50}}});
+    JointDef pj;
+    w.InitPrismaticJointDef(pj, s.lvBody[L14_MP1], w.groundBody, w.bodies[s.lvBody[L14_MP1]].sweep.c, Vec2(0, 1));
+    pj.enableLimit = false;
+    pj.enableMotor = false;
+    w.CreateJoint(pj);
+    s.lvInt[L14I_DIR] = 1;
+    JointDef rj;
+    w.InitRevoluteJointDef(rj, cat, opora, w.bodies[cat].xf.position);
+    w.CreateJoint(rj);
+    s.lvInt[L14I_ROLLGO] = 0;
+}
+static void L14_Switches(Sim& s) {
+    if (s.switchFrame[0] == 1 && SwitchHit(s, "blueCheck")) {
+        s.switchFrame[0] = 2;
+        LevelDestroyBody(s, s.lvBody[L14_BLUEPLAT]);
+    }
+}
+static void L14_Update(Sim& s) {
+    World& w = s.world;
+    if ((s.spriteY[s.playerBody] > 750 || PlayerTouches(s, s.lvBody[L14_ROLL])) && s.playerAlive) s.PlayerDie();
+    const int32_t mp = s.lvBody[L14_MP1];
+    if (s.spriteY[mp] < 232) s.lvInt[L14I_DIR] = 1;
+    if (s.spriteY[mp] > 640) s.lvInt[L14I_DIR] = -1;
+    w.SetLinearVelocity(mp, Vec2(0, 3 * s.lvInt[L14I_DIR]));
+    L14_Switches(s);
+    if (PlayerTouches(s, s.lvBody[L14_DROP])) s.lvBody[L14_DROP] = RecreateBody(s, s.lvBody[L14_DROP], "dropPlat", DEFAULT_DENSITY, kL14Drop);
+    if (s.spriteX[s.playerBody] > 1410 && !s.lvInt[L14I_ROLLGO]) {
+        s.lvInt[L14I_ROLLGO] = 1;
+        const int32_t rb = s.lvBody[L14_ROLL];
+        w.ApplyImpulse(rb, Vec2(-5, 0), w.bodies[rb].xf.position);
+    }
+}
+
 static void NotImplemented(Sim&) { fatal("level not implemented yet"); }
+
+// switchFrame[i] -> clip, per level (order used by the level scripts)
+static const char* SwitchClip(int32_t level, int32_t i) {
+    static const char* l5[] = {"blueCheck", "greenCheck"};
+    static const char* l7[] = {"redCheck", "blueCheck"};
+    static const char* l14[] = {"blueCheck"};
+    if (level == 5 && i < 2) return l5[i];
+    if (level == 7 && i < 2) return l7[i];
+    if (level == 14 && i < 1) return l14[i];
+    return nullptr;
+}
+int32_t Sim::LoggedFlags() const {
+    int32_t f = 0;
+    for (int32_t i = 0; i < 3; ++i)
+        if (staticFlag[i]) f |= 1 << i;
+    for (int32_t i = 0; i < 4; ++i) {
+        const char* c = SwitchClip(tpl->id, i);
+        if (!c || switchFrame[i] == 1) continue;
+        if (!std::strcmp(c, "blueCheck")) f |= 1 << 8;
+        if (!std::strcmp(c, "greenCheck")) f |= 1 << 9;
+        if (!std::strcmp(c, "redCheck")) f |= 1 << 10;
+    }
+    return f;
+}
 
 const LevelScript& GetLevelScript(int32_t id) {
     static const LevelScript scripts[] = {
@@ -594,6 +1013,11 @@ const LevelScript& GetLevelScript(int32_t id) {
         {2, L2_Construct, L2_Update, true},
         {3, L3_Construct, L3_Update, true},
         {4, L4_Construct, L4_Update, true},
+        {5, L5_Construct, L5_Update, true, L5_Switches},
+        {6, L6_Construct, L6_Update, true},
+        {7, L7_Construct, L7_Update, true, L7_Switches},
+        {12, L12_Construct, L12_Update, true},
+        {14, L14_Construct, L14_Update, true, L14_Switches},
         {8, L8_Construct, L8_Update, true},
     };
     for (const LevelScript& ls : scripts)
@@ -605,7 +1029,9 @@ const LevelScript& GetLevelScript(int32_t id) {
 
 // ---------------------------------------------------------------- construction
 
-void Sim::Load(LevelTemplate* t, int32_t checkpoint) {
+void Sim::Load(LevelTemplate* t, int32_t checkpoint, bool keepStatics) {
+    if (!keepStatics)
+        for (bool& f : staticFlag) f = false;
     tpl = t;
     lastCheckNum = checkpoint;
     frameCount = 0;
@@ -634,6 +1060,7 @@ void Sim::Restart() {
     if (lastCheckNum >= nCheck) fatal("checkpoint index out of range");
     // Level(): levelAim.stop(); each checkPoint<i>.stop(), gotoAndStop(5) if already collected
     aimFrame = 1;
+    for (int32_t& f : switchFrame) f = 1;
     for (int32_t i = 0; i < 5; ++i) cpFrame[i] = (i < nCheck && lastCheckNum > i) ? 5 : 1;
     char cpName[32];
     std::snprintf(cpName, sizeof cpName, "checkPoint%d", lastCheckNum);
@@ -838,6 +1265,7 @@ void Sim::DeadUpdate() {
     camTween = true;
     DisplayUpdate();
     if (gless) CameraStep();
+    if (GetLevelScript(tpl->id).deadUpdate) GetLevelScript(tpl->id).deadUpdate(*this);
     ++deadTicks;
 }
 

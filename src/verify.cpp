@@ -97,11 +97,19 @@ std::vector<int> Compare(const FrameStats& s, const std::vector<std::string>& f,
 // Optional extension: after the 21 standard columns, groups of 7 columns
 // <name> <px> <py> <a> <vx> <vy> <w> (hex) for other dynamic bodies.
 // Returns false on mismatch (appending a description to `detail`).
-static long g_cameraFramesChecked = 0, g_matrixFramesChecked = 0;
+static long g_cameraFramesChecked = 0, g_matrixFramesChecked = 0, g_stateFramesChecked = 0;
+// Trailing block after the extra-body groups (docs/STATS_LOGGING.md 3.0):
+//   v1 (6 fields): ball.a ball.b Level.x Level.y dp[0] dp[1]
+//   v2 (8 fields): v1 + lastCheckNum + flags
+static size_t TrailLen(const std::vector<std::string>& f) {
+    if (f.size() >= 29 && (f.size() - 21) % 7 == 1) return 8;
+    if (f.size() >= 27 && (f.size() - 21) % 7 == 6) return 6;
+    return 0;
+}
 bool CompareExtraBodies(const Sim& sim, const std::vector<std::string>& f, std::string& detail, int& groups) {
     groups = 0;
     bool ok = true;
-    for (size_t i = 21; i + 7 <= f.size(); i += 7) {
+    for (size_t i = 21; i + 7 <= f.size() - TrailLen(f); i += 7) {
         ++groups;
         const std::string& name = f[i];
         if (name.rfind("playerDiePart", 0) == 0) continue;  // random death debris: not simulated
@@ -127,9 +135,20 @@ bool CompareExtraBodies(const Sim& sim, const std::vector<std::string>& f, std::
             }
         }
     }
-    // Trailing block (docs/STATS_LOGGING.md 3.8): ball matrix a b, Level.x Level.y dp[0] dp[1]
-    if (f.size() >= 27 && (f.size() - 21) % 7 == 6) {
-        const size_t c = f.size() - 6;
+    // Trailing block: ball matrix a b, Level.x Level.y dp[0] dp[1] (+ v2: lastCheckNum flags)
+    if (TrailLen(f)) {
+        const size_t c = f.size() - TrailLen(f);
+        if (TrailLen(f) == 8) {
+            const long fc = std::stol(f[c + 6]), ff = std::stol(f[c + 7]);
+            if (fc != sim.lastCheckNum || ff != sim.LoggedFlags()) {
+                char buf[200];
+                std::snprintf(buf, sizeof buf, "  state  flash lastCheckNum=%ld flags=%ld  sim=%d / %d\n", fc, ff, sim.lastCheckNum,
+                              sim.LoggedFlags());
+                detail += buf;
+                ok = false;
+            }
+            ++g_stateFramesChecked;
+        }
         if (sim.playerAlive) {
             const FlashMatrix m = FlashRotationMatrix(sim.spriteRotW[sim.playerBody]);
             const double fa = FromHex(f[c]), fb = FromHex(f[c + 1]);
@@ -232,7 +251,10 @@ int CmdVerify(int argc, char** argv) {
         }
         auto& tp = tpls[sg.level];
         if (!tp) tp.reset(new LevelTemplate(sg.level));
-        sim->Load(tp.get(), sg.checkpoint);
+        // AS3 static level flags survive the R (SetLevel(id, true)) that ended the previous segment
+        const bool afterR = si > 0 && segs[si - 1].level == sg.level && !segs[si - 1].entries.empty() &&
+                            segs[si - 1].entries.back().restart;
+        sim->Load(tp.get(), sg.checkpoint, afterR);
         bool ok = true;
         int endReason = 0;  // 0 = end of log, 1 = death, 2 = win
         bool diedCounted = false;
@@ -282,8 +304,16 @@ int CmdVerify(int argc, char** argv) {
                     detail += buf;
                 }
                 if ((e.f[20] == "1") != sim->isTimeStop) detail += "  ts     flash=" + e.f[20] + "  sim=" + (sim->isTimeStop ? "1" : "0") + "\n";
-                if (e.f.size() >= 27 && (e.f.size() - 21) % 7 == 6) {
-                    const size_t c = e.f.size() - 4;
+                if (TrailLen(e.f)) {
+                    const size_t c = e.f.size() - TrailLen(e.f) + 2;
+                    if (TrailLen(e.f) == 8) {
+                        const long fc = std::stol(e.f[c + 4]), ff = std::stol(e.f[c + 5]);
+                        if (fc != sim->lastCheckNum || ff != sim->LoggedFlags()) {
+                            std::snprintf(buf, sizeof buf, "  state  flash lastCheckNum=%ld flags=%ld  sim=%d / %d\n", fc, ff,
+                                          sim->lastCheckNum, sim->LoggedFlags());
+                            detail += buf;
+                        }
+                    }
                     const double mine[4] = {sim->camX, sim->camY, sim->dpX, sim->dpY};
                     static const char* fld[4] = {"Level.x", "Level.y", "dp[0]", "dp[1]"};
                     for (int k = 0; k < 4; ++k) {
@@ -314,7 +344,7 @@ int CmdVerify(int argc, char** argv) {
             uint8_t code = (uint8_t)std::stoi(e.f[2]);
             // Death: Flash logs the 8 playerDiePart* debris bodies from the frame Level.PlayerDie ran.
             bool flashDied = false;
-            for (size_t k = 21; k + 7 <= e.f.size(); k += 7)
+            for (size_t k = 21; k + 7 <= e.f.size() - TrailLen(e.f); k += 7)
                 if (e.f[k].rfind("playerDiePart", 0) == 0) flashDied = true;
             // Artifact: the logger writes input 0 on the death frame although the game read the keys
             // (every logged death: Flash's velocity matches the previous tick's input). Try the logged
@@ -403,8 +433,8 @@ int CmdVerify(int argc, char** argv) {
     if (trailingSkipped)
         std::printf("trailing rows skipped (logged without the frame advancing, input field unreliable): %ld\n", trailingSkipped);
     if (g_cameraFramesChecked)
-        std::printf("camera (Level.x/y, dp) compared on %ld frames, ball display matrix on %ld\n", g_cameraFramesChecked,
-                    g_matrixFramesChecked);
+        std::printf("camera (Level.x/y, dp) compared on %ld frames, ball display matrix on %ld, checkpoint/flags on %ld\n",
+                    g_cameraFramesChecked, g_matrixFramesChecked, g_stateFramesChecked);
     if (deathsMatched) std::printf("deaths on the same tick as Flash (player fields exact, debris not simulated): %d\n", deathsMatched);
     if (extraGroupsSeen) std::printf("extra bodies compared per frame: up to %d\n", extraGroupsSeen);
     if (!firstFieldHist.empty()) {
