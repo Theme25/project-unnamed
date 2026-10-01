@@ -236,6 +236,12 @@ int CmdVerify(int argc, char** argv) {
         bool ok = true;
         int endReason = 0;  // 0 = end of log, 1 = death, 2 = win
         bool diedCounted = false;
+        long segFrameBase = 0;
+        for (const Entry& e0 : sg.entries)
+            if (!e0.restart) {
+                segFrameBase = std::stol(e0.f[1]);
+                break;
+            }
         for (size_t ei = 0; ei < sg.entries.size(); ++ei) {
             const Entry& e = sg.entries[ei];
             if (e.restart) {
@@ -252,7 +258,9 @@ int CmdVerify(int argc, char** argv) {
             // Artifact: the last row of a log can be written without the frame counter advancing
             // (the stop/export keypress triggers one more Update), and its "in" field does not
             // reflect the keys the game actually read. Skip such a trailing row.
-            if (ei > 0 && !sg.entries[ei - 1].restart && e.f[1] == sg.entries[ei - 1].f[1]) {
+            // (the win row also repeats the previous frame number, frameCount stops at the win: compare it)
+            const bool winRow = e.f[20] == "1" && ei > 0 && !sg.entries[ei - 1].restart && sg.entries[ei - 1].f[20] != "1";
+            if (!winRow && ei > 0 && !sg.entries[ei - 1].restart && e.f[1] == sg.entries[ei - 1].f[1]) {
                 bool tail = true;
                 for (size_t k = ei; k < sg.entries.size(); ++k)
                     if (sg.entries[k].restart || sg.entries[k].f[1] != e.f[1]) tail = false;
@@ -267,8 +275,10 @@ int CmdVerify(int argc, char** argv) {
                 sim->Tick((uint8_t)std::stoi(e.f[2]));
                 std::string detail;
                 char buf[256];
-                if (std::stol(e.f[1]) != sim->frameCount) {
-                    std::snprintf(buf, sizeof buf, "  frame  flash=%s  sim=%d\n", e.f[1].c_str(), sim->frameCount);
+                // Game.frameCount keeps counting across R restarts: compare relative to the segment's first row
+                if (std::stol(e.f[1]) - segFrameBase != sim->frameCount) {
+                    std::snprintf(buf, sizeof buf, "  frame  flash=%s (segment-relative %ld)  sim=%d\n", e.f[1].c_str(),
+                                  std::stol(e.f[1]) - segFrameBase, sim->frameCount);
                     detail += buf;
                 }
                 if ((e.f[20] == "1") != sim->isTimeStop) detail += "  ts     flash=" + e.f[20] + "  sim=" + (sim->isTimeStop ? "1" : "0") + "\n";
@@ -309,7 +319,9 @@ int CmdVerify(int argc, char** argv) {
             // Artifact: the logger writes input 0 on the death frame although the game read the keys
             // (every logged death: Flash's velocity matches the previous tick's input). Try the logged
             // input first, then the previous one.
-            if (ei > 0 && flashDied && code == 0 && ei >= 2 && !sg.entries[ei - 1].restart) {
+            // (PlayerWin also calls OutControl, so the win row has the same artifact)
+            const bool flashWonHere = e.f[20] == "1" && ei > 0 && sg.entries[ei - 1].f[20] != "1";
+            if (ei > 0 && (flashDied || flashWonHere) && code == 0 && ei >= 2 && !sg.entries[ei - 1].restart) {
                 const uint8_t prevCode = (uint8_t)std::stoi(sg.entries[ei - 1].f[2]);
                 if (prevCode != 0) {
                     auto trial = std::make_unique<Sim>(*sim);
@@ -387,7 +399,7 @@ int CmdVerify(int argc, char** argv) {
     if (postDeathFrames || winsAfterDeath)
         std::printf("post-death frames matched (camera, dp, frame, win flag): %ld; wins after death: %ld\n", postDeathFrames, winsAfterDeath);
     if (deathInputFromPrev)
-        std::printf("death frames logged as input 0, matched with the previous tick's input: %ld\n", deathInputFromPrev);
+        std::printf("death/win frames logged as input 0 (OutControl), matched with the previous tick's input: %ld\n", deathInputFromPrev);
     if (trailingSkipped)
         std::printf("trailing rows skipped (logged without the frame advancing, input field unreliable): %ld\n", trailingSkipped);
     if (g_cameraFramesChecked)

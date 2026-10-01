@@ -213,10 +213,10 @@ static double PlacementY(const RawPlacement& p) { return p.ty / 20.0; }
 struct TimelineRotation { int32_t level; const char* name; uint64_t bits; bool measured; };
 static const TimelineRotation kTimelineRotations[] = {
     {8, "killSpusk2", 0xc066702340000000ULL, true},  // rb1_calib_l8.tsv E9a: -179.50430297851562
-    // PROVISIONAL (atan2 of the 16.16 matrix; Flash's timeline getter differs slightly): replace from an
-    // E9a dump of Level 4. Sim::provisionalRotations counts their use.
-    {4, "axe1", 0xc047d48ef0f1b1b7ULL, false},  // atan2 = -47.660612218870874
-    {4, "axe2", 0x4047ae896bb5cd0eULL, false},  // atan2 = 47.36356874825479
+    // Level 4 axes: recovered from the tick-0 body angle in rb1_stats_deathwarp*.tsv (angle = rotation * PI/180
+    // has exactly one double solution each); float32-precision values like killSpusk2's.
+    {4, "axe1", 0xc047d49680000000ULL, true},  // -47.66084289550781 (atan2 of the matrix: -47.660612218870874)
+    {4, "axe2", 0x4047ae8d00000000ULL, true},  // 47.363677978515625 (atan2 of the matrix: 47.36356874825479)
 };
 bool LookupTimelineRotation(int32_t level, const char* name, double& out, bool* measured) {
     for (const TimelineRotation& t : kTimelineRotations)

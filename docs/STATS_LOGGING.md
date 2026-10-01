@@ -340,9 +340,12 @@ mode) are reproduced (self-test).
 **Reproduced in the sim (team TASes):** Level 4 any% (death 273, flag 274), Level 4 delayed warp
 (death 285, flag 309), Level 8 double warp (checkpoint 200, flag 1084).
 
-**Needed:** an E9a dump on Level 4 (the axes `axe1`/`axe2` are timeline-rotated; their angles are
-provisional), and stats logs of the three warp TASes above, run past the flag where possible, so
-the post-death frames and the warp frame are verified bit-exact.
+**Verified (rb1_stats_deathwarp1-3.tsv):** all three warp TASes bit-exact against Flash, including
+the warp frames: Level 4 any% (flag 274), Level 4 delayed warp (24 post-death frames, flag 309), Level 8
+checkpoint warp (carried into the R restart) and flag warp (1084). The Level 4 axe rotations were
+recovered from the tick-0 body angles (one exact double each: -47.66084289550781, 47.363677978515625).
+Logger: the win row also logs input 0 (`PlayerWin` calls `OutControl`) and repeats the previous frame
+number (frameCount stops); `Game.frameCount` continues across R restarts.
 
 ### 3.4 Other dynamic bodies (needed for levels with joints or moving parts)
 
