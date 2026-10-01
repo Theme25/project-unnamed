@@ -2,3 +2,4 @@ rbsim
 *.o
 tools/trig_flip_search
 *.tsv
+__pycache__/

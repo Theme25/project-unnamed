@@ -685,7 +685,7 @@ int main(int argc, char** argv) {
             else { std::fprintf(stderr, "--trig intel|glibc\n"); return 2; }
         }
     if (argc < 2) {
-        std::fprintf(stderr, "usage: rbsim run|log|test|bench|verify [options]\n");
+        std::fprintf(stderr, "usage: rbsim run|log|test|bench|verify|calib|optimize [options]\n");
         return 2;
     }
     if (!std::strcmp(argv[1], "run")) return CmdRun(argc, argv);
