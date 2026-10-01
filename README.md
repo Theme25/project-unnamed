@@ -34,6 +34,12 @@ about 60,000 on Level 8 (the car adds up to 53 contacts). Tested by slowing know
 Level 8 424 -> 405 frames in 60 s, Level 2 200 -> 189 in 30 s (one thread). The team's
 Level 2, 4 and 8 TASes are not improved by short runs.
 
+**Compact snapshots** (`src/snapshot.h`): a state is stored as the 8-byte blocks that differ from
+the freshly loaded level (average ~6 KB, worst ~17 KB, vs 152 KB for a full `Sim`). Restoring
+copies the base and patches the blocks back, so it is byte-identical by construction; encodings
+are portable to another process (same binary and level), which makes saved/resumable searches
+possible. Encode ~10 us, decode ~5 us.
+
 **Build flags:** use the Makefile's flags (`-O2 -ffp-contract=off -fno-fast-math
 -fexcess-precision=standard`). `-O3 -march=native` was tried: it breaks bit-exactness on
 Levels 3, 8 and 12 and is not faster. Never add fast-math, FMA contraction or `-march` flags.

@@ -4,6 +4,7 @@
 //   rbsim test                       # determinism / snapshot self-tests
 //   rbsim bench [--frames N]         # raw simulation throughput
 #include "redball.h"
+#include "snapshot.h"
 #include <chrono>
 #include <cmath>
 #include <algorithm>
@@ -582,6 +583,69 @@ static int CmdTest() {
         a->Load(&t7, 0, false);
         const bool backAfterFresh = a->world.bodies[a->lvBody[5]].inWorld && !a->staticFlag[0];
         check(wallThere && goneAfterR && backAfterFresh, "level 7 redCheckLevel: survives a checkpoint restart, cleared by a fresh load");
+    }
+    // 19. Compact snapshots (src/snapshot.h): byte-exact round trip, identical continuation, portable base
+    {
+        struct R { int lv; const char* in; };
+        const R runs[] = {{2, "d18e1w1n1w5n26a2e1w4n10w1n46a2n4d1n19w6n2w8n28"},
+                          {4, "d12e1w3a2n5a2n31d8n78a1n1e1n13w2n1w1e1w12n9w1n43w6n1w3n9w2n2w1n2w17n3"},
+                          {8, "d19a3n1a1n12d1a1n21d15e1d1e1d3e22d7e5d30e1d20e7d3e1d9n1d76e2d14a1n1a1n18a3n10a1n18w9n65"},
+                          {12, "n5d3e19q5w1q4a1q16a6d1a1n1a8q1a2q1a2S2d12e30d8e5d81e17d4e1d1e3d6e1d65e1d32e5"}};
+        bool exact = true, cont = true, portable = true;
+        size_t maxBytes = 0, sumBytes = 0, count = 0;
+        uint64_t rng = 12345;
+        auto next = [&]() { rng = rng * 6364136223846793005ULL + 1442695040888963407ULL; return (uint8_t)((rng >> 33) % 8); };
+        std::vector<uint8_t> buf;
+        for (const R& r : runs) {
+            LevelTemplate t(r.lv);
+            auto base = std::make_unique<Sim>();
+            base->Load(&t);
+            auto s = std::make_unique<Sim>(*base);
+            auto d = std::make_unique<Sim>();
+            const std::vector<uint8_t> in = DecodeInputs(r.in);
+            for (size_t f = 0; f < in.size() && !s->isTimeStop; ++f) {
+                s->Tick(in[f]);
+                buf.clear();
+                const size_t n = EncodeSnapshot(*base, *s, buf);
+                maxBytes = std::max(maxBytes, n);
+                sumBytes += n;
+                ++count;
+                DecodeSnapshot(*base, buf.data(), *d);
+                if (std::memcmp(static_cast<const void*>(d.get()), static_cast<const void*>(s.get()), sizeof(Sim))) exact = false;
+                if (f % 50 == 25) {  // continue both with random inputs
+                    Sim a = *s, b = *d;
+                    for (int k = 0; k < 60; ++k) {
+                        const uint8_t c = next();
+                        a.Tick(c);
+                        b.Tick(c);
+                    }
+                    if (std::memcmp(static_cast<const void*>(&a), static_cast<const void*>(&b), sizeof(Sim))) cont = false;
+                }
+            }
+            // a different template object (another address), as in another process
+            LevelTemplate t2(r.lv);
+            auto base2 = std::make_unique<Sim>();
+            base2->Load(&t2);
+            buf.clear();
+            auto mid = std::make_unique<Sim>(*base);
+            for (size_t f = 0; f < in.size() / 2; ++f) mid->Tick(in[f]);
+            EncodeSnapshot(*base, *mid, buf);
+            auto other = std::make_unique<Sim>();
+            DecodeSnapshot(*base2, buf.data(), *other);
+            if (other->tpl != &t2) portable = false;
+            for (size_t f = in.size() / 2; f < in.size(); ++f) {
+                mid->Tick(in[f]);
+                other->Tick(in[f]);
+                const FrameStats x = mid->Stats(in[f]), y = other->Stats(in[f]);
+                if (std::memcmp(&x.px, &y.px, sizeof(double) * 6) || x.contactNames != y.contactNames || x.worldContactCount != y.worldContactCount ||
+                    mid->isTimeStop != other->isTimeStop)
+                    portable = false;
+            }
+        }
+        check(exact, "compact snapshot: every state along 4 routes round-trips byte-for-byte");
+        check(cont, "compact snapshot: decoded states continue identically (random inputs)");
+        check(portable, "compact snapshot: decodes against a base built elsewhere and replays identically");
+        std::printf("       compact snapshot: avg %zu bytes, max %zu bytes (full state %zu)\n", sumBytes / count, maxBytes, sizeof(Sim));
     }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

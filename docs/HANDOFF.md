@@ -345,7 +345,7 @@ Known level-specific notes:
    - Spikes use `hitTestPoint` shape tests on `Shipik` instances.
    - Needed so the search can detect a finish without Flash.
 4. **Search:** `rbsim optimize` (src/search.cpp) exists: local search from a known route, multi-threaded, flag frame + flag overlap score, death-warp rule. Still to do:
-   - Shrink the snapshot (now ~152 KB; copy only the used prefixes of arrays).
+   - ~~Shrink the snapshot~~ DONE: `src/snapshot.h` compact snapshots (8-byte-block diff vs the freshly loaded level, byte-exact by construction, portable across processes): avg ~6 KB, max ~17 KB (was 152 KB); encode ~10 us, decode ~5 us.
    - Work-stealing thread pool, prefix sharing, pruning (e.g. the practice
      build's `distToGoal`).
 5. Optionally, identify the ActiveX host's `sin`/`cos`; that needs its binary.
