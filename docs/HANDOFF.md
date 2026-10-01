@@ -53,6 +53,7 @@ identically in the real game.
 | 1 | **bit-exact** against Flash logs (FP 11.4: 2/2 runs, 1,204/1,204 frames, incl. TAS win at tick 510) |
 | 2 | **bit-exact** against Flash logs (FP 11.4: 4 runs, 1,350 frames; pendulum, moving platform, goal and checkpoint timing) |
 | 3 | **bit-exact** against Flash logs (FP 11.4, MATHSPIKES = 1: 14 segments incl. 10 spike deaths on the Flash tick, a win, a checkpoint-1 restart; camera and ball matrix checked every frame); standardized spike check calibrated exactly (E8a/b/c) |
+| 4 | implemented: crushers (prismatic), swinging axes (revolute, timeline-rotated: **provisional angles**, need E9a), drop platform destroyed/re-created as dynamic on touch; team death-warp TASes reproduced (any% flag 274, delayed warp 309); **awaiting Flash logs** |
 | 8 | **bit-exact** against Flash logs (FP 11.4, MATHSPIKES = 1: 10 runs, 8,114 frames: idle, crusher death and crusher contact without death, wall-spike and ramp deaths, car driving, killSpusk2 death, "flying car", "windshield clip", checkpoint-1 restart, 3 wins); revolute joints verified; `killSpusk2` angle = Flash-reported rotation (§3.9) |
 | 3–17 | placements extracted (`src/levels_data.h`); scripts not written |
 

@@ -210,26 +210,32 @@ static double PlacementY(const RawPlacement& p) { return p.ty / 20.0; }
 // killSpusk2: matrix -65400/-566 gives atan2 = -179.50414982270968, Flash reports -179.50430297851562,
 // ~10 float32 ulps away, an internal approximation). Until that routine is known, the values Flash
 // reports (docs/STATS_LOGGING.md 3.9, E9a dump per level) are used verbatim.
-struct TimelineRotation { int32_t level; const char* name; uint64_t bits; };
+struct TimelineRotation { int32_t level; const char* name; uint64_t bits; bool measured; };
 static const TimelineRotation kTimelineRotations[] = {
-    {8, "killSpusk2", 0xc066702340000000ULL},  // rb1_calib_l8.tsv E9a: -179.50430297851562
+    {8, "killSpusk2", 0xc066702340000000ULL, true},  // rb1_calib_l8.tsv E9a: -179.50430297851562
+    // PROVISIONAL (atan2 of the 16.16 matrix; Flash's timeline getter differs slightly): replace from an
+    // E9a dump of Level 4. Sim::provisionalRotations counts their use.
+    {4, "axe1", 0xc047d48ef0f1b1b7ULL, false},  // atan2 = -47.660612218870874
+    {4, "axe2", 0x4047ae896bb5cd0eULL, false},  // atan2 = 47.36356874825479
 };
-bool LookupTimelineRotation(int32_t level, const char* name, double& out) {
+bool LookupTimelineRotation(int32_t level, const char* name, double& out, bool* measured) {
     for (const TimelineRotation& t : kTimelineRotations)
         if (t.level == level && !std::strcmp(t.name, name)) {
             std::memcpy(&out, &t.bits, 8);
+            if (measured) *measured = t.measured;
             return true;
         }
     return false;
 }
+int32_t g_provisionalRotations = 0;
 static double PlacementRotation(int32_t level, const RawPlacement& p) {
     if (p.b == 0 && p.c == 0 && p.a > 0) return 0;
-    for (const TimelineRotation& t : kTimelineRotations)
-        if (t.level == level && !std::strcmp(t.name, p.name)) {
-            double v;
-            std::memcpy(&v, &t.bits, 8);
-            return v;
-        }
+    double v;
+    bool measured = false;
+    if (LookupTimelineRotation(level, p.name, v, &measured)) {
+        if (!measured) ++g_provisionalRotations;
+        return v;
+    }
     fatal("rotated timeline placement without a measured rotation (log E9a for this level, docs/STATS_LOGGING.md 3.9)");
 }
 
@@ -247,9 +253,15 @@ int32_t Sim::Geom(const std::string& key, const ShapeDef& def) {
 int32_t Sim::BeginBody(const char* name) {
     const RawPlacement& p = tpl->Place(name);
     double x = PlacementX(p), y = PlacementY(p);
+    double rot = createAtSprite >= 0 ? spriteRot[createAtSprite] : PlacementRotation(tpl->id, p);
+    double rotW = createAtSprite >= 0 ? spriteRotW[createAtSprite] : rot;
+    if (createAtSprite >= 0) {  // CreateBody reads the sprite's CURRENT x/y/rotation (getter values)
+        x = spriteX[createAtSprite];
+        y = spriteY[createAtSprite];
+    }
     BodyDef bd;
     bd.position = Vec2(x / PHYS_SCALE, y / PHYS_SCALE);
-    bd.angle = PlacementRotation(tpl->id, p) * (AS3_PI / 180);
+    bd.angle = rot * (AS3_PI / 180);
     int32_t idx = -1;
     for (size_t i = 0; i < tpl->bodyNames.size(); ++i)
         if (tpl->bodyNames[i] == name) idx = (int32_t)i;
@@ -263,7 +275,8 @@ int32_t Sim::BeginBody(const char* name) {
     hasSprite[b] = true;
     spriteX[b] = x;
     spriteY[b] = y;
-    spriteRot[b] = spriteRotW[b] = PlacementRotation(tpl->id, p);
+    spriteRot[b] = rot;
+    spriteRotW[b] = rotW;
     return b;
 }
 
@@ -303,9 +316,9 @@ int32_t Sim::CreateCircleBody(const char* name, double density, double friction,
 }
 
 void Sim::PlayerDie() {
-    // Level.PlayerDie spawns 8 debris bodies with Math.random() and destroys
-    // the player body. Randomness makes the continuation unreproducible, so
-    // death is treated as terminal (the search never continues past it).
+    // Level.PlayerDie spawns 8 debris bodies with Math.random() and destroys the player body; the level keeps
+    // updating (Sim::DeadUpdate models what matters: camera + the death-warp goal/checkpoint tests).
+    if (playerAlive) deathFrame = frameCount + 1;  // this Update's frame
     playerAlive = false;
 }
 
@@ -505,6 +518,74 @@ static void L8_Update(Sim& s) {
     }
 }
 
+// Level_4.as: three crushers (prismatic, pushed up at -2), two swinging axes (revolute, timeline-rotated),
+// a drop platform that is destroyed and re-created as a dynamic body when the ball touches it.
+enum { L4_KB1 = 0, L4_KB2 = 1, L4_KB3 = 2, L4_AXE1 = 3, L4_AXE2 = 4, L4_DROP = 5 };
+static void L4_Construct(Sim& s) {
+    World& w = s.world;
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    s.CreateBody("mainPlatform", "Polygon", 0, F, R, {{{810, 0}, {810, 20}, {0, 20}, {0, 0}}});
+    s.CreateBody("firstFloor", "Polygon", 0, F, R, {{{200, 0}, {200, 20}, {0, 20}, {0, 0}}});
+    s.CreateBody("secondFloor1", "Polygon", 0, F, R, {{{100, 0}, {100, 20}, {0, 20}, {0, 0}}});
+    s.CreateBody("secondFloor2", "Polygon", 0, F, R, {{{100, 0}, {100, 20}, {0, 20}, {0, 0}}});
+    s.CreateBody("secondFloor3", "Polygon", 0, F, R, {{{100, 0}, {100, 20}, {0, 20}, {0, 0}}});
+    s.CreateBody("step", "Polygon", 0, F, R,
+                 {{{117, -10}, {202, -10}, {117, 12}}, {{92, 12}, {117, 12}, {92, 34}}, {{117, 12}, {202, -10}, {150, 16}, {92, 34}},
+                  {{70, 34}, {92, 34}, {150, 122}, {70, 57}}, {{45, 57}, {70, 57}, {45, 76}}, {{24, 76}, {45, 76}, {24, 99}},
+                  {{45, 76}, {70, 57}, {24, 99}}, {{0, 99}, {24, 99}, {0, 122}}, {{24, 99}, {70, 57}, {150, 122}, {0, 122}},
+                  {{150, 122}, {92, 34}, {150, 16}}, {{202, 16}, {150, 16}, {202, -10}}});
+    s.lvBody[L4_DROP] = s.CreateBody("dropPlatform", "Polygon", 0, F, R, {{{130, 0}, {130, 10}, {0, 10}, {0, 0}}});
+    s.CreateBody("axePlatform", "Polygon", 0, F, R, {{{850, 0}, {850, 20}, {0, 20}, {0, 0}}});
+    const PolyList boom = {{{19.5, -267.5}, {19.5, -31.5}, {-19.5, -31.5}, {-19.5, -267.5}},
+                           {{-19.5, -31.5}, {19.5, -31.5}, {50.5, 0.5}, {-47.5, 0.5}}};
+    s.lvBody[L4_KB1] = s.CreateBody("killBoom1", "Polygon", D, F, R, boom);
+    s.lvBody[L4_KB2] = s.CreateBody("killBoom2", "Polygon", D, F, R, boom);
+    s.lvBody[L4_KB3] = s.CreateBody("killBoom3", "Polygon", D, F, R, boom);
+    const PolyList axe = {{{25.5, -1.5}, {40.5, -1.5}, {40.5, 113.5}, {25.5, 113.5}},
+                          {{0.5, 116.5}, {25.5, 113.5}, {40.5, 113.5}, {67.5, 116.5}, {67.5, 175.5}, {0.5, 175.5}}};
+    s.lvBody[L4_AXE1] = s.CreateBody("axe1", "Polygon", 2 * D, F, R, axe);
+    s.lvBody[L4_AXE2] = s.CreateBody("axe2", "Polygon", 2 * D, F, R, axe);
+    JointDef pj;
+    for (int k = L4_KB1; k <= L4_KB3; ++k) {
+        const int32_t kb = s.lvBody[k];
+        w.InitPrismaticJointDef(pj, kb, w.groundBody, w.bodies[kb].sweep.c, Vec2(0, 1));
+        pj.enableLimit = false;
+        pj.enableMotor = false;
+        w.CreateJoint(pj);
+    }
+    // AS3 sets killBoom1Up = true three times: killBoom2Up / killBoom3Up start false
+    s.lvInt[L4_KB1] = 1;
+    s.lvInt[L4_KB2] = 0;
+    s.lvInt[L4_KB3] = 0;
+    JointDef rj;
+    w.InitRevoluteJointDef(rj, s.lvBody[L4_AXE1], w.groundBody, Vec2(785 / PHYS_SCALE, 127 / PHYS_SCALE));
+    w.CreateJoint(rj);
+    w.InitRevoluteJointDef(rj, s.lvBody[L4_AXE2], w.groundBody, Vec2(1077 / PHYS_SCALE, 127 / PHYS_SCALE));
+    w.CreateJoint(rj);
+}
+static void L4_Update(Sim& s) {
+    if (s.spriteY[s.playerBody] > 650 || PlayerTouches(s, s.lvBody[L4_KB1]) || PlayerTouches(s, s.lvBody[L4_KB2]) ||
+        PlayerTouches(s, s.lvBody[L4_KB3]) || PlayerTouches(s, s.lvBody[L4_AXE1]) || PlayerTouches(s, s.lvBody[L4_AXE2])) {
+        if (s.playerAlive) s.PlayerDie();
+    }
+    if (PlayerTouches(s, s.lvBody[L4_DROP])) {
+        // DestroyBody + CreateBody("dropPlatform", 3 * density): the clip is reused at its current state
+        const int32_t old = s.lvBody[L4_DROP];
+        s.world.DestroyBody(old);
+        s.createAtSprite = old;
+        s.lvBody[L4_DROP] = s.CreateBody("dropPlatform", "Polygon", 3 * DEFAULT_DENSITY, DEFAULT_FRICTION, DEFAULT_RESTITUTION,
+                                         {{{130, 0}, {130, 10}, {0, 10}, {0, 0}}});
+        s.createAtSprite = -1;
+        s.hasSprite[old] = false;
+    }
+    for (int k = L4_KB1; k <= L4_KB3; ++k) {
+        const int32_t kb = s.lvBody[k];
+        if (s.spriteY[kb] > 436) s.lvInt[k] = 1;
+        if (s.spriteY[kb] < 327) s.lvInt[k] = 0;
+        if (s.lvInt[k]) s.world.SetLinearVelocity(kb, Vec2(0, -2));
+    }
+}
+
 static void NotImplemented(Sim&) { fatal("level not implemented yet"); }
 
 const LevelScript& GetLevelScript(int32_t id) {
@@ -512,6 +593,7 @@ const LevelScript& GetLevelScript(int32_t id) {
         {1, L1_Construct, L1_Update, true},
         {2, L2_Construct, L2_Update, true},
         {3, L3_Construct, L3_Update, true},
+        {4, L4_Construct, L4_Update, true},
         {8, L8_Construct, L8_Update, true},
     };
     for (const LevelScript& ls : scripts)
@@ -582,6 +664,7 @@ void Sim::Restart() {
     camTween = false;
     dpX = dpY = 0;
     deadTicks = 0;
+    deathFrame = winFrame = -1;
 
     // --- Level_N() constructor
     script.construct(*this);
@@ -691,6 +774,7 @@ void Sim::LevelUpdate(bool left, bool up, bool right) {
 }
 
 void Sim::PlayerWin() {
+    if (!isTimeStop) winFrame = frameCount + 1;  // this Update's frame (frameCount is bumped after Update)
     isTimeStop = true;  // Game.tPause = 0: the game loop stops calling Update
     aimFrame = 2;       // levelAim.play()
     Body& b = world.bodies[playerBody];

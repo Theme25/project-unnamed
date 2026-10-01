@@ -323,9 +323,26 @@ Nothing restarts the level: `Level.Update` keeps running until R. After death:
 debris physics is random and nothing of it survives a restart. `rbsim verify` keeps comparing after
 a death (frame counter, win flag, `Level.x/y`, `dp`): 19,335 post-death frames match.
 
-**Needed:** runs that actually perform a death warp (die, wait for the shifted checkpoint or goal,
-then R), with the level and the frames waited, and, if pausing matters for it, exactly which key
-is pressed (P, T, focus loss) and when.
+**Real-game rules (team notes; not in the TAS hack).** 31 fps. After a death the game respawns
+1.2 s later; after the flag it enters the next level 2.839 s later, which is what registers the
+completion. Both timers run while paused, their actions only happen unpaused, and the camera does
+not move while paused. A death-warp finish therefore needs a pause before the respawn fires and
+the unpause after the win timer: last pausable frame = death + 38, optimal unpause = flag + 88
+(Level 4 examples: windows 274-311 / 309-323, unpauses 362 / 397). The TAS hack has no pause key;
+TAS strings end at the flag. `DeathWarpFinishValid(death, flag)` encodes the constraint.
+
+**Spike glitch.** `isGless` off (default, assumed by TASes) = spike glitch on: the camera steps
+before physics, so the standardized spike test is shifted by `dp`. In the real game a pause and
+unpause within 1 s enables it, a pause > 1 s disables it (so after a death-warp pause it must be
+re-enabled). `Sim::gless` selects the mode; the team's four Level 3 cases (dies/lives in each
+mode) are reproduced (self-test).
+
+**Reproduced in the sim (team TASes):** Level 4 any% (death 273, flag 274), Level 4 delayed warp
+(death 285, flag 309), Level 8 double warp (checkpoint 200, flag 1084).
+
+**Needed:** an E9a dump on Level 4 (the axes `axe1`/`axe2` are timeline-rotated; their angles are
+provisional), and stats logs of the three warp TASes above, run past the flag where possible, so
+the post-death frames and the warp frame are verified bit-exact.
 
 ### 3.4 Other dynamic bodies (needed for levels with joints or moving parts)
 

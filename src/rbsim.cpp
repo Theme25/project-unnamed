@@ -502,6 +502,62 @@ static int CmdTest() {
         place(*a, true);
         check(!a->BallHitsTarget(cp), "same position alive: no hit (camera cancels for a live ball)");
     }
+    // 16. Death warps from the team's TASes (frames as in their notes; RTA = frames / 31)
+    {
+        struct Case { int level; const char* inputs; int death, win; bool valid; const char* name; };
+        const Case cases[] = {
+            {4, "d12e1w3a2n5a2n31d8n78a1n1e1n13w2n1w1e1w12n9w1n43w6n1w3n9w2n2w1n2w17n3", 273, 274, true, "level 4 any% TAS: death warp 1 frame after death"},
+            {4, "n27d1S1d123e1d2e22d24e48d22e5d1e8n24", 285, 309, true, "level 4 delayed death warp: flag 24 frames after death"},
+        };
+        for (const Case& c : cases) {
+            LevelTemplate t(c.level);
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);
+            for (uint8_t k : DecodeInputs(c.inputs)) {
+                s->Tick(k);
+                if (s->isTimeStop) break;
+            }
+            check(s->deathFrame == c.death && s->winFrame == c.win && DeathWarpFinishValid(s->deathFrame, s->winFrame) == c.valid, c.name);
+        }
+        // level 8: checkpoint warp (frame 200 = 6.452 s), R, flag warp (frame 1084 = 34.935 s RTA)
+        LevelTemplate t8(8);
+        auto s = std::make_unique<Sim>();
+        s->Load(&t8);
+        int total = 0, cpFrame = -1;
+        for (uint8_t k : DecodeInputs("d18a4n1d1n1d2n4a1n7d31e14d2e47d12e2d36a1d15n1R1d15e4d160e36q24d16a1d8e17a1d1a2d3e6q158a26q22a253d3n98d1n29")) {
+            if (k == IN_RESTART) {
+                s->Restart();
+                continue;
+            }
+            s->Tick(k);
+            ++total;
+            if (s->lastCheckNum == 1 && cpFrame < 0) cpFrame = total;
+            if (s->isTimeStop) break;
+        }
+        check(cpFrame == 200 && total == 1084 && s->deathFrame == 1083 && s->winFrame == 1084, "level 8 double death warp: checkpoint at 200, flag at 1084");
+    }
+    // 17. Spike glitch (isGless off = glitch on: the camera steps before physics, so the standardized spike
+    //     test is shifted by dp). Team test cases on level 3, MATHSPIKES = 1.
+    {
+        struct Case { const char* inputs; bool diesWithout, diesWith; };
+        const Case cases[] = {
+            {"d25w26q11n2a1n4", true, true},
+            {"d18e16d2e28", false, false},
+            {"d20e50", true, false},
+            {"d15e1d33e3n9w2n5a12n5d1n1a1n5", false, true},
+        };
+        LevelTemplate t3(3);
+        bool ok = true;
+        for (const Case& c : cases)
+            for (int glitch = 0; glitch < 2; ++glitch) {
+                auto s = std::make_unique<Sim>();
+                s->Load(&t3);
+                s->gless = glitch == 0;
+                for (uint8_t k : DecodeInputs(c.inputs)) s->Tick(k);
+                if (!s->playerAlive != (glitch ? c.diesWith : c.diesWithout)) ok = false;
+            }
+        check(ok, "spike glitch on/off: all four team cases (dies/lives) reproduced");
+    }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }

@@ -39,7 +39,8 @@ struct FlashMatrix { int32_t a, b; };  // c = -b, d = a (16.16)
 // rotationDeg = the value WRITTEN to DisplayObject.rotation (may lie outside (-180, 180]).
 FlashMatrix FlashRotationMatrix(double rotationDeg);
 // Flash-reported DisplayObject.rotation of rotated timeline clips (docs/STATS_LOGGING.md 3.9).
-bool LookupTimelineRotation(int32_t level, const char* name, double& out);
+bool LookupTimelineRotation(int32_t level, const char* name, double& out, bool* measured = nullptr);
+extern int32_t g_provisionalRotations;  // uses of provisional (unmeasured) timeline rotations
 struct DisplayConfig {
     bool inclusive = true;  // touching edges count as a hit (VERIFIED: E2 calibration, 5/5 touching cases hit)
 };
@@ -59,6 +60,18 @@ bool RectsHit(const Rect& a, const Rect& b);
 constexpr double SPIKE_EDGE_MARGIN = 1.0;
 struct SpikeResult { bool hit; bool uncertain; };
 SpikeResult BallHitsSpike(double spriteXpx, double spriteYpx, double rotationDeg, double dpx, double dpy, const SpikeObj& s);
+
+// Real-game timers (not in the TAS hack; teammate data, 31 fps): after a death the game respawns 1.2 s later
+// and after the flag it enters the next level 2.839 s later; both timers run while paused, the actions only
+// happen unpaused. A death-warp finish counts only if the game is paused before the respawn fires, i.e. the
+// flag frame must be <= death frame + RESPAWN_LAST_PAUSE_FRAMES; the optimal unpause is flag + 88.
+// Checked against both Level 4 examples (pause windows 274-311 and 309-323, unpauses 362 and 397).
+constexpr int32_t RESPAWN_LAST_PAUSE_FRAMES = 38;  // 1.2 s * 31 fps -> last pausable frame = death + 38
+constexpr int32_t WIN_TIMER_FRAMES = 88;           // 2.839 s * 31 fps
+// For a death-warp finish: whether the warp is usable in a real run (flag hit before the respawn).
+inline bool DeathWarpFinishValid(int32_t deathFrame, int32_t winFrame) {
+    return deathFrame < 0 || winFrame <= deathFrame + RESPAWN_LAST_PAUSE_FRAMES;
+}
 
 struct Sim;
 struct LevelScript {
@@ -124,6 +137,8 @@ struct Sim {
     bool camTween = false;              // a camera tween was added by the previous Update
     double dpX = 0, dpY = 0;            // Level.dp: camera step of this Update (old - new)
     int32_t deadTicks = 0;             // Updates run since the ball died
+    int32_t deathFrame = -1;           // frameCount when PlayerDie ran (-1: alive)
+    int32_t winFrame = -1;             // frameCount of the Update that called PlayerWin
     bool gless = false;                 // Game.isGless: camera steps at the end of Update, dp = 0
     int32_t cpFrame[5] = {1, 1, 1, 1, 1};  // checkPointN.currentFrame (1 = armed, 5 = already collected)
     int32_t frameCount = 0;
@@ -151,6 +166,7 @@ struct Sim {
     int32_t CreateCircleBody(const char* name, double density, double friction, double restitution, double size);
     void PlayerDie();
     void PlayerWin();
+    int32_t createAtSprite = -1;  // >= 0: next CreateBody uses this body's sprite state (AS3 CreateBody on a moved clip)
     bool BallHitsTarget(const DisplayObj& o);  // hitTestObject, alive or dead (death-warp rule)
     double SpriteX(int32_t body) const { return spriteX[body]; }
     double SpriteY(int32_t body) const { return spriteY[body]; }
