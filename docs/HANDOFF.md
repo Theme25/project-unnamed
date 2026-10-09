@@ -40,15 +40,15 @@ recorded in README.md ("Verification status") and below.
 | area | status |
 |---|---|
 | physics core | bit-exact (Box2DFlash quirks replicated; Intel LIBM `sin`/`cos`) |
-| levels **1-10, 12, 14** | **bit-exact** against Flash logs (59 logs, 73,757 frames; table in README) |
-| levels 11, 13, 15, 16, 17 | **scripted from the AS3, NOT verified** (no Flash logs yet; `rbsim` warns when one is used; section 8) |
+| levels **1-12, 14** | **bit-exact** against Flash logs (64 logs, 78,264 frames; table in README) |
+| levels 13, 15, 16, 17 | **scripted from the AS3, NOT verified** (no Flash logs yet; `rbsim` warns when one is used; section 8) |
 | display layer | exact: rotation matrix, hit tests, camera, standardized spikes (section 6) |
-| death / death warp | exact: post-death camera + unguarded goal/checkpoint/switch tests; 4 logged warps verified (incl. Level 9 boomCrank, death 358 / flag 359) |
+| death / death warp | exact: ball body destroyed, full `Update` keeps running (world, machinery), unguarded goal/checkpoint/switch tests; 5 logged warps verified (incl. L9 death 358 / flag 359, L11 onto the moving flag 1110 / 1117). Debris (random) not simulated |
 | Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical |
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-Self-tests: `./rbsim test` → 68 tests, `ALL PASSED` (also under Wine).
+Self-tests: `./rbsim test` → 72 tests, `ALL PASSED` (also under Wine).
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
@@ -238,24 +238,42 @@ death cause (contacts or spike row) or the win.
 
 The user said the remaining levels' logs are all recorded and will come one by one.
 
-**To verify (per level: 11, 13, 15, 16, 17):**
+**Level 11: VERIFIED.** `rb1_calib_L11.tsv`: 54/54 placements, both hit-test targets exact; measured
+rotations: train line 0.173980712890625 (all 36 clips), `triangle` 0.753570556640625. Logs `rb1_stats11.1-5`:
+9 segments, 4,507 frames bit-exact: idle train ride, `killRotate` death 334, spike death 564 on a turned row, the
+flag pushed and turned by the train, a fall death then a death warp onto the moving flag (1110 -> 1117), win 309.
+Two engine changes came out of it:
+1. **Turned flag box:** `hitTestObject` boxes each part of the clip (pole shape 65, cloth morph 64 at ratio 0)
+   through the full transform and unions them (`Sim::GoalTarget`, `kAimChildren`); the rotated-union model was
+   wrong on 10 of 11 near-contact frames. But E10/`getBounds` of the nested `triangle` follows the union rule, so
+   the two Flash calls differ for turned clips. Corner rounding is unknown (nearest used; alternatives counted in
+   `displayUncertain`).
+2. **After death the full `Level.Update` runs** (ball body destroyed in `PlayerDie`; world steps; machinery and
+   `Level_N.Update` run). `DeadUpdate` is gone. Needed for the death warp onto the moving flag. `verify` now also
+   reports post-death body agreement (not a failure: debris is random); every difference seen so far is the body
+   that killed the ball, hit by debris spawning at the ball.
+
+**Level 16 warning (for when its files arrive):** `wrongWay` is a hit-test target that is rotated (5.5 degrees) and
+holds a shape plus a TextField ("Wrong way!"); `tools/gen_display_data.py` skips TextFields, so its stored box is
+probably wrong even before the per-part question. Use its E10 row and the logs (any run through it) to fix it.
+
+**To verify (per level: 13, 15, 16, 17):**
 1. The user records the standard set (docs/STATS_LOGGING.md 6.0: idle, each death kind, checkpoint-1
    restart, a win) plus an E9level/E9a/E10 dump; Level 11 also needs a run that pushes the flag.
 2. `./rbsim verify <log>` (`diverged: 0`) and `./rbsim calib <dump>` (`CALIB OK`).
 3. Replace the provisional entries of `kTimelineRotations` (measured = false; `atan2` of the placement
    matrix) with the E9a values (static and dynamic clips alike: E9a reports every clip's rotation;
-   Level 11 `triangle` and train line, Level 13 `kingStar1`, Level 16 `axe1`).
-4. Spike calibration for rotated/scaled Shipik rows (Levels 17, 11, 15 and the pit ends of 9/10; the E8c method of
-   docs/STATS_LOGGING.md), `wrongWay` (Level 16) and Level 11's turned-flag box rounding.
-5. Known simplifications to check against logs: Level 11 does not step the world after death while
-   Flash keeps stepping it (matters only for a flag still moving at death); Level 15 `killLine` is
-   modelled as its static box shifted by the patrol (it is a PlaceObject3 clip: check E10).
+   Level 13 `kingStar1`, Level 16 `axe1`).
+4. Spike calibration for rotated/scaled Shipik rows (Levels 17, 15 and the turned rows of 9, 10, 11; the E8c method of
+   docs/STATS_LOGGING.md), `wrongWay` (Level 16).
+5. Known simplification to check against logs: Level 15 `killLine` is modelled as its static box
+   shifted by the patrol (it is a PlaceObject3 clip: check E10).
 6. When a level is verified: add it to `LevelVerified()`, move it in the README tables, add its logs'
    numbers to "Verification status".
 
 Observed (unverified) idle behaviour, a first comparison: with no input the ball dies on Level 13
 (frame 145, the loose star hits it) and Level 17 (78, rolls off the crown); it survives 600 frames on
-Levels 11, 15 and 16. (The Level 9 and 10 predictions matched Flash.)
+Levels 15 and 16. (The Level 9, 10 and 11 predictions matched Flash.)
 
 **Search-side next steps** (for whoever takes the bruteforcer): better beam score (moving platforms /
 timing, calibrate with `--explain` against L2 186, L4 274, L8 405); exhaustive window proofs and endgame
@@ -265,7 +283,7 @@ proofs; physics profiling for contact-heavy levels (must stay bit-exact).
 
 ```bash
 git clone https://github.com/Theme25/project-unnamed.git && cd project-unnamed
-make && ./rbsim test                  # expect ALL PASSED (68)
+make && ./rbsim test                  # expect ALL PASSED (72)
 
 # Windows cross build + Wine (to check the Windows build)
 mv /etc/apt/sources.list.d/nodesource* /tmp/ 2>/dev/null   # a broken repo blocks apt-get update

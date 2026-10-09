@@ -81,8 +81,8 @@ struct LevelScript {
     void (*construct)(Sim&);  // body of Level_N() after super()
     void (*update)(Sim&);     // body of Level_N.Update() after super.Update()
     bool implemented;
-    // The part of Level_N.Update() that still matters after death: unguarded hitTestObject switches
-    // (dead-ball rule) and their persistent effects. nullptr: nothing.
+    // Unguarded hitTestObject switches of Level_N.Update (also run after death, with the dead-ball rule). Kept for
+    // reference / tools; Sim::Tick runs the full update after death, so nothing calls this separately.
     void (*deadUpdate)(Sim&) = nullptr;
 };
 const LevelScript& GetLevelScript(int32_t id);
@@ -200,7 +200,6 @@ struct Sim {
     int32_t GetBodyAtPoint(double x, double y, bool includeStatic);
     void LevelUpdate(bool left, bool up, bool right);
     void DisplayUpdate();
-    void DeadUpdate();     // Level.Update after PlayerDie (camera + goal/checkpoint tests only)
     void CameraStep();     // Tweener.onEnterFrame via COMM "TweenEvent"  // win check + checkpoints (Level.Update, after the input forces)
     int32_t Geom(const std::string& key, const ShapeDef& def);
     int32_t BeginBody(const char* name);

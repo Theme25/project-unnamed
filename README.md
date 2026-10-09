@@ -10,8 +10,8 @@ Player 11.4.402.287** with the Practice Hack, `MATHSPIKES = 1`, spike glitch on 
 
 | | |
 |---|---|
-| levels bit-exact against Flash logs | **1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14** (12 of 17) |
-| levels scripted from the AS3, **not yet verified** against Flash | 11, 13, 15, 16, 17 (`rbsim` prints a warning when one is used) |
+| levels bit-exact against Flash logs | **1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14** (13 of 17) |
+| levels scripted from the AS3, **not yet verified** against Flash | 13, 15, 16, 17 (`rbsim` prints a warning when one is used) |
 | search | `rbsim beam` (route finding from any start, resumable), `rbsim optimize` (improves a known route) |
 
 ## Build & run
@@ -20,7 +20,7 @@ Player 11.4.402.287** with the Practice Hack, `MATHSPIKES = 1`, spike glitch on 
 
 ```
 make                 # see "Build flags" below; do not change them
-./rbsim test         # 68 self-tests (physics, display layer, spikes, death warps, snapshots, ...)
+./rbsim test         # 72 self-tests (physics, display layer, spikes, death warps, snapshots, ...)
 ./rbsim run --level 2 --inputs "n20w1d25n40" [--hex] [--every N] [--checkpoint K]
 ./rbsim log --level 2 --inputs "..."      # simulator log in the Flash mod's TSV format
 ./rbsim bench        # ~0.8-0.9M frames/s/thread on Level 1 incl. full-state restores
@@ -58,7 +58,7 @@ convention requires (`rsi`, `rdi`, `xmm6`, `xmm7`). The simulator does not depen
 math library: the only libm functions it uses are exact ones (`sqrt`, `fmod`, `floor`, `trunc`);
 the camera's `pow` result is a stored constant.
 
-Checked (cross-compiled build under Wine 9): all 68 self-tests, all 10 calibration files, all
+Checked (cross-compiled build under Wine 9): all 72 self-tests, all 10 calibration files, all
 48 stats logs (59,741 frames, 0 divergences), and `rbsim optimize --threads 1 --seed S --evals N`
 gives byte-identical output to the Linux build. Running `rbsim.exe test` once on a real Windows
 PC is still a good idea.
@@ -171,7 +171,7 @@ possible. Encode ~10 us, decode ~5 us.
 | `src/b2collision.cpp` | polygon geometry, circle/poly narrow phase, GJK distance, TOI |
 | `src/b2world.cpp` / `b2world.h` | SAP broadphase, pair manager, contact lifecycle and listener emulation, island + contact solver, TOI loop, bodies/shapes, filtering |
 | `src/b2joints.cpp` | distance, prismatic (limits, motors) and revolute (motors) joints, `CreateJoint`/`DestroyJoint` |
-| `src/redball.cpp` / `redball.h` | base `Level` logic (construction, sprite sync, probes, input, camera tween, display layer, spikes, death and post-death update), level scripts 1-17 (11, 13, 15, 16, 17 unverified), RLE codec |
+| `src/redball.cpp` / `redball.h` | base `Level` logic (construction, sprite sync, probes, input, camera tween, display layer, spikes, death and post-death update), level scripts 1-17 (13, 15, 16, 17 unverified), RLE codec |
 | `src/levels_data.h` | named placements of all 17 levels (`tools/extract_levels.py`, `tools/gen_levels_data.py`) |
 | `src/level_polys.h` | polygon tables of levels 9-17 as written in the AS3 (`tools/gen_level_polys.py` from the JPEXS export) |
 | `src/display_data.h` | bounds of every named object and every spike, per level (`tools/gen_display_data.py`, `tools/swf_geom.py`) |
@@ -198,18 +198,27 @@ All of these are verified against Flash logs and calibration dumps (details and 
   `rotation` (truncated to 16.16 fixed-point degrees, reduced mod 360 in integers) with its own
   0.25-degree sine table and a quarter-weight interpolation bug; exact on 26,716 matrices.
 - **Hit tests:** `hitTestObject` on twip bounding boxes (touching edges count); rotated boxes
-  round each half-extent to the nearest twip, one nesting level at a time.
+  round each half-extent to the nearest twip, one nesting level at a time. A **turned multi-part
+  clip** (Level 11's pushed flag: pole + cloth) is boxed per part, each part's box transformed and
+  then unioned; rotating the union box instead got 10 of 11 near-contact frames wrong. (`getBounds`
+  of a nested sprite, E10, follows the union rule: Level 11 `triangle`. So `hitTestObject` and
+  `getBounds` are not the same computation for turned clips.)
 - **Camera:** Tweener easeOutExpo at t = 1 of 31 frames per `Update`, truncated to twips; `dp` is
   the camera step of the frame.
 - **Standardized spikes** (`MATHSPIKES = 1`): 16 control points, `getBounds` test, shift by `-dp`,
   strict triangle test, with Flash's twip truncation/rounding (30,000/30,000 calibration cases).
   This shift is the **spike glitch**; `--gless` gives glitchless mode.
-- **Death:** the level keeps updating after `PlayerDie`; the camera follows the frozen ball and the
-  goal, checkpoint and switch tests (no `IsLive()` guard) compare the ball, now off the display
-  list, with targets shifted by the camera: the **death warp**. Real-game timers are checked as a
-  route rule (flag no later than death + 38 frames; unpause at flag + 88).
+- **Death:** `PlayerDie` destroys the ball's body and the level keeps running its full `Update`
+  (world step, moving parts, `Level_N.Update`); the camera follows the frozen ball and the goal,
+  checkpoint and switch tests (no `IsLive()` guard) compare the ball, now off the display list,
+  with targets shifted by the camera: the **death warp**, also onto a moving flag (Level 11).
+  Real-game timers are checked as a route rule (flag no later than death + 38 frames; unpause at
+  flag + 88). After deaths `verify` also reports how many frames the level's bodies stayed
+  bit-exact; they differ only where the random debris hits something (so far always the body that
+  killed the ball).
 - **Static level flags** (`Level_7.redCheckLevel`) survive checkpoint restarts.
-- **Not simulated:** death debris (`Math.random`); pausing (the TAS hack has no pause).
+- **Not simulated:** death debris (8 bodies at `Math.random` positions, so a route that relies on
+  them is not reproducible in the real game either); pausing (the TAS hack has no pause).
 
 ## Port quirks replicated (differences from stock Box2D 2.0 C++)
 
@@ -251,6 +260,7 @@ below match on every frame compared.
 | 8 | 12 | 10,009 | 7 | car, crushers, ramps, wall spikes, double death warp (checkpoint 200, flag 1084), 5 wins |
 | 9 | 7 | 7,775 | 7 | idle (spike death at 130), spike, kill roll ball and boom-crank deaths, green switch (3 logs), crank riding, checkpoint-3 restart and win (224), death-warp win (death 358 on `boomCrank`, flag 359); 4,676 frames after a death |
 | 10 | 4 | 6,241 | 6 | idle, fall deaths (incl. from checkpoint 1 after R), `roundBlock` death (171), jump platforms 1-2, `cube3`, `goBall`, TAS win (394) |
+| 11 | 5 | 4,507 | 3 | idle train ride, `killRotate` death (334), spike death on a turned row (564), the flag pushed and turned by the train (-4 to 49 degrees), a fall death followed by a death warp onto the still-moving flag (death 1110, flag 1117), win (309) |
 | 12 | 5 | 5,006 | 2 | collision groups, checkpoint-2 restart, 2 wins |
 | 14 | 3 | 2,931 | 1 | switch, drop platform, checkpoint restart, win |
 
@@ -294,17 +304,17 @@ macOS (x86-64) would need the assembly's section/symbol directives adapted; ARM 
 
 | level | status |
 |---|---|
-| 1–10, 12, 14 | bit-exact (see Verification status) |
+| 1–12, 14 | bit-exact (see Verification status) |
 | 5 | green switch not yet exercised by a log |
 | 9 | not yet exercised by a log: the fall death (y > 530), checkpoints 1 and 2 as restart points. Its rotated spike rows (2.48 and 25.28 degrees) use a continuous inverse transform that is not calibrated; on the logs every spike decision matched and none was within a rounding unit of flipping (`verify` reports this count) |
 | 10 | not touched by any log: `afterJump` (rotated static body; its rotation is Flash's E9a value), `cube1`, `cube2`, `jumpPlatform3`, checkpoints 2 and 3. They use the same calibrated data and mechanics as the logged parts. No spike death: the 205 plain spike rows use the calibrated model (Levels 3, 6, 8); the 13 rotated/scaled spikes at the two ends of the pit before the flag (x 1015-1050 and 1820-1850) are uncalibrated, and the TAS passes 15 px from one. `calib`: three walls 1 twip off (nested scaled sprites, never hit-tested) |
-| 11, 13, 15, 16, 17 | **scripted, unverified**: bodies, joints and updates follow the AS3 (polygon tables are generated from it by `tools/gen_level_polys.py`), but no Flash log has been compared yet. Open items below |
+| 11 | not exercised by a log: deaths on `killStar0-2`, `killBrevno0-3`, `killCeil1` (same contact-list kill test as `killRotate`). The turned flag's box: the corner rounding (nearest/floor/truncation) is not determined by the logs; `verify`/`displayUncertain` count decisions that depend on it (none so far) |
+| 13, 15, 16, 17 | **scripted, unverified**: bodies, joints and updates follow the AS3 (polygon tables are generated from it by `tools/gen_level_polys.py`), but no Flash log has been compared yet. Open items below |
 
 Open items for the unverified levels (each is settled by the standard logs of `docs/STATS_LOGGING.md` §6.0 plus an E9level/E9a/E10 dump):
 
 | level | what is still approximate |
 |---|---|
-| 11 | `levelAim` is a dynamic body (a pushed flag moves its hit box; a turned flag's box rounding is not calibrated); 36 train-line clips share one rotated matrix (`atan2` until a tick-0 log); rotated static `triangle` needs E9a; world is not stepped after death while Flash keeps stepping it with debris |
 | 13 | rotated dynamic `kingStar1` (tick-0 angle from a log) |
 | 15 | `killLine` box assumed to be its static box shifted by the patrol (PlaceObject3 clip: check E10); transformed spike rows |
 | 16 | rotated dynamic `axe1` (tick-0 angle); `wrongWay` is a rotated target with uncalibrated rounding (`displayUncertain` counts near misses) |
@@ -324,4 +334,4 @@ Joint code: every field write in all 48 joint methods was cross-checked against 
 1. Search: a better beam score (account for moving platforms and timing; calibrate against known
    TASes with `--explain`); resumable, splittable window proofs; endgame proofs; physics profiling
    for contact-heavy levels.
-2. Verify levels 13, 16, then 17, then 11, 15 against Flash logs (rotated/scaled spike calibration for 17, 11, 15 and the pit ends of 9/10).
+2. Verify levels 13, 16, then 17, then 15 against Flash logs (rotated/scaled spike calibration for 17, 15 and the turned rows of 9, 10, 11).

@@ -226,43 +226,43 @@ static const TimelineRotation kTimelineRotations[] = {
     {9, "firstCrank", 0x4050b1ad40000000ULL, true},   // rb1_calib_L9.tsv E9a: 66.776199340820312 (atan2: 66.77591509403953)
     {9, "secondCrank", 0xc039bbdb00000000ULL, true},  // rb1_calib_L9.tsv E9a: -25.733810424804688 (atan2: -25.733590917056688)
     {10, "afterJump", 0xc0667b3020000000ULL, true},  // rb1_calib_L10.tsv E9a: -179.8502197265625 (atan2: -179.8494982985548)
-    {11, "kolesoTrain1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "kolesoTrain2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "train", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "triangle", 0x3fe81bd8f7fffbfcULL, false},  // provisional atan2 = 0.7533993571995548
-    {11, "vagon1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "vagon2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "vagon3", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "vagon4", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "vagon5", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "vagon6", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "vagon7", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "vagon8", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "vagon9", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "vagon10", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "vagon11", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_1_1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_1_2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_2_1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_2_2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_3_1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_3_2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_4_1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_4_2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_5_1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_5_2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_6_1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_6_2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_7_1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_7_2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_8_1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_8_2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_9_1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_9_2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_10_1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_10_2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_11_1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
-    {11, "koleso_11_2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
+    {11, "kolesoTrain1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "kolesoTrain2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "train", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "triangle", 0x3fe81d4000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.753570556640625
+    {11, "vagon1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon3", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon4", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon5", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon6", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon7", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon8", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon9", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon10", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon11", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_1_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_1_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_2_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_2_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_3_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_3_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_4_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_4_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_5_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_5_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_6_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_6_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_7_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_7_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_8_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_8_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_9_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_9_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_10_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_10_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_11_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_11_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
     {13, "kingStar1", 0xc02a43c2b50393aeULL, false},  // provisional atan2 = -13.132344872175818
     {16, "axe1", 0xc05201d69b7c0003ULL, false},  // provisional atan2 = -72.0287235938013
 };
@@ -364,10 +364,13 @@ int32_t Sim::CreateCircleBody(const char* name, double density, double friction,
 }
 
 void Sim::PlayerDie() {
-    // Level.PlayerDie spawns 8 debris bodies with Math.random() and destroys the player body; the level keeps
-    // updating (Sim::DeadUpdate models what matters: camera + the death-warp goal/checkpoint tests).
-    if (playerAlive) deathFrame = frameCount + 1;  // this Update's frame
+    // Level.PlayerDie: OutControl(); 8 debris bodies (playerDiePart0-7, positions from Math.random(): NOT simulated);
+    // playerBox.Kill() -> m_world.DestroyBody(ball) and the ball leaves the display list (its sprite stays frozen).
+    // The level keeps running its full Update afterwards (world step, moving parts, Level_N.Update), see Sim::Tick.
+    if (!playerAlive) return;
+    deathFrame = frameCount + 1;  // this Update's frame
     playerAlive = false;
+    world.DestroyBody(playerBody);
 }
 
 // ---------------------------------------------------------------- level scripts
@@ -1446,9 +1449,6 @@ static void L15_Switches(Sim& s) {
         w.SetAngularVelocity(s.lvBody[L15_GATE], 3);
     }
 }
-static void L15_Dead(Sim& s) {  // unguarded redCheck: after death only the switch state matters (world not stepped)
-    if (s.switchFrame[0] == 1 && SwitchHit(s, "redCheck")) s.switchFrame[0] = 2;
-}
 static void L15_Update(Sim& s) {
     World& w = s.world;
     if (s.playerAlive && (s.spriteY[s.playerBody] > 860 || L15_KillLineHit(s))) s.PlayerDie();
@@ -1582,7 +1582,7 @@ int32_t Sim::LoggedFlags() const {
 }
 
 bool LevelVerified(int32_t id) {
-    static const int32_t verified[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14};
+    static const int32_t verified[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14};
     for (int32_t v : verified)
         if (v == id) return true;
     return false;
@@ -1611,7 +1611,7 @@ const LevelScript& GetLevelScript(int32_t id) {
         {10, L10_Construct, L10_Update, true},
         {11, L11_Construct, L11_Update, true},
         {13, L13_Construct, L13_Update, true, L13_Switches},
-        {15, L15_Construct, L15_Update, true, L15_Dead},
+        {15, L15_Construct, L15_Update, true, L15_Switches},
         {17, L17_Construct, L17_Update, true},
         {16, L16_Construct, L16_Update, true, L16_Switches},
     };
@@ -1850,28 +1850,52 @@ double Sim::TargetOverlap(const DisplayObj& o) const {
 }
 
 // levelAim's hit box. A static clip: the box of display_data.h. Level 11: the clip is the sprite of a dynamic body,
-// so its box is the clip's local box moved by the sprite's x/y (twip-quantised) and turned by its rotation (the
-// display matrix of FlashRotationMatrix). Translation is exact; for a turned flag the rounding of an off-centre box
-// is not calibrated (docs/STATS_LOGGING.md: log E10 with the flag moved), so such a box is marked exact = 0.
+// so its box follows the sprite (x/y twip-quantised, rotation via FlashRotationMatrix). Flash's getBounds of a turned
+// sprite transforms EACH CHILD's box separately and unions the results (not the rotated union box): the levelAim
+// symbol (68) holds the pole (shape 65) and the flag cloth (morph 64 at ratio 0, startBounds). Fitted on the Level 11
+// logs: 11 near-contact frames with the flag turned -4.3..49 degrees, all agree; the rotated-union model got 10 wrong.
+// Corner rounding (16.16 product -> twips) is taken as round-to-nearest like the ball's box; the logs cannot tell
+// it from floor/truncation, so a decision those modes would flip counts in displayUncertain.
+static const int64_t kAimChildren[2][4] = {{-20, -184, 106, 626}, {78, 71, 282, 255}};  // twips, clip space
+static int64_t AimRound(int64_t v, int mode) {
+    if (mode == 0) return (v + 32768) >> 16;
+    if (mode == 1) return v >> 16;
+    return v >= 0 ? v >> 16 : -((-v) >> 16);
+}
+static DisplayObj AimBox(const DisplayObj& base, int64_t tx, int64_t ty, const FlashMatrix& m, int mode) {
+    DisplayObj o = base;
+    bool first = true;
+    for (const auto& r : kAimChildren) {
+        const int64_t px[4] = {r[0], r[2], r[0], r[2]}, py[4] = {r[1], r[1], r[3], r[3]};
+        for (int i = 0; i < 4; ++i) {
+            const double x = (double)(tx + AimRound((int64_t)m.a * px[i] - (int64_t)m.b * py[i], mode));
+            const double y = (double)(ty + AimRound((int64_t)m.b * px[i] + (int64_t)m.a * py[i], mode));
+            if (first) o.x0 = o.x1 = x, o.y0 = o.y1 = y, first = false;
+            o.x0 = std::fmin(o.x0, x), o.x1 = std::fmax(o.x1, x), o.y0 = std::fmin(o.y0, y), o.y1 = std::fmax(o.y1, y);
+        }
+    }
+    return o;
+}
 DisplayObj Sim::GoalTarget() {
     DisplayObj o = *tpl->aim;
     if (aimBody < 0) return o;
     const RawPlacement& p = tpl->Place("levelAim");
     if (p.a != 65536 || p.b != 0 || p.c != 0 || p.d != 65536) fatal("moving levelAim with a transformed placement");
-    const double lx0 = o.x0 - p.tx, ly0 = o.y0 - p.ty, lx1 = o.x1 - p.tx, ly1 = o.y1 - p.ty;
-    const double tx = spriteX[aimBody] * 20, ty = spriteY[aimBody] * 20;
+    if (o.x0 - p.tx != -20 || o.y0 - p.ty != -184 || o.x1 - p.tx != 282 || o.y1 - p.ty != 626)
+        fatal("levelAim symbol bounds differ from kAimChildren");
+    const int64_t tx = std::llround(spriteX[aimBody] * 20), ty = std::llround(spriteY[aimBody] * 20);
     const FlashMatrix m = FlashRotationMatrix(spriteRotW[aimBody]);
-    if (m.a == 65536 && m.b == 0) {
-        o.x0 = tx + lx0, o.y0 = ty + ly0, o.x1 = tx + lx1, o.y1 = ty + ly1;
-        return o;
+    o = AimBox(o, tx, ty, m, 0);
+    if (m.b != 0 || m.a != 65536) {
+        const Rect ball = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], 0);
+        const double ox = playerAlive ? 0 : camX * 20, oy = playerAlive ? 0 : camY * 20;
+        bool h[3];
+        for (int mode = 0; mode < 3; ++mode) {
+            const DisplayObj c = AimBox(o, tx, ty, m, mode);
+            h[mode] = RectsHit(ball, Rect{c.x0 + ox, c.y0 + oy, c.x1 + ox, c.y1 + oy});
+        }
+        if (h[0] != h[1] || h[0] != h[2]) ++displayUncertain;
     }
-    const double a = m.a / 65536.0, b = m.b / 65536.0;  // c = -b, d = a
-    const double cx = (lx0 + lx1) / 2, cy = (ly0 + ly1) / 2, hx = (lx1 - lx0) / 2, hy = (ly1 - ly0) / 2;
-    const double ncx = a * cx - b * cy, ncy = b * cx + a * cy;
-    const double nhx = std::floor(std::fabs(a) * hx + std::fabs(b) * hy + 0.5);
-    const double nhy = std::floor(std::fabs(b) * hx + std::fabs(a) * hy + 0.5);
-    o.x0 = tx + ncx - nhx, o.x1 = tx + ncx + nhx, o.y0 = ty + ncy - nhy, o.y1 = ty + ncy + nhy;
-    o.exact = 0;
     return o;
 }
 
@@ -1907,32 +1931,19 @@ void Sim::DisplayUpdate() {
     }
 }
 
-// Level.Update while the ball is dead (until R restarts the level). The world keeps stepping in Flash,
-// but only with the random debris and the level's machinery; nothing of it survives a restart, and the
-// ball's sprite is frozen (its body left the world). What matters is simulated: the camera tween toward
-// the frozen ball, and the goal/checkpoint tests with the dead-ball rule.
-void Sim::DeadUpdate() {
-    const double ox = camX, oy = camY;
-    if (!gless) CameraStep();
-    dpX = ox - camX;
-    dpY = oy - camY;
-    camTargetX = 1.0 * (-spriteX[playerBody] + 550.0 / 2);
-    camTargetY = 1.0 * (-spriteY[playerBody] + 400.0 / 2);
-    camTween = true;
-    DisplayUpdate();
-    if (gless) CameraStep();
-    if (GetLevelScript(tpl->id).deadUpdate) GetLevelScript(tpl->id).deadUpdate(*this);
-    ++deadTicks;
-}
-
 void Sim::Tick(uint8_t input) {
     if (isTimeStop) return;  // Game.tPause == 0 after PlayerWin: no more Level.Update calls
     // Game.UpdateHandler (playback): Left = v>=4, Up = v>=6||v==2||v==3, Right = v%2==1
     bool left = input >= 4;
     bool up = input >= 6 || input == 2 || input == 3;
     bool right = input % 2 == 1;
-    if (playerAlive) LevelUpdate(left, up, right);
-    else DeadUpdate();
+    // After a death Flash keeps calling the full Level.Update until R: the camera eases toward the frozen ball, the
+    // world steps (without the ball, whose body was destroyed; the random debris is not simulated), the level's
+    // machinery and Level_N.Update run, and the goal/checkpoint/switch tests use the dead-ball rule (death warp).
+    // The key handlers still feed the destroyed ball body (velocity/forces on a body outside the world: no effect).
+    const bool dead = !playerAlive;
+    LevelUpdate(left, up, right);
+    if (dead) ++deadTicks;
     if (!isTimeStop) ++frameCount;
 }
 
