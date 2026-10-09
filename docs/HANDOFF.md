@@ -44,7 +44,7 @@ recorded in README.md ("Verification status") and below.
 | turned spikes / turned flag | calibrated by the E11/E12 sweeps (390,665 / 390,670 and 148,074 / 148,074; the 5 spike rows within 0.003 twip of a half-twip are flagged as uncertain) |
 | display layer | exact: rotation matrix, hit tests, camera, standardized spikes (section 6) |
 | death / death warp | exact: ball body destroyed, full `Update` keeps running (world, machinery), unguarded goal/checkpoint/switch tests; 5 logged warps verified (incl. L9 death 358 / flag 359, L11 onto the moving flag 1110 / 1117). Debris (random) not simulated |
-| Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical |
+| Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical. `rbview.exe` (viewer/, `make viewer`): double-click route viewer, tested under Wine + Xvfb with screenshots |
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 

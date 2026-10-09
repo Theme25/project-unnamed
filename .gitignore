@@ -5,3 +5,6 @@ tools/trig_flip_search
 __pycache__/
 rbsim.exe
 tools/deathcause
+rbview.exe
+rbview.ini
+viewer/*.res.o

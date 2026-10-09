@@ -1,8 +1,40 @@
 # Running rbsim on Windows
 
-This guide is for running the simulator and the route search on a Windows PC. You do not need
-to build anything if you have the ready-made `rbsim.exe`. To build it yourself, see the end of
-this page.
+## Route viewer: `rbview.exe` (no command line)
+
+**Download `rbview.exe` and double-click it.** It is one file: no installer, nothing else to
+install, no command prompt. It plays a route through the bit-exact simulator and draws the level,
+the moving parts, spikes, checkpoints, switches, the flag and the ball, with the game's camera.
+
+1. **Level** and **Start from** (the start or a checkpoint), **Glitchless** if the route is
+   meant for the spike glitch off.
+2. **Route:** paste the input string (`d12e1w3n5...`, the TAS hack's format) and press **Load**
+   (or Enter). **Open...** (or drag a file onto the window, or onto `rbview.exe`) loads a `.txt`
+   with the route or a stats log (`.tsv`) from the logging mod: level, checkpoint and glitchless
+   mode are then taken from the log.
+3. **Play** (Space). **<** and **>** (Left/Right arrow) step one frame; **|<** / **>|** (Home/End)
+   jump to the start/end; the slider seeks anywhere; **Speed** from 0.1x to 8x (1x = the game's
+   31 frames per second).
+4. The list on the right shows what happens and when: deaths, checkpoints, switches, restarts,
+   the flag frame (and whether a death-warp finish is still valid in a real run). Click a line
+   to jump there.
+5. Mouse wheel zooms; dragging pans (this turns off **Follow camera**; tick it again to follow
+   the game's camera). **Show path** draws the ball's path.
+
+After a death, a dashed purple **warp ghost** shows where the game tests the dead ball against the
+flag, checkpoints and switches (shifted by the camera): when the ghost touches the flag, that is a
+death warp. The 8 random debris pieces are not shown. The window remembers the last route in
+`rbview.ini` next to the exe.
+
+Colours: dark grey = static ground, blue = moving parts, dark red = things that kill, small red
+triangles = spikes, cyan boxes = checkpoints (filled once collected), gold box = flag, blue/green/red
+boxes = switches (filled once pressed), orange = Level 16's wrong-way trigger.
+
+## Command-line tool: `rbsim.exe`
+
+The rest of this guide is for running the simulator and the route search from a command prompt.
+You do not need to build anything if you have the ready-made `rbsim.exe`. To build it yourself,
+see the end of this page.
 
 Requirements: 64-bit Windows 10 or 11 on an Intel or AMD processor. ARM laptops (Snapdragon)
 are not supported. Nothing else needs to be installed.
@@ -19,9 +51,9 @@ are not supported. Nothing else needs to be installed.
    The last line must be `ALL PASSED (0 failures)`. If it is not, stop and report it: the
    results on this machine cannot be trusted.
 
-**"Windows protected your PC" / SmartScreen:** the exe is not signed, so Windows may warn the
+**"Windows protected your PC" / SmartScreen:** the exes are not signed, so Windows may warn the
 first time. Click **More info**, then **Run anyway**. Some antivirus programs also flag unsigned
-tools; if yours deletes or quarantines `rbsim.exe`, add the folder as an exception.
+tools; if yours deletes or quarantines `rbsim.exe` or `rbview.exe`, add the folder as an exception.
 
 **"'rbsim.exe' is not recognized":** the Command Prompt is not in the folder containing the exe.
 Use `cd C:\rbsim` first, or give the full path: `C:\rbsim\rbsim.exe test`.
@@ -34,7 +66,7 @@ Typing `rbsim.exe` alone lists the commands; `rbsim.exe optimize` alone lists it
 rbsim.exe optimize --level 8 --inputs "d19a3n1a1n12d1a1n21d15e1d1e1d3e22d7e5d30e1d20e7d3e1d9n1d76e2d14a1n1a1n18a3n10a1n18w9n65" --time 600
 ```
 
-- `--level N`: the level (1-8, 12 and 14 are supported so far).
+- `--level N`: the level (1-17).
 - `--inputs "..."`: the route to improve, in the TAS hack's string format (`n d w e a S q W`
   plus counts). It must collect the flag. Remove any `R` (one attempt only).
 - `--time SEC`: how long to search, in seconds (default 30). `--time 3600` is an hour.

@@ -16,9 +16,20 @@ frame matches that Flash Player to the last bit.
 | levels | **all 17 bit-exact** against Flash logs: 81 logs, 97,966 frames, every death and win on Flash's frame |
 | display layer | calibrated: rotation matrices, hit-test boxes, camera, plain spikes (E8c 30,000/30,000), turned/scaled spikes (E11 390,665/390,670, the other 5 flagged as uncertain), the turned Level 11 flag (E12 148,074/148,074) |
 | death | death warps (onto checkpoints, flags, a moving flag, the Level 16 wrong-way trigger) and real-game pause timing |
-| platforms | Linux and Windows (x86-64), identical results |
+| platforms | Linux and Windows (x86-64), identical results; `rbview.exe`: a double-click route viewer for Windows |
 | search | `rbsim beam` (finds routes from any start, resumable), `rbsim optimize` (improves a known route) |
 | tests | `rbsim test`: 86 self-tests |
+
+## Route viewer (Windows, no command line)
+
+`rbview.exe` is a single double-click program: pick a level, paste a route (or open/drag a route file
+or a stats log), press Play. It draws the level, moving parts, spikes, checkpoints, switches, the flag
+and the ball with the game's camera, lists deaths/checkpoints/switches/the flag frame, steps and seeks
+frame by frame, and shows a "warp ghost" after a death so death warps are visible. Everything is
+computed by the same bit-exact simulator. Guide: [`docs/WINDOWS.md`](docs/WINDOWS.md).
+Build: `make viewer` (MinGW-w64 cross build; Win32 + GDI+, static, ~1.6 MB; source in `viewer/`).
+
+![rbview: the Level 11 death warp, the warp ghost touching the falling flag](docs/rbview.png)
 
 ## Build & run
 
@@ -171,6 +182,7 @@ loaded level; byte-identical round trip, portable between processes).
 | `src/rbsim.cpp` | CLI, self-tests, benchmark |
 | `tools/deathcause.cpp` | replays inputs and prints each death's cause (contacts or spike row) and the win |
 | `docs/mod_sweeps.as` | AS3 for the logging mod's E11/E12 calibration sweeps |
+| `viewer/rbview.cpp` (+ `.rc`, `.ico`, `.manifest`) | the Windows route viewer (`make viewer`) |
 
 All mutable state lives in fixed arrays linked by `int` indices, so `Sim copy = sim;` is a complete,
 bit-exact snapshot (152 KB). Immutable geometry is shared; scratch buffers are thread-local, so one
@@ -294,5 +306,6 @@ section/symbol directives adapted; ARM (incl. Apple Silicon) cannot run the Inte
 1. **Search:** a better beam score (moving platforms and timing; calibrate against the known TASes
    with `--explain`); resumable, splittable window proofs; endgame proofs; physics profiling for
    contact-heavy levels.
-2. **Windows app:** a download-and-play program for the team (no command line).
+2. **Viewer:** `rbview.exe` is done (route playback); a TAS editor (record inputs with the keyboard,
+   rewind, export) could build on it.
 3. **Simulator:** complete. Open curiosity only: the 5 E11 rows within 0.003 twip of a half-twip.
