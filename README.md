@@ -10,8 +10,8 @@ Player 11.4.402.287** with the Practice Hack, `MATHSPIKES = 1`, spike glitch on 
 
 | | |
 |---|---|
-| levels bit-exact against Flash logs | **1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14** (14 of 17) |
-| levels scripted from the AS3, **not yet verified** against Flash | 15, 16, 17 (`rbsim` prints a warning when one is used) |
+| levels bit-exact against Flash logs | **1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15** (15 of 17) |
+| levels scripted from the AS3, **not yet verified** against Flash | 16, 17 (`rbsim` prints a warning when one is used) |
 | search | `rbsim beam` (route finding from any start, resumable), `rbsim optimize` (improves a known route) |
 
 ## Build & run
@@ -20,7 +20,7 @@ Player 11.4.402.287** with the Practice Hack, `MATHSPIKES = 1`, spike glitch on 
 
 ```
 make                 # see "Build flags" below; do not change them
-./rbsim test         # 76 self-tests (physics, display layer, spikes, death warps, snapshots, ...)
+./rbsim test         # 79 self-tests (physics, display layer, spikes, death warps, snapshots, ...)
 ./rbsim run --level 2 --inputs "n20w1d25n40" [--hex] [--every N] [--checkpoint K]
 ./rbsim log --level 2 --inputs "..."      # simulator log in the Flash mod's TSV format
 ./rbsim bench        # ~0.8-0.9M frames/s/thread on Level 1 incl. full-state restores
@@ -58,7 +58,7 @@ convention requires (`rsi`, `rdi`, `xmm6`, `xmm7`). The simulator does not depen
 math library: the only libm functions it uses are exact ones (`sqrt`, `fmod`, `floor`, `trunc`);
 the camera's `pow` result is a stored constant.
 
-Checked (cross-compiled build under Wine 9): all 76 self-tests, all 10 calibration files, all
+Checked (cross-compiled build under Wine 9): all 79 self-tests, all 10 calibration files, all
 48 stats logs (59,741 frames, 0 divergences), and `rbsim optimize --threads 1 --seed S --evals N`
 gives byte-identical output to the Linux build. Running `rbsim.exe test` once on a real Windows
 PC is still a good idea.
@@ -171,7 +171,7 @@ possible. Encode ~10 us, decode ~5 us.
 | `src/b2collision.cpp` | polygon geometry, circle/poly narrow phase, GJK distance, TOI |
 | `src/b2world.cpp` / `b2world.h` | SAP broadphase, pair manager, contact lifecycle and listener emulation, island + contact solver, TOI loop, bodies/shapes, filtering |
 | `src/b2joints.cpp` | distance, prismatic (limits, motors) and revolute (motors) joints, `CreateJoint`/`DestroyJoint` |
-| `src/redball.cpp` / `redball.h` | base `Level` logic (construction, sprite sync, probes, input, camera tween, display layer, spikes, death and post-death update), level scripts 1-17 (15, 16, 17 unverified), RLE codec |
+| `src/redball.cpp` / `redball.h` | base `Level` logic (construction, sprite sync, probes, input, camera tween, display layer, spikes, death and post-death update), level scripts 1-17 (16, 17 unverified), RLE codec |
 | `src/levels_data.h` | named placements of all 17 levels (`tools/extract_levels.py`, `tools/gen_levels_data.py`) |
 | `src/level_polys.h` | polygon tables of levels 9-17 as written in the AS3 (`tools/gen_level_polys.py` from the JPEXS export) |
 | `src/display_data.h` | bounds of every named object and every spike, per level (`tools/gen_display_data.py`, `tools/swf_geom.py`) |
@@ -264,6 +264,7 @@ below match on every frame compared.
 | 12 | 5 | 5,006 | 2 | collision groups, checkpoint-2 restart, 2 wins |
 | 13 | 4 | 4,022 | 5 | idle (the loose `kingStar1` rolls into the ball at 145), `kingStar1` and `killStar2` deaths, moving platforms, R from checkpoints 1 and 2, 2 wins |
 | 14 | 3 | 2,931 | 1 | switch, drop platform, checkpoint restart, win |
+| 15 | 4 | 3,573 | 4 | idle, `killLine` deaths after R from checkpoint 2 (built without `luk`), red switch (gate rebuilt as a hinged door spinning at 3 rad/s), skateboard, 2 wins (204, 464) |
 
 The ball's display matrix, the camera, `dp`, `lastCheckNum` and the level flags are also compared
 on every frame where the log has them. Logger artifacts handled by `verify`: death and win rows
@@ -305,19 +306,19 @@ macOS (x86-64) would need the assembly's section/symbol directives adapted; ARM 
 
 | level | status |
 |---|---|
-| 1–14 | bit-exact (see Verification status) |
+| 1–15 | bit-exact (see Verification status) |
 | 5 | green switch not yet exercised by a log |
 | 9 | not yet exercised by a log: the fall death (y > 530), checkpoints 1 and 2 as restart points. Its rotated spike rows (2.48 and 25.28 degrees) use a continuous inverse transform that is not calibrated; on the logs every spike decision matched and none was within a rounding unit of flipping (`verify` reports this count) |
 | 10 | not touched by any log: `afterJump` (rotated static body; its rotation is Flash's E9a value), `cube1`, `cube2`, `jumpPlatform3`, checkpoints 2 and 3. They use the same calibrated data and mechanics as the logged parts. No spike death: the 205 plain spike rows use the calibrated model (Levels 3, 6, 8); the 13 rotated/scaled spikes at the two ends of the pit before the flag (x 1015-1050 and 1820-1850) are uncalibrated, and the TAS passes 15 px from one. `calib`: three walls 1 twip off (nested scaled sprites, never hit-tested) |
 | 11 | not exercised by a log: deaths on `killStar0-2`, `killBrevno0-3`, `killCeil1` (same contact-list kill test as `killRotate`). The turned flag's box: the corner rounding (nearest/floor/truncation) is not determined by the logs; `verify`/`displayUncertain` count decisions that depend on it (none so far) |
 | 13 | not exercised by a log: the green switch (removes `greenBarier`; `Level_13.greenCheckLevel` is static and survives R, same code path as Level 7's verified red switch), the fall death, a `killStar1` death (same contact kill test as `killStar2`) |
-| 15, 16, 17 | **scripted, unverified**: bodies, joints and updates follow the AS3 (polygon tables are generated from it by `tools/gen_level_polys.py`), but no Flash log has been compared yet. Open items below |
+| 15 | not exercised by a log: the fall death (y > 860); a spike death. All 44 spike rows are turned and scaled (about 0.71 x 0.6), uncalibrated; both winning runs pass through their bounds (70 frames) with every decision matching Flash and none within a rounding unit of flipping |
+| 16, 17 | **scripted, unverified**: bodies, joints and updates follow the AS3 (polygon tables are generated from it by `tools/gen_level_polys.py`), but no Flash log has been compared yet. Open items below |
 
 Open items for the unverified levels (each is settled by the standard logs of `docs/STATS_LOGGING.md` §6.0 plus an E9level/E9a/E10 dump):
 
 | level | what is still approximate |
 |---|---|
-| 15 | `killLine` box assumed to be its static box shifted by the patrol (PlaceObject3 clip: check E10); transformed spike rows |
 | 16 | rotated dynamic `axe1` (tick-0 angle); `wrongWay` is a rotated target with uncalibrated rounding (`displayUncertain` counts near misses) |
 | 17 | a few rotated/scaled spike rows (not calibrated) |
 
@@ -335,4 +336,4 @@ Joint code: every field write in all 48 joint methods was cross-checked against 
 1. Search: a better beam score (account for moving platforms and timing; calibrate against known
    TASes with `--explain`); resumable, splittable window proofs; endgame proofs; physics profiling
    for contact-heavy levels.
-2. Verify levels 16, 17 and 15 against Flash logs (rotated/scaled spike calibration for 17, 15 and the turned rows of 9, 10, 11).
+2. Verify levels 16 and 17 against Flash logs; calibrate turned/scaled spikes (rows on 9, 10, 11, 15, 17).

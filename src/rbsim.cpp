@@ -671,10 +671,35 @@ static int CmdTest() {
             check(death == c.death && s->winFrame == c.win && s->displayUncertain == 0, c.name);
         }
     }
-    // 18b. Levels 15, 16, 17: scripted from the AS3, NOT yet checked against Flash logs
+    // 18a-15. Level 15 against its Flash logs (rb1_stats15.1-4, all bit-exact)
+    {
+        LevelTemplate t(15);
+        struct C { const char* in; int death, win, switchFrame; const char* name; };
+        const C cases[] = {
+            {"d5n1d18a1d100e1d9e1d12e12d4e2d1e1d36", -1, 204, 1, "level 15 (rb1_stats15.3): flag at frame 204"},
+            {"a16n1d4a5q1a3d1w1e7d3n1q1a6n1a15q2a18d13a2q1n1a61d1q4a22e1d14e1d8a1d30e8d3e1d2e7d11a2d8e7d11e1d99e18d1e14d25", -1, 464, 2, "level 15 (rb1_stats15.4): red switch (gate rebuilt as a spinning door), flag at 464"},
+            {"a17d4a6q10e5q16a11q1a28R1d21a18n1d19q3n36", 160, -1, 2, "level 15 (rb1_stats15.2): R from checkpoint 2 (no luk), killLine death at 160"},
+        };
+        for (const C& c : cases) {
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);
+            int death = -1;
+            for (uint8_t k : DecodeInputs(c.in)) {
+                if (k == IN_RESTART) {
+                    s->Restart();
+                    continue;
+                }
+                s->Tick(k);
+                if (s->deathFrame >= 0 && death < 0) death = s->frameCount;
+                if (s->isTimeStop) break;
+            }
+            check(death == c.death && s->winFrame == c.win && s->switchFrame[0] == c.switchFrame && s->displayUncertain == 0, c.name);
+        }
+    }
+    // 18b. Levels 16, 17: scripted from the AS3, NOT yet checked against Flash logs
     {
         bool idleOk = true, detOk = true;
-        for (int lv : {15, 16, 17}) {
+        for (int lv : {16, 17}) {
             LevelTemplate t(lv);
             auto a = std::make_unique<Sim>(), b = std::make_unique<Sim>(), c = std::make_unique<Sim>();
             a->Load(&t);
@@ -693,8 +718,8 @@ static int CmdTest() {
             if (!std::isfinite(x.px) || !std::isfinite(x.py) || !std::isfinite(y.px) || !std::isfinite(y.py)) idleOk = false;
             if (std::memcmp(&y.px, &z.px, 8) || std::memcmp(&y.py, &z.py, 8) || y.contactCount != z.contactCount) detOk = false;
         }
-        check(idleOk, "levels 15, 16, 17: 600 idle ticks run, positions finite");
-        check(detOk, "levels 15, 16, 17: two runs are bit-identical");
+        check(idleOk, "levels 16, 17: 600 idle ticks run, positions finite");
+        check(detOk, "levels 16, 17: two runs are bit-identical");
 
         // field initialisers: Level 9 killRollBallDirection = 1 (Flash: spin 5 from tick 1); Level 16 roll balls 1 / -1
         LevelTemplate t9(9);

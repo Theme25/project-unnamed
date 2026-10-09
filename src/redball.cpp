@@ -1584,7 +1584,7 @@ int32_t Sim::LoggedFlags() const {
 }
 
 bool LevelVerified(int32_t id) {
-    static const int32_t verified[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14};
+    static const int32_t verified[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
     for (int32_t v : verified)
         if (v == id) return true;
     return false;
