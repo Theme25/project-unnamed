@@ -57,11 +57,15 @@ bool RectsHit(const Rect& a, const Rect& b);
 // (10.5 px radius, through the ball's display matrix). Each point, in Level space, must lie in the
 // Shipik's getBounds rectangle; then it is shifted by -dp (the camera step of this frame) and tested
 // strictly against the triangle (0,0) (3,-9.65) (6,0), with Flash's twip conversions reproduced exactly
-// (docs/STATS_LOGGING.md 3.8). Rotated/scaled Shipiks (later levels) are not calibrated yet: decisions
-// within SPIKE_EDGE_MARGIN twips of an edge there are counted in Sim::displayUncertain.
-constexpr double SPIKE_EDGE_MARGIN = 1.0;
+// (docs/STATS_LOGGING.md 3.8). Turned/scaled Shipiks (docs/STATS_LOGGING.md 3.11, E11 sweep): Flash's
+// globalToLocal works in screen twips (camera included): double inverse of the spike's matrix, inverse translation
+// rounded to a twip, local point rounded to a twip; 390,665 of 390,670 sweep rows agree, the other 5 lie within
+// 0.003 twip of a half-twip, so decisions within SPIKE_HALF_TWIP_MARGIN of one count in Sim::displayUncertain.
+// camXpx/camYpx = Level.x/y (px) at the time of the test (only turned/scaled spikes depend on it).
+constexpr double SPIKE_HALF_TWIP_MARGIN = 0.005;  // twips
 struct SpikeResult { bool hit; bool uncertain; };
-SpikeResult BallHitsSpike(double spriteXpx, double spriteYpx, double rotationDeg, double dpx, double dpy, const SpikeObj& s);
+SpikeResult BallHitsSpike(double spriteXpx, double spriteYpx, double rotationDeg, double dpx, double dpy, const SpikeObj& s,
+                          double camXpx = 0, double camYpx = 0);
 
 // Real-game timers (not in the TAS hack; teammate data, 31 fps): after a death the game respawns 1.2 s later
 // and after the flag it enters the next level 2.839 s later; both timers run while paused, the actions only
@@ -81,11 +85,18 @@ struct LevelScript {
     void (*construct)(Sim&);  // body of Level_N() after super()
     void (*update)(Sim&);     // body of Level_N.Update() after super.Update()
     bool implemented;
-    // The part of Level_N.Update() that still matters after death: unguarded hitTestObject switches
-    // (dead-ball rule) and their persistent effects. nullptr: nothing.
+    // Unguarded hitTestObject switches of Level_N.Update (also run after death, with the dead-ball rule). Kept for
+    // reference / tools; Sim::Tick runs the full update after death, so nothing calls this separately.
     void (*deadUpdate)(Sim&) = nullptr;
 };
 const LevelScript& GetLevelScript(int32_t id);
+// True for the levels whose scripts reproduce Flash logs bit-for-bit (README "Verification status"). The others are
+// ported from the AS3 only: runs, searches and routes on them must be re-checked in Flash.
+bool LevelVerified(int32_t id);
+// Debug hook for tools (not part of the simulated state): called by PlayerDie before the ball's body is destroyed.
+extern void (*g_playerDieHook)(const Sim&);
+// Prints a one-line warning on stderr when the level is scripted but not verified (run/log/optimize/beam).
+void WarnIfUnverified(int32_t id);
 
 // Immutable per-level data shared by every simulation instance (and snapshot).
 // Geometry is registered on first construction and reused afterwards.
@@ -124,7 +135,7 @@ struct FrameStats {
     bool timeStop;             // Level.isTimeStop (win)
 };
 
-constexpr int32_t LV_VARS = 8;
+constexpr int32_t LV_VARS = 16;
 
 // Complete, copyable game state (World + game-side fields).
 struct Sim {
@@ -161,6 +172,9 @@ struct Sim {
     // per-level script state (Level_N private fields)
     int32_t lvBody[LV_VARS];
     int32_t lvInt[LV_VARS];
+    // Level 11 only: levelAim is a dynamic body (Level_11 calls CreateBody("levelAim", ...)), so the goal's hit box
+    // follows its sprite (x, y, rotation). -1: the goal is the static clip from display_data.h.
+    int32_t aimBody = -1;
     // last-frame diagnostics
     bool probeC = false, probeL = false, probeR = false;
 
@@ -184,6 +198,7 @@ struct Sim {
     int32_t createAtSprite = -1;  // >= 0: next CreateBody uses this body's sprite state (AS3 CreateBody on a moved clip)
     bool BallHitsTarget(const DisplayObj& o);  // hitTestObject, alive or dead (death-warp rule)
     double TargetOverlap(const DisplayObj& o) const;  // min(x, y) overlap of the boxes in twips (< 0: apart)
+    DisplayObj GoalTarget();  // levelAim's current hit box (moves with its body when aimBody >= 0)
     double SpriteX(int32_t body) const { return spriteX[body]; }
     double SpriteY(int32_t body) const { return spriteY[body]; }
 
@@ -191,7 +206,6 @@ struct Sim {
     int32_t GetBodyAtPoint(double x, double y, bool includeStatic);
     void LevelUpdate(bool left, bool up, bool right);
     void DisplayUpdate();
-    void DeadUpdate();     // Level.Update after PlayerDie (camera + goal/checkpoint tests only)
     void CameraStep();     // Tweener.onEnterFrame via COMM "TweenEvent"  // win check + checkpoints (Level.Update, after the input forces)
     int32_t Geom(const std::string& key, const ShapeDef& def);
     int32_t BeginBody(const char* name);

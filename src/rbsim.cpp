@@ -105,6 +105,7 @@ static int CmdLog(int argc, char** argv) {
         return 2;
     }
     LevelTemplate tpl(level);
+    WarnIfUnverified(level);
     auto sim = std::make_unique<Sim>();
     sim->Load(&tpl, checkpoint);
     std::printf("# inputs\t%s\n", inputs.c_str());
@@ -134,6 +135,7 @@ static int CmdRun(int argc, char** argv) {
         return 2;
     }
     LevelTemplate tpl(level);
+    WarnIfUnverified(level);
     auto sim = std::make_unique<Sim>();
     sim->Load(&tpl, checkpoint);
     std::vector<uint8_t> in = DecodeInputs(inputs);
@@ -491,12 +493,12 @@ static int CmdTest() {
             s.camTargetX = -s.spriteX[s.playerBody] + 275;
             s.camTargetY = -s.spriteY[s.playerBody] + 200;
             s.camTween = true;
-            s.playerAlive = alive;
+            if (!alive) s.PlayerDie();  // destroys the ball body; its sprite stays where it was put
         };
         auto d = std::make_unique<Sim>();
         place(*d, false);
         check(d->BallHitsTarget(cp) && d->lastCheckNum == 0, "dead ball: checkpoint shifted by the camera overlaps it");
-        d->Tick(IN_NONE);  // DeadUpdate: camera step + checkpoint loop
+        d->Tick(IN_NONE);  // post-death Level.Update: camera step + checkpoint loop
         check(d->lastCheckNum == 1 && d->frameCount == 1 && d->deadTicks == 1, "death warp: checkpoint collected after death");
         d->Restart();
         check(d->playerAlive && d->lastCheckNum == 1 && std::fabs(d->spriteX[d->playerBody] - (-271.1)) < 30,
@@ -511,6 +513,10 @@ static int CmdTest() {
         const Case cases[] = {
             {4, "d12e1w3a2n5a2n31d8n78a1n1e1n13w2n1w1e1w12n9w1n43w6n1w3n9w2n2w1n2w17n3", 273, 274, true, "level 4 any% TAS: death warp 1 frame after death"},
             {4, "n27d1S1d123e1d2e22d24e48d22e5d1e8n24", 285, 309, true, "level 4 delayed death warp: flag 24 frames after death"},
+            {9, "d2n3d3a1d1n1d1n1d30e21d64e8d3e5d29e1d3e1d12e1d1e1d18e10d6e1d48e2d7e1q9w1q2e2q1e1d7n3d12a1q1a1q1w1a2w1a2n2a3n1d2n1d8n1d1a5n1",
+             358, 359, true, "level 9 death warp on boomCrank (Flash log rb1_stats6): death 358, flag 359"},
+            {11, "n20d30n20d64S4a12n76d8e10d6n12a10d40S4a2n39d4n12w5e6d11n1a5n2d15e26d21a10n3a7n32a8n58d12e28d34e11d2n12a3n13e6d1n14a3n20e8n6a5n12d14e12d22n14d8e30w1q3w2n8d3e4d10n8a6n6a127d1a58n7",
+             1110, 1117, true, "level 11 death warp onto the pushed, moving flag (rb1_stats11.4): death 1110, flag 1117"},
         };
         for (const Case& c : cases) {
             LevelTemplate t(c.level);
@@ -584,6 +590,253 @@ static int CmdTest() {
         a->Load(&t7, 0, false);
         const bool backAfterFresh = a->world.bodies[a->lvBody[5]].inWorld && !a->staticFlag[0];
         check(wallThere && goneAfterR && backAfterFresh, "level 7 redCheckLevel: survives a checkpoint restart, cleared by a fresh load");
+    }
+    // 18a. Level 9 against its Flash logs (rb1_stats1-7, all bit-exact): idle spike death, checkpoint-3 win
+    {
+        LevelTemplate t(9);
+        auto s = std::make_unique<Sim>();
+        s->Load(&t);
+        for (int f = 0; f < 200; ++f) s->Tick(IN_NONE);
+        check(s->deathFrame == 130, "level 9 idle: dies on the 2.48-degree spike row at frame 130 (Flash: 130)");
+        auto c = std::make_unique<Sim>();
+        c->Load(&t, 3);
+        for (uint8_t k : DecodeInputs("d21e1d17q31w1e14w1e102d36")) {
+            c->Tick(k);
+            if (c->isTimeStop) break;
+        }
+        check(c->winFrame == 224 && c->deathFrame < 0, "level 9 from checkpoint 3: flag at frame 224 (Flash: 224)");
+    }
+    // 18a'. Level 10 against its Flash logs (rb1_stats10.1-4, all bit-exact)
+    {
+        LevelTemplate t(10);
+        struct C { const char* in; int cp, death, win; const char* name; };
+        const C cases[] = {
+            {"d18e12d6e2d10a2d12e4q1e27d8e2d4a1n1a1d35e2d1e1d10e5d2e69d2e2d52e15d45e5d3e1d33", 0, -1, 394,
+             "level 10 TAS (rb1_stats10.4): flag at frame 394"},
+            {"d18w30d11e35d6e1d2e11d21S1d16e3d12e4n183", 0, 171, -1, "level 10 (rb1_stats10.3): roundBlock death at frame 171"},
+            {"d11n90", 1, 74, -1, "level 10 from checkpoint 1 (rb1_stats10.2): fall death at frame 74"},
+        };
+        for (const C& c : cases) {
+            auto s = std::make_unique<Sim>();
+            s->Load(&t, c.cp);
+            for (uint8_t k : DecodeInputs(c.in)) {
+                s->Tick(k);
+                if (s->isTimeStop) break;
+            }
+            check(s->deathFrame == c.death && s->winFrame == c.win && s->displayUncertain == 0, c.name);
+        }
+    }
+    // 18a''. Level 11 against its Flash logs (rb1_stats11.1-5, all bit-exact)
+    {
+        LevelTemplate t(11);
+        struct C { const char* in; int death, win; const char* name; };
+        const C cases[] = {
+            {"d20n1d2a6n1a8q8n1a5d2e1d22e1d7e1d11a1d7a1d11e1d1e2a2d6e1d3e1d25e15d4e1d19e5d2e6d3e1d65e8d21", -1, 309, "level 11 (rb1_stats11.5): flag at frame 309"},
+            {"d19n5d136a11d18a1n7e41d39e2d33e34d35e1d17e1d5n8a14n6a2d10a4n1d9q1a1n5a1d48e1d48n32", 564, -1, "level 11 (rb1_stats11.3): spike death at 564 on a turned spike row"},
+            {"d19n5d136a11d18a1n7e41d39e3d38e1d15n15", 334, -1, "level 11 (rb1_stats11.2): killRotate death at frame 334"},
+        };
+        for (const C& c : cases) {
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);
+            for (uint8_t k : DecodeInputs(c.in)) {
+                s->Tick(k);
+                if (s->isTimeStop) break;
+            }
+            check(s->deathFrame == c.death && s->winFrame == c.win && s->displayUncertain == 0, c.name);
+        }
+    }
+    // 18a-13. Level 13 against its Flash logs (rb1_stats13.1-4, all bit-exact); R restarts from the checkpoint reached
+    {
+        LevelTemplate t(13);
+        struct C { const char* in; int death, win; const char* name; };
+        const C cases[] = {
+            {"n200", 145, -1, "level 13 idle (rb1_stats13.1): the loose kingStar1 kills the ball at frame 145"},
+            {"d40n2a16n7d4n15d3n11d13e3", 114, -1, "level 13 (rb1_stats13.3): kingStar1 death at frame 114"},
+            {"d14n74a2n4d22e1d29R1n16d14e1d6S18e5w4d7e2d18n1d1w1e1d3e14d44R1a8q1a6d1n1d22e1d38e2q2e1d10e1d21e10d54", -1, 481, "level 13 (rb1_stats13.2): R at checkpoints 1 and 2, flag at frame 481"},
+            {"d14n74a2n4d22e1d29R1a12n1d1n1d17a1d10e6d14a1d15e1d5e2a1d2a1d9e26d41e2q20w22e17w1q23w18e11w1q14w25e11q12w25e4w1e13d14e2a1d14a1d6e2q3w1n14a4n7a2n7a13n5d8n4a4n14d6e5n1R1a13n6d34e40S1d2e83d41", 670, 850, "level 13 (rb1_stats13.4): killStar2 death at 670, R from checkpoint 2, flag at 850"},
+        };
+        for (const C& c : cases) {
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);
+            int death = -1;
+            for (uint8_t k : DecodeInputs(c.in)) {
+                if (k == IN_RESTART) {
+                    s->Restart();
+                    continue;
+                }
+                s->Tick(k);
+                if (s->deathFrame >= 0 && death < 0) death = s->frameCount;
+                if (s->isTimeStop) break;
+            }
+            check(death == c.death && s->winFrame == c.win && s->displayUncertain == 0, c.name);
+        }
+    }
+    // 18a-15. Level 15 against its Flash logs (rb1_stats15.1-4, all bit-exact)
+    {
+        LevelTemplate t(15);
+        struct C { const char* in; int death, win, switchFrame; const char* name; };
+        const C cases[] = {
+            {"d5n1d18a1d100e1d9e1d12e12d4e2d1e1d36", -1, 204, 1, "level 15 (rb1_stats15.3): flag at frame 204"},
+            {"a16n1d4a5q1a3d1w1e7d3n1q1a6n1a15q2a18d13a2q1n1a61d1q4a22e1d14e1d8a1d30e8d3e1d2e7d11a2d8e7d11e1d99e18d1e14d25", -1, 464, 2, "level 15 (rb1_stats15.4): red switch (gate rebuilt as a spinning door), flag at 464"},
+            {"a17d4a6q10e5q16a11q1a28R1d21a18n1d19q3n36", 160, -1, 2, "level 15 (rb1_stats15.2): R from checkpoint 2 (no luk), killLine death at 160"},
+        };
+        for (const C& c : cases) {
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);
+            int death = -1;
+            for (uint8_t k : DecodeInputs(c.in)) {
+                if (k == IN_RESTART) {
+                    s->Restart();
+                    continue;
+                }
+                s->Tick(k);
+                if (s->deathFrame >= 0 && death < 0) death = s->frameCount;
+                if (s->isTimeStop) break;
+            }
+            check(death == c.death && s->winFrame == c.win && s->switchFrame[0] == c.switchFrame && s->displayUncertain == 0, c.name);
+        }
+    }
+    // 18a-16. Level 16 against its Flash logs (rb1_stats16.1-5, all bit-exact; 16.5's last recording with isGless on)
+    {
+        LevelTemplate t(16);
+        struct C { const char* in; bool gless; int death, win, strelka; const char* name; };
+        const C cases[] = {
+            {"d8e1d9e1n2w1n16a1n1a1n39a9n1a1n3q1a1n1a14n22d1q1n12", false, -1, 147, 0, "level 16 (rb1_stats16.2): flag at frame 147"},
+            {"d18e11d5e1d1e24d1e10d28e19d1e22d2e51d10e1d2q2e29d53R1d17e36d4S1d18a1e12d1e29d14e5d33e1d49e1d28e44R1d18e36d31n1", false, 291, -1, 1,
+             "level 16 (rb1_stats16.3): killRollBall1 death 291, R from checkpoint 1, wrongWay resets to checkpoint 0"},
+            {"d18e11d5e1d1e24d1e10d28e19d1e22d2e62d5e56d40e16R1d18e1d6q1d39a29q1a42d1q1a11", false, -1, 472, 0, "level 16 (rb1_stats16.4, isGless off): the spike at 322 is missed (spike glitch), flag 472"},
+            {"d18e11d5e1d1e24d1e10d28e19d1e22d2e62d5e56d40e16R1d18e1d6q1d39a29q1a42d1q1a11", true, 322, 472, 1,
+             "level 16 (rb1_stats16.5, isGless on): same inputs die on the spike at 322; the dead ball hits wrongWay"},
+        };
+        for (const C& c : cases) {
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);
+            s->gless = c.gless;
+            int death = -1;
+            for (uint8_t k : DecodeInputs(c.in)) {
+                if (k == IN_RESTART) {
+                    s->Restart();
+                    continue;
+                }
+                s->Tick(k);
+                if (s->deathFrame >= 0 && death < 0) death = s->frameCount;
+                if (s->isTimeStop) break;
+            }
+            check(death == c.death && s->winFrame == c.win && (int)s->staticFlag[2] == c.strelka && s->displayUncertain == 0, c.name);
+        }
+    }
+    // 18a-17. Level 17 against its Flash logs (rb1_stats17.1-4, all bit-exact)
+    {
+        LevelTemplate t(17);
+        struct C { const char* in; int death, win; const char* name; };
+        const C cases[] = {
+            {"n100", 78, -1, "level 17 idle (rb1_stats17.1): rolls off the crown, fall death at frame 78"},
+            {"e21d18e44d62e3d7n57", 155, -1, "level 17 (rb1_stats17.2): killStarPart death at frame 155"},
+            {"e21d18e44d62e75d19e2d60R1d15e1d31a1d10n48", 359, -1, "level 17 (rb1_stats17.3): R from checkpoint 1, death on the 15-degree spike row at 359"},
+            {"n1d5e1d12e1d3n8a1n2d6e1d2w1d2e1d35e2d22e8d15e13d54a1d16e10d11e14d1e33d1e3d10e1n41", -1, 338, "level 17 TAS (rb1_stats17.4): flag at frame 338"},
+        };
+        for (const C& c : cases) {
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);
+            int death = -1;
+            for (uint8_t k : DecodeInputs(c.in)) {
+                if (k == IN_RESTART) {
+                    s->Restart();
+                    continue;
+                }
+                s->Tick(k);
+                if (s->deathFrame >= 0 && death < 0) death = s->frameCount;
+                if (s->isTimeStop) break;
+            }
+            check(death == c.death && s->winFrame == c.win && s->displayUncertain == 0, c.name);
+        }
+    }
+    // 18b. AS3 quirks of the later levels (all levels now verified against Flash logs)
+    {
+        // Level 17: movePlatform1 direction is set twice (ends -1); movePlatform2's direction starts 0
+        LevelTemplate t17(17);
+        auto s17 = std::make_unique<Sim>();
+        s17->Load(&t17);
+        check(s17->lvInt[0] == -1 && s17->lvInt[1] == 0, "level 17: movePlatform1 direction -1 (set twice), movePlatform2 direction 0 (uninitialised)");
+
+        // field initialisers: Level 9 killRollBallDirection = 1 (Flash: spin 5 from tick 1); Level 16 roll balls 1 / -1
+        LevelTemplate t9(9);
+        auto s9 = std::make_unique<Sim>();
+        s9->Load(&t9);
+        s9->Tick(IN_NONE);
+        LevelTemplate t16(16);
+        auto s16 = std::make_unique<Sim>();
+        s16->Load(&t16);
+        check(s9->lvInt[1] == 1 && s9->world.bodies[s9->lvBody[2]].angularVelocity == 5 && s16->lvInt[2] == 1 && s16->lvInt[3] == -1,
+              "level 9 / 16: roll-ball directions start at their field initialisers (9: 1; 16: 1, -1)");
+
+        // Level 13 greenCheckLevel is static: the barrier is not built after a checkpoint restart, back after a fresh load
+        LevelTemplate t13(13);
+        auto s13 = std::make_unique<Sim>();
+        s13->Load(&t13);
+        const bool barrierThere = s13->world.bodies[s13->lvBody[3]].inWorld;
+        s13->staticFlag[1] = true;
+        s13->Load(&t13, 0, true);
+        const bool barrierGone = !s13->world.bodies[s13->lvBody[3]].inWorld;
+        s13->Load(&t13, 0, false);
+        check(barrierThere && barrierGone && s13->world.bodies[s13->lvBody[3]].inWorld && !s13->staticFlag[1],
+              "level 13 greenCheckLevel: survives a checkpoint restart, cleared by a fresh load");
+
+        // Level 15: the loose plank "luk" exists only from checkpoint 0 (one body fewer from checkpoint 1)
+        LevelTemplate t15(15);
+        auto s15a = std::make_unique<Sim>(), s15b = std::make_unique<Sim>();
+        s15a->Load(&t15, 0);
+        s15b->Load(&t15, 1);
+        check(s15a->world.bodyCount == s15b->world.bodyCount + 1, "level 15: luk is built only when lastCheckNum == 0");
+
+        // Level 11: the goal is a dynamic body; its hit box moves with the sprite
+        LevelTemplate t11(11);
+        auto s11 = std::make_unique<Sim>();
+        s11->Load(&t11);
+        const DisplayObj g0 = s11->GoalTarget();
+        for (int f = 0; f < 120; ++f) s11->Tick(IN_NONE);
+        const DisplayObj g1 = s11->GoalTarget();
+        check(s11->aimBody >= 0 && g0.x0 == t11.aim->x0 && g0.y0 == t11.aim->y0 && (g1.x0 != g0.x0 || g1.y0 != g0.y0),
+              "level 11: levelAim follows its dynamic body (hit box starts at the placement, then moves)");
+    }
+    // 18c. Turned/scaled spikes: boundary rows of the E11 sweeps (rb1_calib_L9/10/11/15/17.tsv; the next grid point flips)
+    {
+        struct Row { int level; double tx, ty; const char *rot, *x, *y; bool hit; };
+        const Row rows[] = {
+            {10, 1847.65, -300.15, "0000000000000000", "409ce4999999999a", "c073c0cccccccccd", true},
+            {10, 1015.15, -307.4, "4042a66666666666", "408fee0000000000", "c07301999999999a", true},
+            {10, 1835.2, -290.1, "0000000000000000", "409cc4999999999a", "c072326666666666", false},
+            {10, 1050.4, -287.4, "0000000000000000", "4090323333333333", "c0728e6666666666", true},
+            {15, 1605.65, 412.25, "0000000000000000", "409946999999999a", "40797e6666666666", false},
+            {15, 1601.45, 412.85, "0000000000000000", "4098ff6666666666", "407a366666666666", true},
+            {15, 1629.95, 406.35, "4042a66666666666", "4099830000000000", "4078c33333333333", false},
+            {15, 1601.45, 412.85, "4042a66666666666", "4099203333333333", "407a15999999999a", true},
+            {17, 1455.55, 431.95, "4042a66666666666", "4096c53333333333", "407b18cccccccccd", true},
+            {17, 1455.55, 431.95, "0000000000000000", "4096ae3333333333", "407b680000000000", false},
+            {17, 1455.55, 431.95, "0000000000000000", "4096efcccccccccd", "407b39999999999a", false},
+            {9, -1140.65, -239.7, "0000000000000000", "c091da0000000000", "c06fdccccccccccd", true},
+            {9, -1140.65, -239.7, "0000000000000000", "c091b5cccccccccd", "c06dd00000000000", true},
+            {11, -317.45, -248.85, "4042a66666666666", "c073c9999999999a", "c06eb00000000000", true},
+            {11, -317.45, -248.85, "4042a66666666666", "c073f80000000000", "c070933333333333", true},
+        };
+        auto hx = [](const char* h) {
+            const uint64_t u = std::strtoull(h, nullptr, 16);
+            double d;
+            std::memcpy(&d, &u, 8);
+            return d;
+        };
+        int ok = 0, n = 0;
+        for (const Row& r : rows) {
+            LevelTemplate t(r.level);
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);  // the sweep runs right after SetLevel: camera centred on checkpoint 0
+            const SpikeObj* sp = nullptr;
+            for (int32_t i = 0; i < t.spikeCount; ++i)
+                if (std::fabs(t.spikes[i].tx - r.tx) < 1e-6 && std::fabs(t.spikes[i].ty - r.ty) < 1e-6) sp = &t.spikes[i];
+            ++n;
+            if (sp && BallHitsSpike(hx(r.x), hx(r.y), hx(r.rot), 0, 0, *sp, s->camX, s->camY).hit == r.hit) ++ok;
+        }
+        check(ok == n, "turned/scaled spikes: 15 boundary rows of the Flash E11 sweeps reproduced");
     }
     // 19. Compact snapshots (src/snapshot.h): byte-exact round trip, identical continuation, portable base
     {

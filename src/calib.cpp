@@ -53,6 +53,11 @@ int CmdCalib(int argc, char** argv) {
     long e8cN = 0, e8cOk = 0, e8cHits = 0, powN = 0, powOk = 0;
     long e9N = 0, e9Ok = 0, e9RotN = 0, e9RotOk = 0, e9bN = 0, e9bOk = 0, e10N = 0, e10Ok = 0, e10Approx = 0, e10Other = 0;
     long e10Targets = 0, e9Other = 0;
+    // E11 (turned/scaled spike sweep) and E12 (Level 11 turned-flag sweep), docs/STATS_LOGGING.md 3.11
+    long e11N = 0, e11Ok = 0, e11Hits = 0, e11Unc = 0, e11Missing = 0, e11BadFlagged = 0;
+    long e12N = 0, e12Ok = 0, e12Hits = 0;
+    std::map<int, const SpikeObj*> e11Spike;
+    std::unique_ptr<Sim> e12Sim, e11Cam;
     std::set<std::string> bodyNames;
     int bodyNamesLevel = -1;
     int dumpLevel = 8;  // "E9level <id>" row (docs/STATS_LOGGING.md 3.0); older dumps were Level 8 only
@@ -109,6 +114,60 @@ int CmdCalib(int argc, char** argv) {
             ++e8cN;
             if (hit == (std::stoi(f[4]) == 1)) ++e8cOk;
             if (std::stoi(f[4]) == 1) ++e8cHits;
+        } else if (f[0] == "E11s" && f.size() >= 8) {
+            // a turned/scaled spike: find it in display_data.h by origin (px) and matrix
+            LevelTemplate& t = lvl();
+            const double gx = H(f[2]), gy = H(f[3]), a = H(f[4]), b = H(f[5]), c = H(f[6]), d = H(f[7]);
+            const SpikeObj* hitSp = nullptr;
+            for (int32_t i = 0; i < t.spikeCount; ++i) {
+                const SpikeObj& sp = t.spikes[i];
+                if (std::fabs(sp.tx - gx) < 1e-6 && std::fabs(sp.ty - gy) < 1e-6 && std::fabs(sp.a - a) < 1e-9 &&
+                    std::fabs(sp.b - b) < 1e-9 && std::fabs(sp.c - c) < 1e-9 && std::fabs(sp.d - d) < 1e-9)
+                    hitSp = &sp;
+            }
+            if (!hitSp) {
+                ++e11Missing;
+                std::printf("  E11s L%d spike %s at (%.2f, %.2f) not found in display_data.h\n", dumpLevel, f[1].c_str(), gx, gy);
+            }
+            e11Spike[std::stoi(f[1])] = hitSp;
+        } else if (f[0] == "E11" && f.size() >= 6) {
+            const SpikeObj* sp = e11Spike[std::stoi(f[1])];
+            if (!sp) continue;
+            // the dump is taken right after SetLevel: the camera is centred on checkpoint 0 (Sim::Load computes it)
+            if (!e11Cam || e11Cam->tpl->id != dumpLevel) {
+                e11Cam.reset(new Sim());
+                e11Cam->Load(&lvl());
+            }
+            const SpikeResult r = BallHitsSpike(H(f[3]), H(f[4]), H(f[2]), 0, 0, *sp, e11Cam->camX, e11Cam->camY);
+            const bool flash = std::stoi(f[5]) == 1;
+            ++e11N;
+            if (flash) ++e11Hits;
+            if (r.uncertain) ++e11Unc;
+            if (r.hit == flash) ++e11Ok;
+            else if (r.uncertain) ++e11BadFlagged;  // the sim reports such decisions as uncertain (displayUncertain)
+            if (r.hit != flash && e11N - e11Ok <= 10)
+                std::printf("  E11 L%d spike %s rot %.4f ball (%.2f, %.2f): flash %d sim %d%s\n", dumpLevel, f[1].c_str(), H(f[2]), H(f[3]),
+                            H(f[4]), (int)flash, (int)r.hit, r.uncertain ? " (sim: near an edge)" : "");
+        } else if (f[0] == "E12" && f.size() >= 7) {
+            // Level 11: turned flag. Place the flag's and the ball's sprites as logged, test BallHitsTarget(GoalTarget()).
+            if (!e12Sim) {
+                static LevelTemplate t11(11);
+                e12Sim.reset(new Sim());
+                e12Sim->Load(&t11);
+            }
+            Sim& sm = *e12Sim;
+            sm.spriteX[sm.aimBody] = H(f[2]), sm.spriteY[sm.aimBody] = H(f[3]);
+            sm.spriteRot[sm.aimBody] = sm.spriteRotW[sm.aimBody] = H(f[1]);
+            sm.spriteX[sm.playerBody] = H(f[4]), sm.spriteY[sm.playerBody] = H(f[5]);
+            sm.spriteRot[sm.playerBody] = sm.spriteRotW[sm.playerBody] = 0;
+            const DisplayObj g = sm.GoalTarget();
+            const bool hit = sm.BallHitsTarget(g);
+            const bool flash = std::stoi(f[6]) == 1;
+            ++e12N;
+            if (flash) ++e12Hits;
+            if (hit == flash) ++e12Ok;
+            else if (e12N - e12Ok <= 10)
+                std::printf("  E12 flag rot %.4f ball (%.2f, %.2f): flash %d sim %d\n", H(f[1]), H(f[4]), H(f[5]), (int)flash, (int)hit);
         } else if (f[0] == "E9level" && f.size() >= 2) {
             dumpLevel = std::stoi(f[1]);
         } else if (f[0] == "E10" && f.size() >= 6) {
@@ -199,12 +258,18 @@ int CmdCalib(int argc, char** argv) {
     if (e9bN) std::printf("rotation getter of code-set matrices, atan2(b,a)*180/PI within 1e-12 deg (E9b): %ld / %ld\n", e9bOk, e9bN);
     if (powN) std::printf("camera tween constant Math.pow(2, -10/31): %s\n", powOk == powN ? "identical" : "DIFFERENT");
     if (e8cN) std::printf("standardized spikes, whole check (E8c): %ld / %ld (Flash hits: %ld)\n", e8cOk, e8cN, e8cHits);
+    if (e11N || e11Missing)
+        std::printf("Level %d turned/scaled spikes (E11): %ld / %ld agree (Flash hits: %ld; sim flags %ld as near a half-twip, incl. %ld of the "
+                    "%ld disagreements; spikes not found: %ld)\n",
+                    dumpLevel, e11Ok, e11N, e11Hits, e11Unc, e11BadFlagged, e11N - e11Ok, e11Missing);
+    if (e12N)
+        std::printf("Level 11 turned flag (E12): %ld / %ld agree (Flash hits: %ld)\n", e12Ok, e12N, e12Hits);
     std::printf("E2 hitTestObject sweep: %ld rows; RectsHit on Flash's own bounds agrees in %ld (touching-edge rows: %ld)\n",
                 e2, e2obs, e2touch);
     std::printf("   with the modelled ball box: agrees in %ld, consistent with some +-1 twip adjustment in %ld\n", e2model,
                 e2inRange);
     std::printf("E3 static bounds vs SWF-derived display_data.h: %ld / %ld identical\n", e3ok, e3n);
-    const bool e8ok = e8cOk == e8cN && powOk == powN && e9Ok + e9Other == e9N && e9RotOk == e9RotN && e9bOk == e9bN && e10Ok + e10Approx + e10Other == e10N;
+    const bool e8ok = e8cOk == e8cN && e11Ok + e11BadFlagged == e11N && e11Missing == 0 && e12Ok == e12N && powOk == powN && e9Ok + e9Other == e9N && e9RotOk == e9RotN && e9bOk == e9bN && e10Ok + e10Approx + e10Other == e10N;
     const bool pass = e8ok && e1far == 0 && e2obs == e2 && e2inRange == e2 && e1exact == e1 && (mN == mOk);
     std::printf("%s\n", pass ? "CALIB OK" : "CALIB MISMATCH");
     return pass ? 0 : 1;

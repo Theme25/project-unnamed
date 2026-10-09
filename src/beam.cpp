@@ -263,6 +263,7 @@ int CmdBeam(int argc, char** argv) {
     if (!memory && !fixedWidth) memory = (size_t)4 << 30;  // conservative default: 4 GB
 
     LevelTemplate tpl(level);
+    WarnIfUnverified(level);
     auto base = std::make_unique<Sim>();
     base->Load(&tpl, checkpoint);
     base->gless = gless;

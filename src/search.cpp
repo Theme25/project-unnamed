@@ -247,6 +247,7 @@ int CmdOptimize(int argc, char** argv) {
             return 2;
         }
     LevelTemplate tpl(level);
+    WarnIfUnverified(level);
     Shared sh;
     {
         auto s = std::make_unique<Sim>();

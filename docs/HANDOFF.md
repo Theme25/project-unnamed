@@ -40,15 +40,15 @@ recorded in README.md ("Verification status") and below.
 | area | status |
 |---|---|
 | physics core | bit-exact (Box2DFlash quirks replicated; Intel LIBM `sin`/`cos`) |
-| levels **1-8, 12, 14** | **bit-exact** against Flash logs (48 logs, 59,741 frames; table in README) |
-| levels 9, 10, 11, 13, 15, 16, 17 | not scripted (section 8) |
+| levels **1-17 (all)** | **bit-exact** against Flash logs (83 logs, 99,170 frames; table in README) |
+| turned spikes / turned flag | calibrated by the E11/E12 sweeps (390,665 / 390,670 and 148,074 / 148,074; the 5 spike rows within 0.003 twip of a half-twip are flagged as uncertain) |
 | display layer | exact: rotation matrix, hit tests, camera, standardized spikes (section 6) |
-| death / death warp | exact: post-death camera + unguarded goal/checkpoint/switch tests; 3 logged warps verified |
-| Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical |
+| death / death warp | exact: ball body destroyed, full `Update` keeps running (world, machinery), unguarded goal/checkpoint/switch tests; 5 logged warps verified (incl. L9 death 358 / flag 359, L11 onto the moving flag 1110 / 1117). Debris (random) not simulated |
+| Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical. `rbview.exe` (viewer/, `make viewer`): double-click route viewer, tested under Wine + Xvfb with screenshots |
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-Self-tests: `./rbsim test` → 55 tests, `ALL PASSED`.
+Self-tests: `./rbsim test` → 86 tests, `ALL PASSED` (also under Wine).
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
@@ -58,6 +58,7 @@ Self-tests: `./rbsim test` → 55 tests, `ALL PASSED`.
 | `src/libm_intel.S` | Flash 11.4's `sin`/`cos` (Intel LIBM via OpenJDK, `tools/hotspot2gas.py`); Win64 wrappers under `_WIN32` |
 | `src/redball.cpp/.h` | `Sim`: level logic, sprite sync, inputs, camera, display layer, spikes, death, level scripts, RLE codec |
 | `src/levels_data.h` | named placements of all 17 levels (generated) |
+| `src/level_polys.h` | polygon tables of levels 9-17 exactly as in the AS3 (`tools/gen_level_polys.py <scripts/Levels dir>`; the numeric literals are copied as text) |
 | `src/display_data.h` | bounds of named objects + every spike, per level (`tools/gen_display_data.py`, `tools/swf_geom.py`) |
 | `src/flash_sintab.h` | Flash's display-matrix sine table (`tools/gen_flash_sintab.py`) |
 | `src/snapshot.cpp/.h` | compact snapshots (diff vs level start, ~6 KB, byte-exact, portable) |
@@ -199,31 +200,126 @@ sim speed per thread ~450k frames/s (L2), ~140k (L12 idle), ~36-60k (L8 with the
 search grows ~2x per frame even with merging (prototype: last 16 frames of L8 ~207k expansions,
 11 s): proofs are only feasible for short windows/endgames.
 
-## 8. Next steps (in the user's order of interest)
+## 8. Next steps
 
-1. **Better beam score** (biggest lever): account for moving platforms/timing (e.g. time-indexed
-   platform positions in the nav field, or score = elapsed + estimated remaining time); calibrate
-   any change with `--explain` against the team's TASes (L2 186, L4 274, L8 405).
-2. **Exhaustive window proofs** (resumable, splittable across machines) and **endgame proofs**
-   (prove the fastest finish from a state within ~16-20 frames).
-3. **Remaining levels:** 13 and 16 (one rotated dynamic body each: tick-0 angle from a log), 17 (a
-   few rotated/scaled spike rows: calibrate first), then 9, 10, 11, 15 (many transformed spike
-   rows; 10 and 11 have rotated static bodies: need an E9a dump; the mod must run E9a on every
-   level, §3.0).
-4. Physics profiling for contact-heavy levels (must keep bit-exactness).
+The bruteforcer (beam/optimize work in section 7) is someone else's task. **The simulator is finished: all 17
+levels are bit-exact against Flash logs.** What follows records how the last seven got there.
+
+**Scripted from the AS3 (chat before last):** levels 9, 10, 11, 13, 15, 16, 17 (`Level_N.as` of the
+Practice Hack SWF). Bodies and joints in AS3 order; polygons from `src/level_polys.h`. `LevelVerified()` /
+`WarnIfUnverified()` make run, optimize and beam on an unverified level print a warning. AS3 quirks
+reproduced: Level 17 `movePlatform2BodyDirection` never initialised (0) and `movePlatform1` direction set
+twice; Level 16 `wrongWay` resetting `lastCheckNum` (alive or dead); Level 15 `luk` only at
+`lastCheckNum == 0`; no-op repeated `DestroyBody`; Level 11's `levelAim` is a **dynamic body**
+(`Sim::aimBody`, `Sim::GoalTarget`).
+
+**Lesson (cost one round trip):** read the whole class, including field declarations. Level 9 and 16
+direction fields have initialisers (`private var killRollBallDirection:int = 1;`); a grep that skipped
+`private var` lines made them look uninitialised. The first Level 9 log diverged at tick 1 on exactly that.
+
+**Level 9: VERIFIED (last chat).** `rb1_calib_L9.tsv`: 33/33 placements and 33/33 bounds exact; the crank
+rotations are now Flash's (66.776199340820312, -25.733810424804688; `atan2` was ~2e-4 degrees off).
+`rb1_stats1-7.tsv`: 12 segments, 7,775 frames, all bit-exact (7 deaths on the Flash tick, 4,676
+post-death frames): idle spike death at 130, spike/kill-roll-ball/boom-crank deaths, green switch,
+checkpoint-3 R and win at 224, a death-warp win (death 358 on `boomCrank`, flag 359). Not exercised: the
+fall death, checkpoints 1/2 as restart points. Its rotated spike rows are modelled by a continuous inverse
+transform (uncalibrated then; since calibrated by the E11 sweep, item 5 below); every logged spike decision matched and none was near an edge (`verify` now
+prints that count). The mod's `flags` bit 9 never fires on Level 9: its switches are named
+`greenCheck1-3`, not `greenCheck` (the platform disappearing in the extra-body columns shows the press).
+
+**Level 10: VERIFIED.** `rb1_calib_L10.tsv`: 22/22 placements, all hit-test boxes exact (three walls 1 twip
+off: nested scaled sprites, not hit-tested); `afterJump` rotation is Flash's -179.8502197265625. Logs
+`rb1_stats10.1-4`: 20 segments, 6,241 frames bit-exact: idle, fall deaths (also from checkpoint 1 after R),
+`roundBlock` death 171, TAS win 394. No log touches `afterJump`, `cube1/2`, `jumpPlatform3` or checkpoints 2/3
+(same calibrated data and mechanics as the logged parts), and none dies on a spike. Open: the 13 rotated and
+scaled spikes at the two ends of the finish pit (x 1015-1050, 1820-1850) were uncalibrated (since: E11, item 5); the TAS passes
+15 px from one. `make deathcause && tools/deathcause <level> <RLE> [cp]` replays inputs and prints each
+death cause (contacts or spike row) or the win.
+
+The user said the remaining levels' logs are all recorded and will come one by one.
+
+**Level 11: VERIFIED.** `rb1_calib_L11.tsv`: 54/54 placements, both hit-test targets exact; measured
+rotations: train line 0.173980712890625 (all 36 clips), `triangle` 0.753570556640625. Logs `rb1_stats11.1-5`:
+9 segments, 4,507 frames bit-exact: idle train ride, `killRotate` death 334, spike death 564 on a turned row, the
+flag pushed and turned by the train, a fall death then a death warp onto the moving flag (1110 -> 1117), win 309.
+Two engine changes came out of it:
+1. **Turned flag box:** `hitTestObject` boxes each part of the clip (pole shape 65, cloth morph 64 at ratio 0)
+   through the full transform and unions them (`Sim::GoalTarget`, `kAimChildren`); the rotated-union model was
+   wrong on 10 of 11 near-contact frames. But E10/`getBounds` of the nested `triangle` follows the union rule, so
+   the two Flash calls differ for turned clips. Corner rounding is unknown (nearest used; alternatives counted in
+   `displayUncertain`).
+2. **After death the full `Level.Update` runs** (ball body destroyed in `PlayerDie`; world steps; machinery and
+   `Level_N.Update` run). `DeadUpdate` is gone. Needed for the death warp onto the moving flag. `verify` now also
+   reports post-death body agreement (not a failure: debris is random); every difference seen so far is the body
+   that killed the ball, hit by debris spawning at the ball.
+
+**Level 16 `wrongWay`:** a turned hit-test target (shape + TextField). `tools/gen_display_data.py` skips TextFields,
+but its box matches Flash's E10 within rounding (the text lies inside the shape) and both logged hits matched.
+
+**Level 13: VERIFIED.** `rb1_calib_L13.tsv`: 17/17 placements and boxes exact; `kingStar1` rotation is Flash's
+-13.132583618164062. Logs `rb1_stats13.1-4`: 12 segments, 4,022 frames bit-exact: idle death at 145 (the loose
+`kingStar1` rolls into the ball), `kingStar1` and `killStar2` deaths, R from checkpoints 1 and 2, two wins (481 and
+850 in `Game.frameCount`, counting across R). Not logged: the green switch / `greenCheckLevel` (same code path as
+Level 7's verified red switch), the fall death, `killStar1`. `tools/deathcause` now prints the contacts at the
+moment of death (`g_playerDieHook`, a debug hook outside the simulated state).
+
+**Level 15: VERIFIED (no code change needed).** `rb1_calib_L15.tsv`: 23/23 placements and boxes exact (incl.
+`killLine`, so the shifted-static-box model holds). Logs `rb1_stats15.1-4`: 14 segments, 3,573 frames bit-exact:
+idle, `killLine` deaths after R from checkpoint 2 (level built without `luk`), the red switch (gate rebuilt as a
+hinged dynamic door), two wins (204, 464). Open: all 44 spike rows are turned and scaled (~0.71 x 0.6) and
+uncalibrated then (since: E11, item 5); the winning runs cross their bounds on 70 frames with no near-edge decision.
+
+**Level 16: VERIFIED (no simulation change).** `rb1_calib_L16.tsv`: 23/23 placements and boxes exact; `axe1`
+rotation is Flash's -72.02842712402344 (`wrongWay` 5.5239105224609375 recorded too). Logs `rb1_stats16.1-5`: 16
+segments, 4,414 frames bit-exact: idle, `killRollBall1` death (which also collects checkpoint 1 on the death frame),
+drop platform re-created on consecutive frames, `wrongWay` resetting `lastCheckNum` alive (16.3) and as a death
+warp (16.5: the dead ball's frozen box hits the camera-shifted `wrongWay`), `isStrelka` kept across R, two wins.
+16.4 and 16.5 are the same inputs with `isGless` off and on: off, the spike at 322 is missed (spike glitch); on,
+the ball dies there. **The mod writes no `# config` line**, and one file can hold several recordings (16.5 = 7
+segments with isGless off, then 2 with it on): `verify` now detects isGless per segment (`Level.dp` is always 0
+with it on while the camera moves) and takes `--gless 0|1` to force it. Not logged: blue switches, `axe1` and
+`killRollBall2` deaths.
+
+**Level 17: VERIFIED (no simulation change).** `rb1_calib_L17.tsv`: 12/12 placements, 11/11 boxes exact (`kingLogo`
+is a click target with empty bounds, skipped). Logs `rb1_stats17.1-4`: 25 segments, 7,693 frames bit-exact: idle
+fall death 78, `killStarPart` death 155, spike deaths on the 15-degree row (five, after R from checkpoint 1), TAS
+win 338. Not logged: `movePlatform2` (direction starts at 0, reproduced).
+
+**If anything is reopened later** (for a route that depends on it):
+1. Record the case with the mod (docs/STATS_LOGGING.md 6.0) and run `./rbsim verify <log>`.
+2. `./rbsim calib <dump>` for any new placement question.
+3. `kTimelineRotations` now holds Flash's measured value for every rotated body clip (no provisional entries).
+4. Spike calibration for rotated/scaled Shipik rows (Level 17 and the turned/scaled rows of 9, 10, 11, 15; the E8c method of
+   docs/STATS_LOGGING.md).
+5. **E11/E12 sweeps done** (`docs/mod_sweeps.as`, `rbsim calib`, dumps `rb1_calib_L9/10/11/15/17.tsv` with sweeps):
+   - E12 (Level 11 flag, 8 angles): 148,074 / 148,074 with the per-part box and round-to-nearest corners (1,113
+     decisions where floor/truncation differ), so `GoalTarget` no longer flags anything as uncertain.
+   - E11 (turned/scaled spikes): the continuous inverse was wrong on 1,469 of 390,670 rows. Fitted model
+     (`tools`-free, see `BallHitsSpike`): screen twips (Level.x/y added: the camera matters, 1,315 misses without
+     it; a 1-twip camera error gives ~550), double inverse of the matrix, inverse translation rounded to a twip,
+     local point rounded to a twip: 390,665 agree. The 5 others are within 0.003 twip of a half-twip (not float32:
+     every float/double mix was tried); decisions within 0.005 twip of one count in `displayUncertain`.
+     `BallHitsSpike` now takes the camera (`Sim::camX/camY`).
+
+Every idle prediction made before the logs arrived (Levels 9, 10, 11, 13, 15, 16, 17) matched Flash.
+
+**Search-side next steps** (for whoever takes the bruteforcer): better beam score (moving platforms /
+timing, calibrate with `--explain` against L2 186, L4 274, L8 405); exhaustive window proofs and endgame
+proofs; physics profiling for contact-heavy levels (must stay bit-exact).
 
 ## 9. Environment setup (fresh sandbox)
 
 ```bash
 git clone https://github.com/Theme25/project-unnamed.git && cd project-unnamed
-make && ./rbsim test                  # expect ALL PASSED (55)
+make && ./rbsim test                  # expect ALL PASSED (86)
 
 # Windows cross build + Wine (to check the Windows build)
 mv /etc/apt/sources.list.d/nodesource* /tmp/ 2>/dev/null   # a broken repo blocks apt-get update
 apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq mingw-w64 wine64
 make windows && WINEDEBUG=-all wine rbsim.exe test
 
-# JPEXS FFDec (decompiler); Java is preinstalled
+# JPEXS FFDec (decompiler); Java is preinstalled. Regenerate level_polys.h after exporting the scripts:
+#   python3 tools/gen_level_polys.py ~/extracted/practice/scripts/Levels > src/level_polys.h
 mkdir -p ~/tools/ffdec && cd ~/tools/ffdec
 curl -sL -o ffdec.zip https://github.com/jindrapetrik/jpexs-decompiler/releases/download/version15.1.1/ffdec_15.1.1.zip && unzip -q ffdec.zip
 java -jar ffdec.jar -cli -export script ~/extracted/practice /mnt/user-data/uploads/Red_Ball_-_Practice_Hack.swf

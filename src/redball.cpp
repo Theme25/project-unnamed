@@ -1,6 +1,7 @@
 // redball.cpp - game-side logic (Level.as / Level_N.as / PlayerBox.as /
 // Game.UpdateHandler) driving the Box2D port.
 #include "redball.h"
+#include "level_polys.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -109,31 +110,7 @@ static bool ShipikPointInTriangle(double x, double y) {
     const bool d3 = ShipikSign(x, y, w, 0, 0, 0);
     return d1 == d2 && d2 == d3;
 }
-// distance (px) from (x,y) to the triangle's boundary, for the uncertainty margin
-static double ShipikEdgeDistance(double x, double y) {
-    const double ax[3] = {0, 3, 6}, ay[3] = {0, -9.65, 0};
-    double best = 1e300;
-    for (int e = 0; e < 3; ++e) {
-        const double x0 = ax[e], y0 = ay[e], x1 = ax[(e + 1) % 3], y1 = ay[(e + 1) % 3];
-        const double dx = x1 - x0, dy = y1 - y0, L2 = dx * dx + dy * dy;
-        double t = ((x - x0) * dx + (y - y0) * dy) / L2;
-        t = t < 0 ? 0 : (t > 1 ? 1 : t);
-        const double ex = x - (x0 + t * dx), ey = y - (y0 + t * dy);
-        best = std::fmin(best, std::sqrt(ex * ex + ey * ey));  // sqrt is exact everywhere; hypot is not
-    }
-    return best;
-}
-
-// Standardized spike check, calibrated in docs/STATS_LOGGING.md 3.8 (FP 11.4, rb1_calib_mathspikes.tsv):
-//  - localToGlobal truncates the point to twips, applies the 16.16 display matrix and rounds to the nearest
-//    twip (E8a 16,000/16,000); globalToLocal for pure translations is exact twip subtraction;
-//  - Shipik.testPoint: Level point (twips / 20) in getBounds(Level) (doubles, left/top inclusive), minus
-//    cover.x/y (= dp through the DisplayObject setter, i.e. truncated to twips), L.localToGlobal truncates to
-//    twips, S.globalToLocal subtracts the Shipik origin, strict sign test (E8b 26,040/26,040);
-//  - whole HitTestObjectControlPoints: E8c 30,000/30,000.
-// Only translated Shipiks are calibrated; rotated/scaled ones (later levels) use exact doubles and count
-// decisions within SPIKE_EDGE_MARGIN twips of an edge as uncertain.
-SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s) {
+SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s, double camXpx, double camYpx) {
     const double bx0 = s.bx0 / 20.0, by0 = s.by0 / 20.0, bw = (s.bx1 - s.bx0) / 20.0, bh = (s.by1 - s.by0) / 20.0;
     if (sx + 11 < bx0 || sx - 11 > bx0 + bw || sy + 11 < by0 || sy - 11 > by0 + bh) return {false, false};
     const int64_t X = std::llround(sx * 20), Y = std::llround(sy * 20);  // sprite x/y: whole twips
@@ -163,11 +140,22 @@ SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, doubl
             ux = (double)((id * vx - ic * vy) * idet) / 20.0;  // inverse of a 0/+-1 matrix = adjugate * det
             uy = (double)((-ib * vx + ia * vy) * idet) / 20.0;
         } else {
+            // this.globalToLocal(global point): screen twips (Level.x/y added), inverse of the concatenated matrix in
+            // doubles, inverse translation rounded to a twip, result rounded to a twip (E11: 390,665 / 390,670).
+            const double cx = std::llround(camXpx * 20), cy = std::llround(camYpx * 20);
             const double det = s.a * s.d - s.b * s.c;
-            const double vx = tx / 20.0 - s.tx, vy = ty / 20.0 - s.ty;
-            ux = (s.d * vx - s.c * vy) / det;
-            uy = (-s.b * vx + s.a * vy) / det;
-            if (ShipikEdgeDistance(ux, uy) < SPIKE_EDGE_MARGIN / 20.0) uncertain = true;
+            const double ia = s.d / det, ib = -s.b / det, ic = -s.c / det, id = s.a / det;
+            const double TX = std::llround(s.tx * 20) + cx, TY = std::llround(s.ty * 20) + cy;
+            const double GX = (double)tx + cx, GY = (double)ty + cy;
+            const double itx = std::floor(-(ia * TX + ic * TY) + 0.5), ity = std::floor(-(ib * TX + id * TY) + 0.5);
+            const double lx = ia * GX + ic * GY + itx, ly = ib * GX + id * GY + ity;
+            ux = std::floor(lx + 0.5) / 20;
+            uy = std::floor(ly + 0.5) / 20;
+            // a local coordinate this close to a half twip could round the other way in Flash
+            const double m = SPIKE_HALF_TWIP_MARGIN;
+            for (const double ax : {std::floor(lx + 0.5 - m), std::floor(lx + 0.5 + m)})
+                for (const double ay : {std::floor(ly + 0.5 - m), std::floor(ly + 0.5 + m)})
+                    if (ShipikPointInTriangle(ax / 20, ay / 20) != ShipikPointInTriangle(ux, uy)) uncertain = true;
         }
         if (ShipikPointInTriangle(ux, uy)) hit = true;
     }
@@ -218,6 +206,53 @@ static const TimelineRotation kTimelineRotations[] = {
     // has exactly one double solution each); float32-precision values like killSpusk2's.
     {4, "axe1", 0xc047d49680000000ULL, true},  // -47.66084289550781 (atan2 of the matrix: -47.660612218870874)
     {4, "axe2", 0x4047ae8d00000000ULL, true},  // 47.363677978515625 (atan2 of the matrix: 47.36356874825479)
+    // Levels 9-17: PROVISIONAL (measured = false) = atan2(b, a) of the stored matrix. Flash's own getter differs from
+    // this by ~1e-4 degrees on timeline clips (see above), so a rotated BODY clip is only exact once its value
+    // is replaced by the one from an E9a dump (static clips) or from a log's tick-0 angle (dynamic clips).
+    // g_provisionalRotations counts how many of these a level construction used.
+    {9, "firstCrank", 0x4050b1ad40000000ULL, true},   // rb1_calib_L9.tsv E9a: 66.776199340820312 (atan2: 66.77591509403953)
+    {9, "secondCrank", 0xc039bbdb00000000ULL, true},  // rb1_calib_L9.tsv E9a: -25.733810424804688 (atan2: -25.733590917056688)
+    {10, "afterJump", 0xc0667b3020000000ULL, true},  // rb1_calib_L10.tsv E9a: -179.8502197265625 (atan2: -179.8494982985548)
+    {11, "kolesoTrain1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "kolesoTrain2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "train", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "triangle", 0x3fe81d4000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.753570556640625
+    {11, "vagon1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon3", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon4", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon5", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon6", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon7", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon8", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon9", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon10", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "vagon11", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_1_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_1_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_2_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_2_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_3_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_3_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_4_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_4_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_5_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_5_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_6_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_6_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_7_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_7_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_8_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_8_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_9_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_9_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_10_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_10_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_11_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {11, "koleso_11_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
+    {13, "kingStar1", 0xc02a43e200000000ULL, true},  // rb1_calib_L13.tsv E9a: -13.132583618164062
+    {16, "axe1", 0xc05201d1c0000000ULL, true},  // rb1_calib_L16.tsv E9a: -72.02842712402344
+    {16, "wrongWay", 0x4016187c00000000ULL, true},  // rb1_calib_L16.tsv E9a: 5.5239105224609375 (not a body; recorded for calib)
 };
 bool LookupTimelineRotation(int32_t level, const char* name, double& out, bool* measured) {
     for (const TimelineRotation& t : kTimelineRotations)
@@ -316,11 +351,16 @@ int32_t Sim::CreateCircleBody(const char* name, double density, double friction,
     return b;
 }
 
+void (*g_playerDieHook)(const Sim&) = nullptr;
 void Sim::PlayerDie() {
-    // Level.PlayerDie spawns 8 debris bodies with Math.random() and destroys the player body; the level keeps
-    // updating (Sim::DeadUpdate models what matters: camera + the death-warp goal/checkpoint tests).
-    if (playerAlive) deathFrame = frameCount + 1;  // this Update's frame
+    // Level.PlayerDie: OutControl(); 8 debris bodies (playerDiePart0-7, positions from Math.random(): NOT simulated);
+    // playerBox.Kill() -> m_world.DestroyBody(ball) and the ball leaves the display list (its sprite stays frozen).
+    // The level keeps running its full Update afterwards (world step, moving parts, Level_N.Update), see Sim::Tick.
+    if (!playerAlive) return;
+    deathFrame = frameCount + 1;  // this Update's frame
+    if (g_playerDieHook) g_playerDieHook(*this);
     playerAlive = false;
+    world.DestroyBody(playerBody);
 }
 
 // ---------------------------------------------------------------- level scripts
@@ -982,6 +1022,525 @@ static void L14_Update(Sim& s) {
     }
 }
 
+// Level_13.as: moving platforms (prismatic patrols), two spinning kill stars on distance joints, a loose heavy star
+// (kingStar1: a dynamic body without any joint, it falls and kills on touch), green switch removing a barrier.
+// greenCheckLevel is static: after R the barrier is destroyed in the constructor, but greenCheck is still armed
+// (greenCheck.stop() -> frame 1), so touching it again runs Level.DestroyBody on a body that is already gone
+// (a no-op: Level.DestroyBody walks m_bodyList first).
+enum { L13_KINGSTAR = 0, L13_MP1 = 1, L13_MP2 = 2, L13_BARIER = 3, L13_STAR1 = 4, L13_STAR2 = 5 };
+enum { L13I_MP1DIR = 0, L13I_MP2DIR = 1 };
+static void L13_Construct(Sim& s) {
+    World& w = s.world;
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    s.CreateBody("mainPlat", "Polygon", 0, F, R, kL13_mainPlat);
+    s.lvBody[L13_KINGSTAR] = s.CreateBody("kingStar1", "Polygon", 2 * D, F, R, kL13_kingStar1);
+    s.lvBody[L13_MP1] = s.CreateBody("movePlat1", "Polygon", D, F, R, kL13_movePlat1);
+    s.lvBody[L13_MP2] = s.CreateBody("movePlat2", "Polygon", D, F, R, kL13_movePlat2);
+    s.CreateBody("skyLeft", "Polygon", 0, F, R, kL13_skyLeft);
+    s.CreateBody("skyRight", "Polygon", 0, F, R, kL13_skyRight);
+    s.lvBody[L13_BARIER] = s.CreateBody("greenBarier", "Polygon", 0, F, R, kL13_greenBarier);
+    s.CreateBody("pereval", "Polygon", 0, F, R, kL13_pereval);
+    s.CreateBody("pereval2", "Polygon", 0, F, R, kL13_pereval2);
+    s.lvBody[L13_STAR1] = s.CreateBody("killStar1", "Polygon", D, F, R, kL13_killStar1);
+    s.lvBody[L13_STAR2] = s.CreateBody("killStar2", "Polygon", D, F, R, kL13_killStar2);
+    if (s.staticFlag[1]) LevelDestroyBody(s, s.lvBody[L13_BARIER]);  // greenCheckLevel
+    JointDef pj, dj;
+    w.InitPrismaticJointDef(pj, s.lvBody[L13_MP1], w.groundBody, w.bodies[s.lvBody[L13_MP1]].sweep.c, Vec2(1, 0));
+    pj.enableLimit = false;
+    pj.enableMotor = false;
+    w.CreateJoint(pj);
+    s.lvInt[L13I_MP1DIR] = -1;
+    w.InitPrismaticJointDef(pj, s.lvBody[L13_MP2], w.groundBody, w.bodies[s.lvBody[L13_MP2]].sweep.c, Vec2(1, 0));
+    pj.enableLimit = false;
+    pj.enableMotor = false;
+    w.CreateJoint(pj);
+    s.lvInt[L13I_MP2DIR] = -1;
+    const Vec2 p1 = w.bodies[s.lvBody[L13_STAR1]].xf.position;
+    w.InitDistanceJointDef(dj, s.lvBody[L13_STAR1], w.groundBody, p1, Vec2(p1.x - 100 / PHYS_SCALE, p1.y - 100 / PHYS_SCALE));
+    w.CreateJoint(dj);
+    const Vec2 p2 = w.bodies[s.lvBody[L13_STAR2]].xf.position;
+    w.InitDistanceJointDef(dj, s.lvBody[L13_STAR2], w.groundBody, p2, Vec2(p2.x + 100 / PHYS_SCALE, p2.y - 100 / PHYS_SCALE));
+    w.CreateJoint(dj);
+    w.SetAngularVelocity(s.lvBody[L13_STAR1], 10);
+    w.SetAngularVelocity(s.lvBody[L13_STAR2], 10);
+}
+static void L13_Switches(Sim& s) {  // hitTestObject without IsLive(): also runs (dead-ball rule) after a death
+    if (s.switchFrame[0] == 1 && SwitchHit(s, "greenCheck")) {
+        s.switchFrame[0] = 2;
+        s.staticFlag[1] = true;  // Level_13.greenCheckLevel
+        LevelDestroyBody(s, s.lvBody[L13_BARIER]);
+    }
+}
+static void L13_Update(Sim& s) {
+    World& w = s.world;
+    if ((s.spriteY[s.playerBody] > 500 || PlayerTouches(s, s.lvBody[L13_KINGSTAR]) || PlayerTouches(s, s.lvBody[L13_STAR1]) ||
+         PlayerTouches(s, s.lvBody[L13_STAR2])) && s.playerAlive)
+        s.PlayerDie();
+    const int32_t m1 = s.lvBody[L13_MP1], m2 = s.lvBody[L13_MP2];
+    if (s.spriteX[m1] < -1237) s.lvInt[L13I_MP1DIR] = 1;
+    if (s.spriteX[m1] > -863) s.lvInt[L13I_MP1DIR] = -1;
+    w.SetLinearVelocity(m1, Vec2(3 * s.lvInt[L13I_MP1DIR], 0));
+    if (s.spriteX[m2] < -572) s.lvInt[L13I_MP2DIR] = 1;
+    if (s.spriteX[m2] > -68) s.lvInt[L13I_MP2DIR] = -1;
+    w.SetLinearVelocity(m2, Vec2(3 * s.lvInt[L13I_MP2DIR], 0));
+    L13_Switches(s);
+}
+
+// Level_16.as: patrolling platforms, a jump platform (prismatic limit + motor, motor force 250 while touched),
+// three blue switches that each destroy the same barrier plate (the 2nd/3rd are Level.DestroyBody no-ops), a drop platform
+// that is re-created dynamic with density 3, two kill roll balls, a swinging axe and the wrongWay trigger.
+// wrongWay (hitTestObject, no IsLive() guard, so also after death) sets lastCheckNum = 0 AFTER Level.Update's checkpoint
+// loop, and Level_16.isStrelka = true (static: survives R).
+// Field initialisers: killRollBall1Direction = 1, killRollBall2Direction = -1.
+enum { L16_MP1 = 0, L16_MP2 = 1, L16_JUMP = 2, L16_BLUEPLATE = 3, L16_DROP = 4, L16_BALL1 = 5, L16_BALL2 = 6, L16_AXE = 7 };
+enum { L16I_MP1DIR = 0, L16I_MP2DIR = 1, L16I_BALL1DIR = 2, L16I_BALL2DIR = 3, L16I_JUMPJOINT = 4 };
+static void L16_Construct(Sim& s) {
+    World& w = s.world;
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    s.CreateBody("firstPlat", "Polygon", 0, F, R, kL16_firstPlat);
+    s.CreateBody("plat2", "Polygon", 0, F, R, kL16_plat2);
+    s.CreateBody("plat1", "Polygon", 0, F, R, kL16_plat1);
+    s.lvBody[L16_MP1] = s.CreateBody("movePlatform1", "Polygon", D, F, R, kL16_movePlatform1);
+    s.lvBody[L16_MP2] = s.CreateBody("movePlatform2", "Polygon", D, F, R, kL16_movePlatform2);
+    s.lvBody[L16_JUMP] = s.CreateBody("jumpPlatform1", "Polygon", D, F, R, kL16_jumpPlatform1);
+    s.CreateBody("dangerPlato", "Polygon", 0, F, R, kL16_dangerPlato);
+    s.lvBody[L16_BLUEPLATE] = s.CreateBody("bluePlato", "Polygon", 0, F, R, kL16_bluePlato);
+    s.lvBody[L16_DROP] = s.CreateBody("dropPlatform", "Polygon", 0, F, R, kL16_dropPlatform);
+    s.lvBody[L16_BALL1] = s.CreateCircleBody("killRollBall1", D, F, R, 50);
+    s.lvBody[L16_BALL2] = s.CreateCircleBody("killRollBall2", D, F, R, 50);
+    s.CreateBody("finishPlato", "Polygon", 0, F, R, kL16_finishPlato);
+    s.lvBody[L16_AXE] = s.CreateBody("axe1", "Polygon", 2 * D, F, R, kL16_axe1);
+    JointDef pj;  // one b2PrismaticJointDef reused
+    w.InitPrismaticJointDef(pj, s.lvBody[L16_MP1], w.groundBody, w.bodies[s.lvBody[L16_MP1]].sweep.c, Vec2(1, 0));
+    pj.enableLimit = false;
+    pj.enableMotor = false;
+    w.CreateJoint(pj);
+    s.lvInt[L16I_MP1DIR] = 1;
+    w.InitPrismaticJointDef(pj, s.lvBody[L16_MP2], w.groundBody, w.bodies[s.lvBody[L16_MP2]].sweep.c, Vec2(1, 0));
+    pj.enableLimit = false;
+    pj.enableMotor = false;
+    w.CreateJoint(pj);
+    s.lvInt[L16I_MP2DIR] = 1;
+    w.InitPrismaticJointDef(pj, s.lvBody[L16_JUMP], w.groundBody, w.bodies[s.lvBody[L16_JUMP]].sweep.c, Vec2(0, 1));
+    pj.lowerTranslation = 0;
+    pj.upperTranslation = 1;
+    pj.enableLimit = true;
+    pj.maxMotorForce = 0;
+    pj.motorSpeed = 200;
+    pj.enableMotor = true;
+    s.lvInt[L16I_JUMPJOINT] = w.CreateJoint(pj);
+    JointDef rj;
+    w.InitRevoluteJointDef(rj, s.lvBody[L16_AXE], w.groundBody, Vec2(2767 / PHYS_SCALE, -60 / PHYS_SCALE));
+    w.CreateJoint(rj);
+    s.lvInt[L16I_BALL1DIR] = 1;   // private var killRollBall1Direction:int = 1
+    s.lvInt[L16I_BALL2DIR] = -1;  // private var killRollBall2Direction:int = -1
+}
+static void L16_Switches(Sim& s) {  // unguarded hit tests (alive or dead ball)
+    if (SwitchHit(s, "wrongWay")) {
+        s.lastCheckNum = 0;
+        s.staticFlag[2] = true;  // Level_16.isStrelka
+    }
+    static const char* blue[3] = {"blueCheck1", "blueCheck2", "blueCheck3"};
+    for (int k = 0; k < 3; ++k)
+        if (s.switchFrame[k] == 1 && SwitchHit(s, blue[k])) {
+            s.switchFrame[k] = 2;
+            LevelDestroyBody(s, s.lvBody[L16_BLUEPLATE]);
+        }
+}
+static void L16_Update(Sim& s) {
+    World& w = s.world;
+    if ((s.spriteY[s.playerBody] > 1000 || PlayerTouches(s, s.lvBody[L16_BALL1]) || PlayerTouches(s, s.lvBody[L16_BALL2]) ||
+         PlayerTouches(s, s.lvBody[L16_AXE])) && s.playerAlive)
+        s.PlayerDie();
+    if (SwitchHit(s, "wrongWay")) {
+        s.lastCheckNum = 0;
+        s.staticFlag[2] = true;
+    }
+    const int32_t m1 = s.lvBody[L16_MP1], m2 = s.lvBody[L16_MP2];
+    if (s.spriteX[m1] < 457) s.lvInt[L16I_MP1DIR] = 1;
+    if (s.spriteX[m1] > 787) s.lvInt[L16I_MP1DIR] = -1;
+    w.SetLinearVelocity(m1, Vec2(3 * s.lvInt[L16I_MP1DIR], 0));
+    if (s.spriteX[m2] < 999) s.lvInt[L16I_MP2DIR] = 1;
+    if (s.spriteX[m2] > 1350) s.lvInt[L16I_MP2DIR] = -1;
+    w.SetLinearVelocity(m2, Vec2(3 * s.lvInt[L16I_MP2DIR], 0));
+    w.SetMaxMotorForce(s.lvInt[L16I_JUMPJOINT], PlayerTouches(s, s.lvBody[L16_JUMP]) ? 250 : 0);
+    static const char* blue[3] = {"blueCheck1", "blueCheck2", "blueCheck3"};
+    for (int k = 0; k < 3; ++k)
+        if (s.switchFrame[k] == 1 && SwitchHit(s, blue[k])) {
+            s.switchFrame[k] = 2;
+            LevelDestroyBody(s, s.lvBody[L16_BLUEPLATE]);
+        }
+    if (PlayerTouches(s, s.lvBody[L16_DROP])) s.lvBody[L16_DROP] = RecreateBody(s, s.lvBody[L16_DROP], "dropPlatform", 3 * DEFAULT_DENSITY, kL16_dropPlatform);
+    const int32_t b1 = s.lvBody[L16_BALL1], b2 = s.lvBody[L16_BALL2];
+    if (s.spriteX[b1] < 1450) s.lvInt[L16I_BALL1DIR] = 1;
+    if (s.spriteX[b1] > 1750) s.lvInt[L16I_BALL1DIR] = -1;
+    w.SetAngularVelocity(b1, 5 * s.lvInt[L16I_BALL1DIR]);
+    if (s.spriteX[b2] < 2120) s.lvInt[L16I_BALL2DIR] = 1;
+    if (s.spriteX[b2] > 2495) s.lvInt[L16I_BALL2DIR] = -1;
+    w.SetAngularVelocity(b2, 5 * s.lvInt[L16I_BALL2DIR]);
+}
+
+// Level_9.as: three-bar crank (motorised revolute -> two revolute links -> boom with a prismatic guide), a ten-plank
+// bridge pinned at both ends, a patrolling green platform removed by any of three green switches, a kill roll ball and three
+// pendulum jump balls on distance joints. Field initialisers: greenPlatformBodyDirection = 1, killRollBallDirection = 1.
+// Three joint defs are reused exactly as in the AS3 (the crank def keeps motorSpeed/maxMotorTorque after
+// enableMotor = false, which is harmless because the motor is off).
+enum { L9_GREEN = 0, L9_BOOM = 1, L9_ROLL = 2 };
+enum { L9I_GREENDIR = 0, L9I_ROLLDIR = 1 };
+static void L9_Construct(Sim& s) {
+    World& w = s.world;
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    const int32_t crank1 = s.CreateBody("firstCrank", "Polygon", D, F, R, kL9_firstCrank);
+    const int32_t crank2 = s.CreateBody("secondCrank", "Polygon", D, F, R, kL9_secondCrank);
+    const int32_t boom = s.lvBody[L9_BOOM] = s.CreateBody("boomCrank", "Polygon", D, F, R, kL9_boomCrank);
+    s.CreateBody("firstBigPlatform", "Polygon", 0, F, R, kL9_firstBigPlatform);
+    const int32_t green = s.lvBody[L9_GREEN] = s.CreateBody("greenPlatform", "Polygon", D, F, R, kL9_greenPlatform);
+    const int32_t low = s.CreateBody("lowPlatform", "Polygon", 0, F, R, kL9_lowPlatform);
+    const int32_t low2 = s.CreateBody("low2Platform", "Polygon", 0, F, R, kL9_low2Platform);
+    s.CreateBody("upPlatform", "Polygon", 0, F, R, kL9_upPlatform);
+    s.CreateBody("middlePlatform", "Polygon", 0, F, R, kL9_middlePlatform);
+    s.CreateBody("finishPlatform", "Polygon", 0, F, R, kL9_finishPlatform);
+    const PolyList* bridgePolys[10] = {&kL9_bridgeElement1, &kL9_bridgeElement2, &kL9_bridgeElement3, &kL9_bridgeElement4,
+                                       &kL9_bridgeElement5, &kL9_bridgeElement6, &kL9_bridgeElement7, &kL9_bridgeElement8,
+                                       &kL9_bridgeElement9, &kL9_bridgeElement10};
+    int32_t bridge[10];
+    for (int k = 0; k < 10; ++k) {
+        char name[24];
+        std::snprintf(name, sizeof name, "bridgeElement%d", k + 1);
+        bridge[k] = s.CreateBody(name, "Polygon", D, F, R, *bridgePolys[k]);
+    }
+    s.lvBody[L9_ROLL] = s.CreateCircleBody("killRollBall", D, F, R, 50);
+    const int32_t jb1 = s.CreateCircleBody("jumpBall1", D, F, R, 75);
+    const int32_t jb2 = s.CreateCircleBody("jumpBall2", D, F, R, 75);
+    const int32_t jb3 = s.CreateCircleBody("jumpBall3", D, F, R, 75);
+    JointDef dj, rj, pj;
+    w.InitPrismaticJointDef(pj, green, w.groundBody, w.bodies[green].sweep.c, Vec2(1, 0));
+    w.CreateJoint(pj);
+    w.InitRevoluteJointDef(rj, low, bridge[0], w.bodies[bridge[0]].xf.position);
+    w.CreateJoint(rj);
+    for (int k = 0; k < 9; ++k) {
+        w.InitRevoluteJointDef(rj, bridge[k], bridge[k + 1], w.bodies[bridge[k + 1]].xf.position);
+        w.CreateJoint(rj);
+    }
+    const Vec2 b10 = w.bodies[bridge[9]].xf.position;
+    w.InitRevoluteJointDef(rj, bridge[9], low2, Vec2(b10.x + 50 / PHYS_SCALE, b10.y));
+    w.CreateJoint(rj);
+    w.InitRevoluteJointDef(rj, crank1, w.groundBody, w.bodies[crank1].xf.position);
+    rj.motorSpeed = 1.8 * AS3_PI;
+    rj.maxMotorTorque = 5000;
+    rj.enableMotor = true;
+    w.CreateJoint(rj);
+    rj.enableMotor = false;
+    w.InitRevoluteJointDef(rj, crank2, crank1, w.bodies[crank2].xf.position);
+    w.CreateJoint(rj);
+    w.InitRevoluteJointDef(rj, boom, crank2, w.bodies[boom].xf.position);
+    w.CreateJoint(rj);
+    w.InitPrismaticJointDef(pj, boom, w.groundBody, w.bodies[boom].sweep.c, Vec2(1, 0));
+    w.CreateJoint(pj);
+    w.InitDistanceJointDef(dj, jb1, w.groundBody, Vec2(2236 / PHYS_SCALE, 63 / PHYS_SCALE), Vec2(2172 / PHYS_SCALE, -56 / PHYS_SCALE));
+    w.CreateJoint(dj);
+    w.InitDistanceJointDef(dj, jb2, w.groundBody, Vec2(2370 / PHYS_SCALE, 63 / PHYS_SCALE), Vec2(2435 / PHYS_SCALE, -56 / PHYS_SCALE));
+    w.CreateJoint(dj);
+    w.InitDistanceJointDef(dj, jb3, w.groundBody, Vec2(2761 / PHYS_SCALE, 63 / PHYS_SCALE), Vec2(2698 / PHYS_SCALE, -56 / PHYS_SCALE));
+    w.CreateJoint(dj);
+    s.lvInt[L9I_GREENDIR] = 1;  // private var greenPlatformBodyDirection:int = 1
+    s.lvInt[L9I_ROLLDIR] = 1;   // private var killRollBallDirection:int = 1
+}
+static void L9_Switches(Sim& s) {  // greenCheck1..3: each destroys the same platform (2nd/3rd are no-ops)
+    static const char* green[3] = {"greenCheck1", "greenCheck2", "greenCheck3"};
+    for (int k = 0; k < 3; ++k)
+        if (s.switchFrame[k] == 1 && SwitchHit(s, green[k])) {
+            s.switchFrame[k] = 2;
+            LevelDestroyBody(s, s.lvBody[L9_GREEN]);
+        }
+}
+static void L9_Update(Sim& s) {
+    World& w = s.world;
+    if ((s.spriteY[s.playerBody] > 530 || PlayerTouches(s, s.lvBody[L9_ROLL]) || PlayerTouches(s, s.lvBody[L9_BOOM])) && s.playerAlive)
+        s.PlayerDie();
+    const int32_t g = s.lvBody[L9_GREEN];
+    if (s.spriteX[g] < 55) s.lvInt[L9I_GREENDIR] = 1;
+    if (s.spriteX[g] > 387) s.lvInt[L9I_GREENDIR] = -1;
+    w.SetLinearVelocity(g, Vec2(2 * s.lvInt[L9I_GREENDIR], 0));
+    L9_Switches(s);
+    const int32_t r = s.lvBody[L9_ROLL];
+    if (s.spriteX[r] < 740) s.lvInt[L9I_ROLLDIR] = 1;
+    if (s.spriteX[r] > 1200) s.lvInt[L9I_ROLLDIR] = -1;
+    w.SetAngularVelocity(r, 5 * s.lvInt[L9I_ROLLDIR]);
+}
+
+// Level_10.as: three jump platforms (prismatic limit + motor, 150 while touched), three motorised cubes, a round kill
+// block spinning about a point away from its body, a heavy half-density ball; afterJump is a rotated static body.
+enum { L10_JP1 = 0, L10_JP2 = 1, L10_JP3 = 2, L10_BLOCK = 3 };
+enum { L10I_J1 = 0, L10I_J2 = 1, L10I_J3 = 2 };
+static void L10_Construct(Sim& s) {
+    World& w = s.world;
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    s.CreateBody("firstPlatform", "Polygon", 0, F, R, kL10_firstPlatform);
+    s.CreateBody("barierPlatform", "Polygon", 0, F, R, kL10_barierPlatform);
+    s.CreateBody("firstBarier", "Polygon", 0, F, R, kL10_firstBarier);
+    s.CreateBody("secondBarier", "Polygon", 0, F, R, kL10_secondBarier);
+    s.CreateBody("thirdBarier", "Polygon", 0, F, R, kL10_thirdBarier);
+    s.CreateBody("forthBarier", "Polygon", 0, F, R, kL10_forthBarier);
+    s.lvBody[L10_JP1] = s.CreateBody("jumpPlatform1", "Polygon", D, F, R, kL10_jumpPlatform1);
+    s.lvBody[L10_JP2] = s.CreateBody("jumpPlatform2", "Polygon", D, F, R, kL10_jumpPlatform2);
+    s.lvBody[L10_JP3] = s.CreateBody("jumpPlatform3", "Polygon", D, F, R, kL10_jumpPlatform3);
+    s.CreateBody("afterJump", "Polygon", 0, F, R, kL10_afterJump);
+    const int32_t c1 = s.CreateBody("cube1", "Polygon", D, F, R, kL10_cube1);
+    const int32_t c2 = s.CreateBody("cube2", "Polygon", D, F, R, kL10_cube2);
+    const int32_t c3 = s.CreateBody("cube3", "Polygon", D, F, R, kL10_cube3);
+    s.CreateBody("mainRampa", "Polygon", 0, F, R, kL10_mainRampa);
+    s.CreateCircleBody("goBall", D / 2, F, R, 80);
+    s.lvBody[L10_BLOCK] = s.CreateBody("roundBlock", "Polygon", D, F, R, kL10_roundBlock);
+    JointDef pj, rj;
+    for (int k = 0; k < 3; ++k) {
+        const int32_t jb = s.lvBody[L10_JP1 + k];
+        w.InitPrismaticJointDef(pj, jb, w.groundBody, w.bodies[jb].sweep.c, Vec2(0, 1));
+        pj.lowerTranslation = 0;
+        pj.upperTranslation = 1;
+        pj.enableLimit = true;
+        pj.maxMotorForce = 0;
+        pj.motorSpeed = 200;
+        pj.enableMotor = true;
+        s.lvInt[L10I_J1 + k] = w.CreateJoint(pj);
+    }
+    w.InitRevoluteJointDef(rj, c1, w.groundBody, w.bodies[c1].xf.position);
+    rj.motorSpeed = 0.3 * AS3_PI;
+    rj.maxMotorTorque = 5000;
+    rj.enableMotor = true;
+    w.CreateJoint(rj);
+    w.InitRevoluteJointDef(rj, c2, w.groundBody, w.bodies[c2].xf.position);
+    rj.motorSpeed = -0.3 * AS3_PI;
+    rj.maxMotorTorque = 5000;
+    rj.enableMotor = true;
+    w.CreateJoint(rj);
+    w.InitRevoluteJointDef(rj, c3, w.groundBody, w.bodies[c3].xf.position);
+    rj.motorSpeed = 0.3 * AS3_PI;
+    rj.maxMotorTorque = 5000;
+    rj.enableMotor = true;
+    w.CreateJoint(rj);
+    w.InitRevoluteJointDef(rj, s.lvBody[L10_BLOCK], w.groundBody, Vec2(-675 / PHYS_SCALE, -152 / PHYS_SCALE));
+    rj.motorSpeed = -0.9 * AS3_PI;
+    rj.maxMotorTorque = 5000;
+    rj.enableMotor = true;
+    w.CreateJoint(rj);
+}
+static void L10_Update(Sim& s) {
+    World& w = s.world;
+    if ((s.spriteY[s.playerBody] > 500 || PlayerTouches(s, s.lvBody[L10_BLOCK])) && s.playerAlive) s.PlayerDie();
+    for (int k = 0; k < 3; ++k)
+        w.SetMaxMotorForce(s.lvInt[L10I_J1 + k], PlayerTouches(s, s.lvBody[L10_JP1 + k]) ? 150 : 0);
+}
+
+// Level_17.as: the crown is two static bodies (kingCrown1 carries the star's revolute joint), a jump platform (motor force
+// 150 while touched), a spinning star, a static kill triangle and two patrolling platforms.
+// Quirk reproduced: the constructor sets movePlatform1BodyDirection twice (1, then -1 after movePlatform2's joint) and
+// never initialises movePlatform2BodyDirection, so platform 2 starts with direction 0: SetLinearVelocity(0, 0) each
+// frame, gravity sinks it along its axis a little each frame, until its y passes 430 and it turns (y starts at 430).
+enum { L17_JUMP = 0, L17_KILL = 1, L17_STAR = 2, L17_MP1 = 3, L17_MP2 = 4 };
+enum { L17I_MP1DIR = 0, L17I_MP2DIR = 1, L17I_JUMPJOINT = 2 };
+static void L17_Construct(Sim& s) {
+    World& w = s.world;
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    const int32_t crown1 = s.CreateBody("kingCrown1", "Polygon", 0, F, R, kL17_kingCrown1);
+    s.CreateBody("kingCrown2", "Polygon", 0, F, R, kL17_kingCrown2);
+    s.lvBody[L17_JUMP] = s.CreateBody("jumpPlatform1", "Polygon", D, F, R, kL17_jumpPlatform1);
+    s.lvBody[L17_KILL] = s.CreateBody("killStarPart", "Polygon", 0, F, R, kL17_killStarPart);
+    s.lvBody[L17_STAR] = s.CreateBody("star", "Polygon", D, F, R, kL17_star);
+    s.lvBody[L17_MP1] = s.CreateBody("movePlatform1", "Polygon", D, F, R, kL17_movePlatform1);
+    s.lvBody[L17_MP2] = s.CreateBody("movePlatform2", "Polygon", D, F, R, kL17_movePlatform2);
+    JointDef pj, rj;
+    w.InitPrismaticJointDef(pj, s.lvBody[L17_JUMP], w.groundBody, w.bodies[s.lvBody[L17_JUMP]].sweep.c, Vec2(0, 1));
+    pj.lowerTranslation = 0;
+    pj.upperTranslation = 1;
+    pj.enableLimit = true;
+    pj.maxMotorForce = 0;
+    pj.motorSpeed = 200;
+    pj.enableMotor = true;
+    s.lvInt[L17I_JUMPJOINT] = w.CreateJoint(pj);
+    w.InitPrismaticJointDef(pj, s.lvBody[L17_MP1], w.groundBody, w.bodies[s.lvBody[L17_MP1]].sweep.c, Vec2(1, 0));
+    pj.enableLimit = false;
+    pj.enableMotor = false;
+    w.CreateJoint(pj);
+    s.lvInt[L17I_MP1DIR] = 1;
+    w.InitPrismaticJointDef(pj, s.lvBody[L17_MP2], w.groundBody, w.bodies[s.lvBody[L17_MP2]].sweep.c, Vec2(0, 1));
+    pj.enableLimit = false;
+    pj.enableMotor = false;
+    w.CreateJoint(pj);
+    s.lvInt[L17I_MP1DIR] = -1;  // sic: movePlatform1BodyDirection again; movePlatform2BodyDirection stays 0
+    s.lvInt[L17I_MP2DIR] = 0;
+    w.InitRevoluteJointDef(rj, s.lvBody[L17_STAR], crown1, w.bodies[s.lvBody[L17_STAR]].xf.position);
+    w.CreateJoint(rj);
+}
+static void L17_Update(Sim& s) {
+    World& w = s.world;
+    if ((s.spriteY[s.playerBody] > 960 || PlayerTouches(s, s.lvBody[L17_KILL])) && s.playerAlive) s.PlayerDie();
+    w.SetMaxMotorForce(s.lvInt[L17I_JUMPJOINT], PlayerTouches(s, s.lvBody[L17_JUMP]) ? 150 : 0);
+    w.SetAngularVelocity(s.lvBody[L17_STAR], -1);
+    const int32_t m1 = s.lvBody[L17_MP1], m2 = s.lvBody[L17_MP2];
+    if (s.spriteX[m1] < 903) s.lvInt[L17I_MP1DIR] = 1;
+    if (s.spriteX[m1] > 1123) s.lvInt[L17I_MP1DIR] = -1;
+    w.SetLinearVelocity(m1, Vec2(3 * s.lvInt[L17I_MP1DIR], 0));
+    if (s.spriteY[m2] < 272) s.lvInt[L17I_MP2DIR] = 1;
+    if (s.spriteY[m2] > 430) s.lvInt[L17I_MP2DIR] = -1;
+    w.SetLinearVelocity(m2, Vec2(0, 3 * s.lvInt[L17I_MP2DIR]));
+}
+
+// Level_15.as: a patrolling platform (prismatic, y), a skateboard on two wheel joints, the loose plank "luk" (only
+// built when lastCheckNum == 0), a red switch that destroys the gate and rebuilds it as a dynamic door hinged on
+// shopLeftSide (spinning at 3 rad/s), and killLine: a thin MovieClip that sweeps left by 4 px per frame (reset to 387 below
+// x = 73) and kills on hitTestObject. killLine.x is kept in twips in lvInt; its box is the display_data.h box moved with it.
+enum { L15_MP = 0, L15_GATE = 1, L15_SHOPLEFT = 2 };
+enum { L15I_MPDIR = 0, L15I_KILLX = 1 };
+static void L15_Construct(Sim& s) {
+    World& w = s.world;
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    s.CreateBody("rampa2", "Polygon", 0, F, R, kL15_rampa2);
+    s.lvBody[L15_SHOPLEFT] = s.CreateBody("shopLeftSide", "Polygon", 0, F, R, kL15_shopLeftSide);
+    s.CreateBody("shopRightSide", "Polygon", 0, F, R, kL15_shopRightSide);
+    s.CreateBody("step1", "Polygon", 0, F, R, kL15_step1);
+    s.CreateBody("step2", "Polygon", 0, F, R, kL15_step2);
+    s.CreateBody("step3", "Polygon", 0, F, R, kL15_step3);
+    s.lvBody[L15_GATE] = s.CreateBody("redGate", "Polygon", 0, F, R, kL15_redGate);
+    s.CreateBody("finishPlat", "Polygon", 0, F, R, kL15_finishPlat);
+    s.CreateBody("barier", "Polygon", 0, F, R, kL15_barier);
+    s.lvBody[L15_MP] = s.CreateBody("movePlatform", "Polygon", D, F, R, kL15_movePlatform);
+    s.CreateBody("underShop", "Polygon", 0, F, R, kL15_underShop);
+    if (s.lastCheckNum == 0) s.CreateBody("luk", "Polygon", D / 3, F / 3, R, kL15_luk);
+    const int32_t board = s.CreateBody("skateBoard1", "Polygon", D, F, R, kL15_skateBoard1);
+    const int32_t wh1 = s.CreateCircleBody("skateWheel11", D, F, R, 6);
+    const int32_t wh2 = s.CreateCircleBody("skateWheel12", D, F, R, 6);
+    JointDef pj, rj;
+    w.InitPrismaticJointDef(pj, s.lvBody[L15_MP], w.groundBody, w.bodies[s.lvBody[L15_MP]].sweep.c, Vec2(0, 1));
+    w.CreateJoint(pj);
+    s.lvInt[L15I_MPDIR] = 1;
+    const Vec2 p1 = w.bodies[wh1].xf.position, p2 = w.bodies[wh2].xf.position;
+    w.InitRevoluteJointDef(rj, board, wh1, Vec2(p1.x + 3 / PHYS_SCALE, p1.y + 3 / PHYS_SCALE));
+    w.CreateJoint(rj);
+    w.InitRevoluteJointDef(rj, board, wh2, Vec2(p2.x + 3 / PHYS_SCALE, p2.y + 3 / PHYS_SCALE));
+    w.CreateJoint(rj);
+    s.lvInt[L15I_KILLX] = s.tpl->Place("killLine").tx;  // twips
+}
+static bool L15_KillLineHit(Sim& s) {
+    DisplayObj o = *s.tpl->Display("killLine");
+    const double dx = s.lvInt[L15I_KILLX] - s.tpl->Place("killLine").tx;
+    o.x0 += dx;
+    o.x1 += dx;
+    return s.BallHitsTarget(o);
+}
+static void L15_Switches(Sim& s) {
+    if (s.switchFrame[0] == 1 && SwitchHit(s, "redCheck")) {
+        s.switchFrame[0] = 2;
+        World& w = s.world;
+        s.lvBody[L15_GATE] = RecreateBody(s, s.lvBody[L15_GATE], "redGate", DEFAULT_DENSITY, kL15_redGate);
+        JointDef rj;
+        w.InitRevoluteJointDef(rj, s.lvBody[L15_SHOPLEFT], s.lvBody[L15_GATE], w.bodies[s.lvBody[L15_GATE]].xf.position);
+        w.CreateJoint(rj);
+        w.SetAngularVelocity(s.lvBody[L15_GATE], 3);
+    }
+}
+static void L15_Update(Sim& s) {
+    World& w = s.world;
+    if (s.playerAlive && (s.spriteY[s.playerBody] > 860 || L15_KillLineHit(s))) s.PlayerDie();
+    L15_Switches(s);
+    const int32_t mp = s.lvBody[L15_MP];
+    if (s.spriteY[mp] < 211) s.lvInt[L15I_MPDIR] = 1;
+    if (s.spriteY[mp] > 368) s.lvInt[L15I_MPDIR] = -1;
+    w.SetLinearVelocity(mp, Vec2(0, 3 * s.lvInt[L15I_MPDIR]));
+    if (s.lvInt[L15I_KILLX] < 73 * 20)
+        s.lvInt[L15I_KILLX] = 387 * 20;
+    else
+        s.lvInt[L15I_KILLX] -= 4 * 20;
+    // money: hitTestObject only starts a scale tween (display only)
+}
+
+// Level_11.as: a train (heavy body, two motorised wheels, eleven wagons chained by distance joints, each on two free wheels),
+// rotating and spinning kill bodies, loose kill logs, and levelAim as a DYNAMIC body: the goal flag can be pushed and its hit
+// box follows the sprite (Sim::aimBody). killStarBody[3..5] in Level_11.Update read past the 3-element array
+// (undefined, never in the contact list): harmless, not modelled.
+enum { L11_KILLCEIL = 0, L11_KILLROTATE = 1, L11_STAR0 = 2, L11_BREVNO0 = 5 };
+static void L11_Construct(Sim& s) {
+    World& w = s.world;
+    const double F = DEFAULT_FRICTION, R = DEFAULT_RESTITUTION, D = DEFAULT_DENSITY;
+    s.aimBody = s.CreateBody("levelAim", "Polygon", D, F, R, kL11_levelAim);
+    const int32_t train = s.CreateBody("train", "Polygon", 5 * D, F, R, kL11_train);
+    const int32_t kt1 = s.CreateCircleBody("kolesoTrain1", D, F, R, 8);
+    const int32_t kt2 = s.CreateCircleBody("kolesoTrain2", D, F, R, 8);
+    int32_t vagon[11], koleso[11][2];
+    for (int i = 1; i <= 11; ++i) {
+        char name[24];
+        std::snprintf(name, sizeof name, "vagon%d", i);
+        const bool simple = i == 3 || i == 4 || i == 5 || i == 9;
+        vagon[i - 1] = s.CreateBody(name, "Polygon", D, F, R, simple ? kL11_vagon_1 : kL11_vagon_2);
+        std::snprintf(name, sizeof name, "koleso_%d_1", i);
+        koleso[i - 1][0] = s.CreateCircleBody(name, D, F, R, 8);
+        std::snprintf(name, sizeof name, "koleso_%d_2", i);
+        koleso[i - 1][1] = s.CreateCircleBody(name, D, F, R, 8);
+    }
+    s.CreateBody("platform", "Polygon", 0, F, R, kL11_platform);
+    s.CreateBody("ceil1", "Polygon", 0, F, R, kL11_ceil1);
+    s.lvBody[L11_KILLCEIL] = s.CreateBody("killCeil1", "Polygon", 0, F, R, kL11_killCeil1);
+    s.CreateBody("ceil2_1", "Polygon", 0, F, R, kL11_ceil2_1);
+    s.CreateBody("ceil2_2", "Polygon", 0, F, R, kL11_ceil2_2);
+    const int32_t rot = s.lvBody[L11_KILLROTATE] = s.CreateBody("killRotate", "Polygon", D, F, R, kL11_killRotate);
+    for (int k = 0; k < 3; ++k) {
+        char name[24];
+        std::snprintf(name, sizeof name, "killStar%d", k);
+        s.lvBody[L11_STAR0 + k] = s.CreateCircleBody(name, D, F, R, 40);
+    }
+    for (int k = 0; k < 4; ++k) {
+        char name[24];
+        std::snprintf(name, sizeof name, "killBrevno%d", k);
+        s.lvBody[L11_BREVNO0 + k] = s.CreateBody(name, "Polygon", D, F, R, kL11_killBrevno_1);
+    }
+    s.CreateBody("triangle", "Polygon", 0, F, R, kL11_triangle);
+    s.CreateBody("upCeil", "Polygon", 0, F, R, kL11_upCeil);
+    JointDef dj, rj;
+    w.InitRevoluteJointDef(rj, rot, w.groundBody, w.bodies[rot].xf.position);
+    rj.motorSpeed = -AS3_PI;
+    rj.maxMotorTorque = 5000;
+    rj.enableMotor = true;
+    w.CreateJoint(rj);
+    for (int k = 0; k < 3; ++k) {
+        const int32_t st = s.lvBody[L11_STAR0 + k];
+        const Vec2 p = w.bodies[st].xf.position;
+        w.InitRevoluteJointDef(rj, st, w.groundBody, Vec2(p.x + 20 / PHYS_SCALE, p.y + 20 / PHYS_SCALE));
+        rj.motorSpeed = -5 * AS3_PI;
+        rj.maxMotorTorque = 5000;
+        rj.enableMotor = true;
+        w.CreateJoint(rj);
+    }
+    for (const int32_t kt : {kt1, kt2}) {
+        const Vec2 p = w.bodies[kt].xf.position;
+        w.InitRevoluteJointDef(rj, train, kt, Vec2(p.x + 4 / PHYS_SCALE, p.y + 4 / PHYS_SCALE));
+        rj.motorSpeed = 7 * AS3_PI;
+        rj.maxMotorTorque = 5000;
+        rj.enableMotor = true;
+        w.CreateJoint(rj);
+    }
+    rj.enableMotor = false;
+    for (int i = 0; i < 11; ++i)
+        for (int j = 0; j < 2; ++j) {
+            const Vec2 p = w.bodies[koleso[i][j]].xf.position;
+            w.InitRevoluteJointDef(rj, vagon[i], koleso[i][j], Vec2(p.x + 4 / PHYS_SCALE, p.y + 4 / PHYS_SCALE));
+            w.CreateJoint(rj);
+        }
+    w.InitDistanceJointDef(dj, train, vagon[0], w.bodies[train].xf.position, w.bodies[vagon[0]].xf.position);
+    w.CreateJoint(dj);
+    for (int i = 0; i < 10; ++i) {
+        const Vec2 p = w.bodies[vagon[i]].xf.position;
+        w.InitDistanceJointDef(dj, vagon[i], vagon[i + 1], Vec2(p.x - 75 / PHYS_SCALE, p.y), w.bodies[vagon[i + 1]].xf.position);
+        w.CreateJoint(dj);
+    }
+}
+static void L11_Update(Sim& s) {
+    if (!s.playerAlive) return;
+    bool kill = s.spriteY[s.playerBody] > 500 || PlayerTouches(s, s.lvBody[L11_KILLCEIL]) || PlayerTouches(s, s.lvBody[L11_KILLROTATE]);
+    for (int k = 0; k < 3 && !kill; ++k) kill = PlayerTouches(s, s.lvBody[L11_STAR0 + k]);
+    for (int k = 0; k < 4 && !kill; ++k) kill = PlayerTouches(s, s.lvBody[L11_BREVNO0 + k]);
+    if (kill) s.PlayerDie();
+}
+
 static void NotImplemented(Sim&) { fatal("level not implemented yet"); }
 
 // switchFrame[i] -> clip, per level (order used by the level scripts)
@@ -989,9 +1548,13 @@ static const char* SwitchClip(int32_t level, int32_t i) {
     static const char* l5[] = {"blueCheck", "greenCheck"};
     static const char* l7[] = {"redCheck", "blueCheck"};
     static const char* l14[] = {"blueCheck"};
+    static const char* l13[] = {"greenCheck"};
+    static const char* l15[] = {"redCheck"};
     if (level == 5 && i < 2) return l5[i];
     if (level == 7 && i < 2) return l7[i];
     if (level == 14 && i < 1) return l14[i];
+    if (level == 13 && i < 1) return l13[i];
+    if (level == 15 && i < 1) return l15[i];
     return nullptr;
 }
 int32_t Sim::LoggedFlags() const {
@@ -1008,6 +1571,20 @@ int32_t Sim::LoggedFlags() const {
     return f;
 }
 
+bool LevelVerified(int32_t id) {
+    static const int32_t verified[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17};
+    for (int32_t v : verified)
+        if (v == id) return true;
+    return false;
+}
+void WarnIfUnverified(int32_t id) {
+    if (LevelVerified(id)) return;
+    std::fprintf(stderr,
+                 "warning: level %d is scripted from the AS3 but NOT verified against Flash logs yet; positions, spikes,\n"
+                 "         switches and rotated bodies may differ from the game (README: Level status).\n",
+                 id);
+}
+
 const LevelScript& GetLevelScript(int32_t id) {
     static const LevelScript scripts[] = {
         {1, L1_Construct, L1_Update, true},
@@ -1020,6 +1597,13 @@ const LevelScript& GetLevelScript(int32_t id) {
         {12, L12_Construct, L12_Update, true},
         {14, L14_Construct, L14_Update, true, L14_Switches},
         {8, L8_Construct, L8_Update, true},
+        {9, L9_Construct, L9_Update, true, L9_Switches},
+        {10, L10_Construct, L10_Update, true},
+        {11, L11_Construct, L11_Update, true},
+        {13, L13_Construct, L13_Update, true, L13_Switches},
+        {15, L15_Construct, L15_Update, true, L15_Switches},
+        {17, L17_Construct, L17_Update, true},
+        {16, L16_Construct, L16_Update, true, L16_Switches},
     };
     for (const LevelScript& ls : scripts)
         if (ls.id == id) return ls;
@@ -1049,6 +1633,7 @@ void Sim::Restart() {
         spriteX[i] = spriteY[i] = spriteRot[i] = spriteRotW[i] = 0;
     }
     for (int32_t i = 0; i < LV_VARS; ++i) lvBody[i] = lvInt[i] = 0;
+    aimBody = -1;
 
     // --- Level() constructor
     AABB worldAABB;
@@ -1238,6 +1823,11 @@ bool Sim::BallHitsTarget(const DisplayObj& o) {
     const Rect r{o.x0 + ox, o.y0 + oy, o.x1 + ox, o.y1 + oy};
     const bool lo = RectsHit(BallBounds(sx, sy, rw, -1), r), hi = RectsHit(BallBounds(sx, sy, rw, +1), r);
     if (lo != hi) ++displayUncertain;
+    if (!o.exact) {  // rotated/scaled target: display_data.h holds an unrounded box (not calibrated, E10)
+        const Rect in{r.x0 + 1, r.y0 + 1, r.x1 - 1, r.y1 - 1}, out{r.x0 - 1, r.y0 - 1, r.x1 + 1, r.y1 + 1};
+        const Rect b = BallBounds(sx, sy, rw, 0);
+        if (RectsHit(b, in) != RectsHit(b, out)) ++displayUncertain;
+    }
     return RectsHit(BallBounds(sx, sy, rw, 0), r);
 }
 
@@ -1249,16 +1839,59 @@ double Sim::TargetOverlap(const DisplayObj& o) const {
     return std::fmin(wx, wy);
 }
 
+// levelAim's hit box. A static clip: the box of display_data.h. Level 11: the clip is the sprite of a dynamic body,
+// so its box follows the sprite (x/y twip-quantised, rotation via FlashRotationMatrix). Flash's getBounds of a turned
+// sprite transforms EACH CHILD's box separately and unions the results (not the rotated union box): the levelAim
+// symbol (68) holds the pole (shape 65) and the flag cloth (morph 64 at ratio 0, startBounds). Fitted on the Level 11
+// logs: 11 near-contact frames with the flag turned -4.3..49 degrees, all agree; the rotated-union model got 10 wrong.
+// Corner rounding (16.16 product -> twips) is round-to-nearest: the E12 sweep (rb1_calib_L11.tsv, 148,074 decisions with
+// the flag turned to 8 angles) agrees on all of them, including 1,113 where floor or truncation would differ.
+static const int64_t kAimChildren[2][4] = {{-20, -184, 106, 626}, {78, 71, 282, 255}};  // twips, clip space
+static int64_t AimRound(int64_t v, int mode) {
+    if (mode == 0) return (v + 32768) >> 16;
+    if (mode == 1) return v >> 16;
+    return v >= 0 ? v >> 16 : -((-v) >> 16);
+}
+static DisplayObj AimBox(const DisplayObj& base, int64_t tx, int64_t ty, const FlashMatrix& m, int mode) {
+    DisplayObj o = base;
+    bool first = true;
+    for (const auto& r : kAimChildren) {
+        const int64_t px[4] = {r[0], r[2], r[0], r[2]}, py[4] = {r[1], r[1], r[3], r[3]};
+        for (int i = 0; i < 4; ++i) {
+            const double x = (double)(tx + AimRound((int64_t)m.a * px[i] - (int64_t)m.b * py[i], mode));
+            const double y = (double)(ty + AimRound((int64_t)m.b * px[i] + (int64_t)m.a * py[i], mode));
+            if (first) o.x0 = o.x1 = x, o.y0 = o.y1 = y, first = false;
+            o.x0 = std::fmin(o.x0, x), o.x1 = std::fmax(o.x1, x), o.y0 = std::fmin(o.y0, y), o.y1 = std::fmax(o.y1, y);
+        }
+    }
+    return o;
+}
+DisplayObj Sim::GoalTarget() {
+    DisplayObj o = *tpl->aim;
+    if (aimBody < 0) return o;
+    const RawPlacement& p = tpl->Place("levelAim");
+    if (p.a != 65536 || p.b != 0 || p.c != 0 || p.d != 65536) fatal("moving levelAim with a transformed placement");
+    if (o.x0 - p.tx != -20 || o.y0 - p.ty != -184 || o.x1 - p.tx != 282 || o.y1 - p.ty != 626)
+        fatal("levelAim symbol bounds differ from kAimChildren");
+    const int64_t tx = std::llround(spriteX[aimBody] * 20), ty = std::llround(spriteY[aimBody] * 20);
+    const FlashMatrix m = FlashRotationMatrix(spriteRotW[aimBody]);
+    o = AimBox(o, tx, ty, m, 0);
+    return o;
+}
+
 // Level.Update after the camera tween: levelAim test, spikes, checkpoints (in this order).
 void Sim::DisplayUpdate() {
-    if (tpl->aim && aimFrame == 1 && BallHitsTarget(*tpl->aim)) {  // no IsLive() guard
-        winMargin = TargetOverlap(*tpl->aim);
-        PlayerWin();
+    if (tpl->aim && aimFrame == 1) {  // no IsLive() guard
+        const DisplayObj goal = GoalTarget();
+        if (BallHitsTarget(goal)) {
+            winMargin = TargetOverlap(goal);
+            PlayerWin();
+        }
     }
     // Spikes: any Shipik/Ships10 hit by a control point kills a live ball (PlayerDie is guarded here).
     if (playerAlive) {
         for (int32_t i = 0; i < tpl->spikeCount; ++i) {
-            const SpikeResult r = BallHitsSpike(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], dpX, dpY, tpl->spikes[i]);
+            const SpikeResult r = BallHitsSpike(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], dpX, dpY, tpl->spikes[i], camX, camY);
             if (r.uncertain) ++displayUncertain;
             if (r.hit) {
                 PlayerDie();
@@ -1278,32 +1911,19 @@ void Sim::DisplayUpdate() {
     }
 }
 
-// Level.Update while the ball is dead (until R restarts the level). The world keeps stepping in Flash,
-// but only with the random debris and the level's machinery; nothing of it survives a restart, and the
-// ball's sprite is frozen (its body left the world). What matters is simulated: the camera tween toward
-// the frozen ball, and the goal/checkpoint tests with the dead-ball rule.
-void Sim::DeadUpdate() {
-    const double ox = camX, oy = camY;
-    if (!gless) CameraStep();
-    dpX = ox - camX;
-    dpY = oy - camY;
-    camTargetX = 1.0 * (-spriteX[playerBody] + 550.0 / 2);
-    camTargetY = 1.0 * (-spriteY[playerBody] + 400.0 / 2);
-    camTween = true;
-    DisplayUpdate();
-    if (gless) CameraStep();
-    if (GetLevelScript(tpl->id).deadUpdate) GetLevelScript(tpl->id).deadUpdate(*this);
-    ++deadTicks;
-}
-
 void Sim::Tick(uint8_t input) {
     if (isTimeStop) return;  // Game.tPause == 0 after PlayerWin: no more Level.Update calls
     // Game.UpdateHandler (playback): Left = v>=4, Up = v>=6||v==2||v==3, Right = v%2==1
     bool left = input >= 4;
     bool up = input >= 6 || input == 2 || input == 3;
     bool right = input % 2 == 1;
-    if (playerAlive) LevelUpdate(left, up, right);
-    else DeadUpdate();
+    // After a death Flash keeps calling the full Level.Update until R: the camera eases toward the frozen ball, the
+    // world steps (without the ball, whose body was destroyed; the random debris is not simulated), the level's
+    // machinery and Level_N.Update run, and the goal/checkpoint/switch tests use the dead-ball rule (death warp).
+    // The key handlers still feed the destroyed ball body (velocity/forces on a body outside the world: no effect).
+    const bool dead = !playerAlive;
+    LevelUpdate(left, up, right);
+    if (dead) ++deadTicks;
     if (!isTimeStop) ++frameCount;
 }
 

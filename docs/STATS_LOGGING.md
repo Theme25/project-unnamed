@@ -68,8 +68,10 @@ explain where each piece came from.
 
 **Header lines** (start of every exported file): `# inputs<TAB><RLE>` as now. The mod now
 defaults to mathspikes 1, so the following line is optional (without it `rbsim verify`
-assumes mathspikes 1, gless 0):
+assumes mathspikes 1 and detects gless per segment):
 `# config<TAB>mathspikes<TAB><CONFIG.MATHSPIKES><TAB>gless<TAB><int(Game.isGless)>` written at export
+(the current mod does not write it; `rbsim verify` then detects `isGless` per segment: with it on, `L.dp` is
+always 0 while the camera moves. `--gless 0|1` forces a value)
 time. `rbsim verify` uses `gless` for the run and refuses to compare spike decisions of a
 `mathspikes 0` run (Level 6 `L6_4` was recorded that way: Flash died on the first frame the
 *unshifted* triangle is touched, tick 167, while the standardized check would have shifted the
@@ -424,6 +426,29 @@ Here `name` is `m_userData.name`, and the six numbers are hex doubles of
 - Death debris (`playerDiePart*`) is ignored by `rbsim verify`, so it is fine
   if it appears.
 - `rbsim verify` compares these groups by name; the order doesn't matter.
+
+### 3.11 Turned/scaled spikes and the turned Level 11 flag (E11, E12)
+
+The last two display-layer pieces that are modelled but not calibrated (every logged decision matched,
+see README "Level status"):
+
+- **E11, turned/scaled spikes** (Levels 9, 10, 11, 15, 17). For every Shipik whose matrix relative to
+  the Level is not the identity (one per distinct matrix), log `E11s idx gx gy a b c d` (origin in Level
+  space, matrix), then place the ball on a 0.41 px grid over the spike's `getBounds(L)` plus 11.3 px, at
+  ball rotations 0 and 37.3, with the cover at (0,0), and log `E11 idx rot x y hit` where
+  `hit = pb.HitTestObjectControlPoints(spike)` (hex for numbers).
+- **E12, the turned flag** (Level 11). For 8 angles, set `levelAim.rotation`, log `E12b rot ax ay` + its
+  `getBounds(L)`, then place the ball (rotation 0) on a 0.43 px grid over those bounds plus 12.3 px and
+  log `E12 rot ax ay bx by hit` with `hit = pb.hitTestObject(levelAim)`.
+
+The AS3 is in `docs/mod_sweeps.as` (paste into Game.as, two calls added to `dbgLevelCalib`). Run the level
+calibration key on Levels 9, 10, 11, 15 and 17. `rbsim calib` checks every row (`E11`/`E12` lines in its
+output); expected sizes 1-9 MB per level.
+
+**Results (FP 11.4):** E12 148,074 / 148,074 (per-part box, round-to-nearest corners). E11 390,665 / 390,670
+after fitting: `globalToLocal` into a turned spike uses screen twips (camera included), a double inverse, the
+inverse translation and the result rounded to whole twips; the 5 others lie within 0.003 twip of a half-twip and
+are flagged by the sim as uncertain.
 
 ## 4. Where to hook in
 

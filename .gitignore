@@ -4,3 +4,7 @@ tools/trig_flip_search
 *.tsv
 __pycache__/
 rbsim.exe
+tools/deathcause
+rbview.exe
+rbview.ini
+viewer/*.res.o
