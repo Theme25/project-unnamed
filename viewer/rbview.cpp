@@ -925,6 +925,16 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_COMMAND: {
             const int id = LOWORD(wp), code = HIWORD(wp);
+            // Combo boxes and the events list send many notifications (focus, dropdown opened, ...). Only selection
+            // changes and close-ups are actions; moving focus on the others closes the dropdown as it opens.
+            const bool isCombo = id == ID_LEVEL || id == ID_CHECKPOINT || id == ID_SPEED;
+            if (isCombo && code == CBN_CLOSEUP) {
+                SetFocus(g_canvas);
+                return 0;
+            }
+            if (isCombo && code != CBN_SELCHANGE) return 0;
+            if (id == ID_EVENTS && code != LBN_SELCHANGE && code != LBN_DBLCLK) return 0;
+            if (id == ID_INPUTS) return DefWindowProcW(h, m, wp, lp);
             switch (id) {
                 case ID_LEVEL:
                     if (code == CBN_SELCHANGE) {
@@ -983,7 +993,9 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                 default:
                     return DefWindowProcW(h, m, wp, lp);
             }
-            if (id != ID_INPUTS) SetFocus(g_canvas);
+            // Keep focus on an open dropdown or the events list (arrow keys scroll them); buttons hand it back to the canvas.
+            const bool dropped = isCombo && SendMessageW((HWND)lp, CB_GETDROPPEDSTATE, 0, 0);
+            if (!dropped && id != ID_EVENTS) SetFocus(g_canvas);
             UpdateStatus();
             InvalidateRect(g_canvas, nullptr, FALSE);
             return 0;
