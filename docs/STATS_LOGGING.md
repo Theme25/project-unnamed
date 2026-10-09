@@ -68,8 +68,10 @@ explain where each piece came from.
 
 **Header lines** (start of every exported file): `# inputs<TAB><RLE>` as now. The mod now
 defaults to mathspikes 1, so the following line is optional (without it `rbsim verify`
-assumes mathspikes 1, gless 0):
+assumes mathspikes 1 and detects gless per segment):
 `# config<TAB>mathspikes<TAB><CONFIG.MATHSPIKES><TAB>gless<TAB><int(Game.isGless)>` written at export
+(the current mod does not write it; `rbsim verify` then detects `isGless` per segment: with it on, `L.dp` is
+always 0 while the camera moves. `--gless 0|1` forces a value)
 time. `rbsim verify` uses `gless` for the run and refuses to compare spike decisions of a
 `mathspikes 0` run (Level 6 `L6_4` was recorded that way: Flash died on the first frame the
 *unshifted* triangle is touched, tick 167, while the standardized check would have shifted the

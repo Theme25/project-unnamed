@@ -264,7 +264,8 @@ static const TimelineRotation kTimelineRotations[] = {
     {11, "koleso_11_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
     {11, "koleso_11_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
     {13, "kingStar1", 0xc02a43e200000000ULL, true},  // rb1_calib_L13.tsv E9a: -13.132583618164062
-    {16, "axe1", 0xc05201d69b7c0003ULL, false},  // provisional atan2 = -72.0287235938013
+    {16, "axe1", 0xc05201d1c0000000ULL, true},  // rb1_calib_L16.tsv E9a: -72.02842712402344
+    {16, "wrongWay", 0x4016187c00000000ULL, true},  // rb1_calib_L16.tsv E9a: 5.5239105224609375 (not a body; recorded for calib)
 };
 bool LookupTimelineRotation(int32_t level, const char* name, double& out, bool* measured) {
     for (const TimelineRotation& t : kTimelineRotations)
@@ -1584,7 +1585,7 @@ int32_t Sim::LoggedFlags() const {
 }
 
 bool LevelVerified(int32_t id) {
-    static const int32_t verified[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+    static const int32_t verified[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
     for (int32_t v : verified)
         if (v == id) return true;
     return false;

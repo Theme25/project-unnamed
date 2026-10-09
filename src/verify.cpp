@@ -182,13 +182,15 @@ bool CompareExtraBodies(const Sim& sim, const std::vector<std::string>& f, std::
 
 int CmdVerify(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: rbsim verify <rb1_stats.tsv> [--verbose N] [--ignore sr,...]\n");
+        std::fprintf(stderr, "usage: rbsim verify <rb1_stats.tsv> [--verbose N] [--ignore sr,...] [--gless 0|1]\n");
         return 2;
     }
     int verbose = 5;
+    int forceGless = -1;  // --gless: the log was recorded with Game.isGless on/off (the mod does not write "# config")
     std::vector<bool> ignore(21, false);
     for (int i = 3; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--verbose") && i + 1 < argc) verbose = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--gless") && i + 1 < argc) forceGless = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--ignore") && i + 1 < argc) {
             std::string list = argv[++i];
             for (int c = 0; c < 21; ++c)
@@ -254,6 +256,7 @@ int CmdVerify(int argc, char** argv) {
     }
 
     std::map<int, std::unique_ptr<LevelTemplate>> tpls;
+    if (forceGless >= 0) cfgGless = forceGless;
     if (cfgMathSpikes == 0) {
         std::printf("this log was recorded with MATHSPIKES 0 (original shape-test spikes): rbsim simulates the standardized\n"
                     "check only (MATHSPIKES 1), so spike decisions in it are not comparable. Re-record with mathspikes 1.\n");
@@ -283,6 +286,23 @@ int CmdVerify(int argc, char** argv) {
                             segs[si - 1].entries.back().restart;
         sim->Load(tp.get(), sg.checkpoint, afterR);
         if (cfgGless >= 0) sim->gless = cfgGless != 0;
+        else {
+            // Auto-detect Game.isGless per segment (the mod writes no "# config" line, and one file can hold several
+            // recordings): with isGless on, Level.dp is always 0 because the camera steps after the spike test; with
+            // it off, dp is the camera step, nonzero whenever the camera moves.
+            bool camMoved = false, dpNonzero = false;
+            double lx = NAN, ly = NAN;
+            for (const Entry& e : sg.entries) {
+                if (e.restart || TrailLen(e.f) == 0) continue;
+                const size_t c = e.f.size() - TrailLen(e.f) + 2;
+                const double x = FromHex(e.f[c]), y = FromHex(e.f[c + 1]), dx = FromHex(e.f[c + 2]), dy = FromHex(e.f[c + 3]);
+                if (!std::isnan(lx) && (x != lx || y != ly)) camMoved = true;
+                lx = x, ly = y;
+                if ((!std::isnan(dx) && dx != 0) || (!std::isnan(dy) && dy != 0)) dpNonzero = true;
+            }
+            sim->gless = camMoved && !dpNonzero;
+            if (sim->gless) std::printf("segment %zu: recorded with isGless on (Level.dp always 0 while the camera moves)\n", si);
+        }
         bool ok = true;
         int endReason = 0;  // 0 = end of log, 1 = death, 2 = win
         bool diedCounted = false;

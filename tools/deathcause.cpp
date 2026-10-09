@@ -1,5 +1,5 @@
 // tools/deathcause.cpp: replay inputs on a level and report how each death or the win happened
-// (contacts at death, or the spike row that killed). Build: make deathcause. Usage: deathcause <level> <RLE> [checkpoint]
+// (contacts at death, or the spike row that killed). Build: make deathcause. Usage: deathcause <level> <RLE> [checkpoint] [gless 0|1]
 #include "../src/redball.h"
 #include <cstdio>
 #include <cstdlib>
@@ -18,10 +18,15 @@ int main(int argc, char** argv) {
     LevelTemplate t(lv);
     auto s = std::make_unique<Sim>();
     s->Load(&t, argc > 3 ? atoi(argv[3]) : 0);
+    if (argc > 4) s->gless = atoi(argv[4]) != 0;  // Game.isGless (camera steps after the spike test)
     auto in = DecodeInputs(argv[2]);
     for (auto k : in) {
         bool alive = s->playerAlive;
-        if (k == IN_RESTART) { s->Restart(); continue; }
+        if (k == IN_RESTART) {
+            std::printf("R at frame %d (lastCheckNum %d, isStrelka %d)\n", s->frameCount, s->lastCheckNum, (int)s->staticFlag[2]);
+            s->Restart();
+            continue;
+        }
         s->Tick(k);
         if (alive && !s->playerAlive) {
             double x = s->spriteX[s->playerBody], y = s->spriteY[s->playerBody];

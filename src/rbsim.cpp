@@ -696,10 +696,39 @@ static int CmdTest() {
             check(death == c.death && s->winFrame == c.win && s->switchFrame[0] == c.switchFrame && s->displayUncertain == 0, c.name);
         }
     }
-    // 18b. Levels 16, 17: scripted from the AS3, NOT yet checked against Flash logs
+    // 18a-16. Level 16 against its Flash logs (rb1_stats16.1-5, all bit-exact; 16.5's last recording with isGless on)
+    {
+        LevelTemplate t(16);
+        struct C { const char* in; bool gless; int death, win, strelka; const char* name; };
+        const C cases[] = {
+            {"d8e1d9e1n2w1n16a1n1a1n39a9n1a1n3q1a1n1a14n22d1q1n12", false, -1, 147, 0, "level 16 (rb1_stats16.2): flag at frame 147"},
+            {"d18e11d5e1d1e24d1e10d28e19d1e22d2e51d10e1d2q2e29d53R1d17e36d4S1d18a1e12d1e29d14e5d33e1d49e1d28e44R1d18e36d31n1", false, 291, -1, 1,
+             "level 16 (rb1_stats16.3): killRollBall1 death 291, R from checkpoint 1, wrongWay resets to checkpoint 0"},
+            {"d18e11d5e1d1e24d1e10d28e19d1e22d2e62d5e56d40e16R1d18e1d6q1d39a29q1a42d1q1a11", false, -1, 472, 0, "level 16 (rb1_stats16.4, isGless off): the spike at 322 is missed (spike glitch), flag 472"},
+            {"d18e11d5e1d1e24d1e10d28e19d1e22d2e62d5e56d40e16R1d18e1d6q1d39a29q1a42d1q1a11", true, 322, 472, 1,
+             "level 16 (rb1_stats16.5, isGless on): same inputs die on the spike at 322; the dead ball hits wrongWay"},
+        };
+        for (const C& c : cases) {
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);
+            s->gless = c.gless;
+            int death = -1;
+            for (uint8_t k : DecodeInputs(c.in)) {
+                if (k == IN_RESTART) {
+                    s->Restart();
+                    continue;
+                }
+                s->Tick(k);
+                if (s->deathFrame >= 0 && death < 0) death = s->frameCount;
+                if (s->isTimeStop) break;
+            }
+            check(death == c.death && s->winFrame == c.win && (int)s->staticFlag[2] == c.strelka && s->displayUncertain == 0, c.name);
+        }
+    }
+    // 18b. Level 17: scripted from the AS3, NOT yet checked against Flash logs
     {
         bool idleOk = true, detOk = true;
-        for (int lv : {16, 17}) {
+        for (int lv : {17}) {
             LevelTemplate t(lv);
             auto a = std::make_unique<Sim>(), b = std::make_unique<Sim>(), c = std::make_unique<Sim>();
             a->Load(&t);
@@ -718,8 +747,8 @@ static int CmdTest() {
             if (!std::isfinite(x.px) || !std::isfinite(x.py) || !std::isfinite(y.px) || !std::isfinite(y.py)) idleOk = false;
             if (std::memcmp(&y.px, &z.px, 8) || std::memcmp(&y.py, &z.py, 8) || y.contactCount != z.contactCount) detOk = false;
         }
-        check(idleOk, "levels 16, 17: 600 idle ticks run, positions finite");
-        check(detOk, "levels 16, 17: two runs are bit-identical");
+        check(idleOk, "level 17: 600 idle ticks run, positions finite");
+        check(detOk, "level 17: two runs are bit-identical");
 
         // field initialisers: Level 9 killRollBallDirection = 1 (Flash: spin 5 from tick 1); Level 16 roll balls 1 / -1
         LevelTemplate t9(9);

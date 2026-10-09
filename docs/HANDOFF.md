@@ -40,15 +40,15 @@ recorded in README.md ("Verification status") and below.
 | area | status |
 |---|---|
 | physics core | bit-exact (Box2DFlash quirks replicated; Intel LIBM `sin`/`cos`) |
-| levels **1-15** | **bit-exact** against Flash logs (72 logs, 85,859 frames; table in README) |
-| levels 16, 17 | **scripted from the AS3, NOT verified** (no Flash logs yet; `rbsim` warns when one is used; section 8) |
+| levels **1-16** | **bit-exact** against Flash logs (77 logs, 90,273 frames; table in README) |
+| level 17 | **scripted from the AS3, NOT verified** (no Flash logs yet; `rbsim` warns when one is used; section 8) |
 | display layer | exact: rotation matrix, hit tests, camera, standardized spikes (section 6) |
 | death / death warp | exact: ball body destroyed, full `Update` keeps running (world, machinery), unguarded goal/checkpoint/switch tests; 5 logged warps verified (incl. L9 death 358 / flag 359, L11 onto the moving flag 1110 / 1117). Debris (random) not simulated |
 | Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical |
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-Self-tests: `./rbsim test` → 79 tests, `ALL PASSED` (also under Wine).
+Self-tests: `./rbsim test` → 83 tests, `ALL PASSED` (also under Wine).
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
@@ -253,9 +253,8 @@ Two engine changes came out of it:
    reports post-death body agreement (not a failure: debris is random); every difference seen so far is the body
    that killed the ball, hit by debris spawning at the ball.
 
-**Level 16 warning (for when its files arrive):** `wrongWay` is a hit-test target that is rotated (5.5 degrees) and
-holds a shape plus a TextField ("Wrong way!"); `tools/gen_display_data.py` skips TextFields, so its stored box is
-probably wrong even before the per-part question. Use its E10 row and the logs (any run through it) to fix it.
+**Level 16 `wrongWay`:** a turned hit-test target (shape + TextField). `tools/gen_display_data.py` skips TextFields,
+but its box matches Flash's E10 within rounding (the text lies inside the shape) and both logged hits matched.
 
 **Level 13: VERIFIED.** `rb1_calib_L13.tsv`: 17/17 placements and boxes exact; `kingStar1` rotation is Flash's
 -13.132583618164062. Logs `rb1_stats13.1-4`: 12 segments, 4,022 frames bit-exact: idle death at 145 (the loose
@@ -270,20 +269,31 @@ idle, `killLine` deaths after R from checkpoint 2 (level built without `luk`), t
 hinged dynamic door), two wins (204, 464). Open: all 44 spike rows are turned and scaled (~0.71 x 0.6) and
 uncalibrated; the winning runs cross their bounds on 70 frames with no near-edge decision, but no log dies on one.
 
-**To verify (per level: 16, 17):**
+**Level 16: VERIFIED (no simulation change).** `rb1_calib_L16.tsv`: 23/23 placements and boxes exact; `axe1`
+rotation is Flash's -72.02842712402344 (`wrongWay` 5.5239105224609375 recorded too). Logs `rb1_stats16.1-5`: 16
+segments, 4,414 frames bit-exact: idle, `killRollBall1` death (which also collects checkpoint 1 on the death frame),
+drop platform re-created on consecutive frames, `wrongWay` resetting `lastCheckNum` alive (16.3) and as a death
+warp (16.5: the dead ball's frozen box hits the camera-shifted `wrongWay`), `isStrelka` kept across R, two wins.
+16.4 and 16.5 are the same inputs with `isGless` off and on: off, the spike at 322 is missed (spike glitch); on,
+the ball dies there. **The mod writes no `# config` line**, and one file can hold several recordings (16.5 = 7
+segments with isGless off, then 2 with it on): `verify` now detects isGless per segment (`Level.dp` is always 0
+with it on while the camera moves) and takes `--gless 0|1` to force it. Not logged: blue switches, `axe1` and
+`killRollBall2` deaths.
+
+**To verify: Level 17.**
 1. The user records the standard set (docs/STATS_LOGGING.md 6.0: idle, each death kind, checkpoint-1
    restart, a win) plus an E9level/E9a/E10 dump; Level 11 also needs a run that pushes the flag.
 2. `./rbsim verify <log>` (`diverged: 0`) and `./rbsim calib <dump>` (`CALIB OK`).
 3. Replace the provisional entries of `kTimelineRotations` (measured = false; `atan2` of the placement
    matrix) with the E9a values (static and dynamic clips alike: E9a reports every clip's rotation;
-   Level 16 `axe1`).
+   none left except Level 17's, if any).
 4. Spike calibration for rotated/scaled Shipik rows (Level 17 and the turned/scaled rows of 9, 10, 11, 15; the E8c method of
-   docs/STATS_LOGGING.md), `wrongWay` (Level 16).
+   docs/STATS_LOGGING.md).
 5. When a level is verified: add it to `LevelVerified()`, move it in the README tables, add its logs'
    numbers to "Verification status".
 
 Observed (unverified) idle behaviour, a first comparison: with no input the ball dies on Level 17 (78, rolls
-off the crown); it survives 600 frames on Level 16. (The Level 9, 10, 11, 13 and 15 predictions matched Flash.)
+off the crown); (The Level 9, 10, 11, 13, 15 and 16 predictions matched Flash.)
 
 **Search-side next steps** (for whoever takes the bruteforcer): better beam score (moving platforms /
 timing, calibrate with `--explain` against L2 186, L4 274, L8 405); exhaustive window proofs and endgame
@@ -293,7 +303,7 @@ proofs; physics profiling for contact-heavy levels (must stay bit-exact).
 
 ```bash
 git clone https://github.com/Theme25/project-unnamed.git && cd project-unnamed
-make && ./rbsim test                  # expect ALL PASSED (79)
+make && ./rbsim test                  # expect ALL PASSED (83)
 
 # Windows cross build + Wine (to check the Windows build)
 mv /etc/apt/sources.list.d/nodesource* /tmp/ 2>/dev/null   # a broken repo blocks apt-get update
