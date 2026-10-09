@@ -40,15 +40,15 @@ recorded in README.md ("Verification status") and below.
 | area | status |
 |---|---|
 | physics core | bit-exact (Box2DFlash quirks replicated; Intel LIBM `sin`/`cos`) |
-| levels **1-8, 12, 14** | **bit-exact** against Flash logs (48 logs, 59,741 frames; table in README) |
-| levels 9, 10, 11, 13, 15, 16, 17 | **scripted from the AS3, NOT verified** (no Flash logs yet; `rbsim` warns when one is used; section 8) |
+| levels **1-9, 12, 14** | **bit-exact** against Flash logs (55 logs, 67,516 frames; table in README) |
+| levels 10, 11, 13, 15, 16, 17 | **scripted from the AS3, NOT verified** (no Flash logs yet; `rbsim` warns when one is used; section 8) |
 | display layer | exact: rotation matrix, hit tests, camera, standardized spikes (section 6) |
-| death / death warp | exact: post-death camera + unguarded goal/checkpoint/switch tests; 3 logged warps verified |
+| death / death warp | exact: post-death camera + unguarded goal/checkpoint/switch tests; 4 logged warps verified (incl. Level 9 boomCrank, death 358 / flag 359) |
 | Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical |
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-Self-tests: `./rbsim test` → 62 tests, `ALL PASSED` (also under Wine; Linux and Wine logs of the new levels are identical).
+Self-tests: `./rbsim test` → 65 tests, `ALL PASSED` (also under Wine).
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
@@ -205,24 +205,36 @@ search grows ~2x per frame even with merging (prototype: last 16 frames of L8 ~2
 The bruteforcer (beam/optimize work in section 7) is now someone else's task; this chat line is about
 **finishing the simulator on every level**.
 
-**Done in the last chat (unverified):** levels 9, 10, 11, 13, 15, 16, 17 are scripted from the AS3
-(`Level_N.as` of the Practice Hack SWF). Bodies and joints are in AS3 order; polygons come from
-`src/level_polys.h`. `LevelVerified()` / `WarnIfUnverified()` make every run, optimize and beam on such a
-level print a warning. README "Level status" lists the open items per level. AS3 quirks found and
-reproduced: uninitialised direction ints (Level 9 `killRollBall`/`greenPlatform`, Level 16 `killRollBall2`,
-Level 17 `movePlatform2`), Level 17 `movePlatform1` direction set twice, Level 16 `wrongWay` resetting
-`lastCheckNum` (alive or dead), Level 15 `luk` only at `lastCheckNum == 0`, no-op repeated `DestroyBody`,
-and Level 11's `levelAim` being a **dynamic body** (`Sim::aimBody`, `Sim::GoalTarget`).
+**Scripted from the AS3 (chat before last):** levels 9, 10, 11, 13, 15, 16, 17 (`Level_N.as` of the
+Practice Hack SWF). Bodies and joints in AS3 order; polygons from `src/level_polys.h`. `LevelVerified()` /
+`WarnIfUnverified()` make run, optimize and beam on an unverified level print a warning. AS3 quirks
+reproduced: Level 17 `movePlatform2BodyDirection` never initialised (0) and `movePlatform1` direction set
+twice; Level 16 `wrongWay` resetting `lastCheckNum` (alive or dead); Level 15 `luk` only at
+`lastCheckNum == 0`; no-op repeated `DestroyBody`; Level 11's `levelAim` is a **dynamic body**
+(`Sim::aimBody`, `Sim::GoalTarget`).
 
-**To verify (per level, in this order: 13, 16, 17, then 9, 10, 11, 15):**
+**Lesson (cost one round trip):** read the whole class, including field declarations. Level 9 and 16
+direction fields have initialisers (`private var killRollBallDirection:int = 1;`); a grep that skipped
+`private var` lines made them look uninitialised. The first Level 9 log diverged at tick 1 on exactly that.
+
+**Level 9: VERIFIED (last chat).** `rb1_calib_L9.tsv`: 33/33 placements and 33/33 bounds exact; the crank
+rotations are now Flash's (66.776199340820312, -25.733810424804688; `atan2` was ~2e-4 degrees off).
+`rb1_stats1-7.tsv`: 12 segments, 7,775 frames, all bit-exact (7 deaths on the Flash tick, 4,676
+post-death frames): idle spike death at 130, spike/kill-roll-ball/boom-crank deaths, green switch,
+checkpoint-3 R and win at 224, a death-warp win (death 358 on `boomCrank`, flag 359). Not exercised: the
+fall death, checkpoints 1/2 as restart points. Its rotated spike rows are modelled by a continuous inverse
+transform (uncalibrated); every logged spike decision matched and none was near an edge (`verify` now
+prints that count). The mod's `flags` bit 9 never fires on Level 9: its switches are named
+`greenCheck1-3`, not `greenCheck` (the platform disappearing in the extra-body columns shows the press).
+
+**To verify (per level, in this order: 13, 16, 17, then 10, 11, 15):**
 1. The user records the standard set (docs/STATS_LOGGING.md 6.0: idle, each death kind, checkpoint-1
    restart, a win) plus an E9level/E9a/E10 dump; Level 11 also needs a run that pushes the flag.
 2. `./rbsim verify <log>` (`diverged: 0`) and `./rbsim calib <dump>` (`CALIB OK`).
 3. Replace the provisional entries of `kTimelineRotations` (measured = false; `atan2` of the placement
-   matrix) with Flash's values: static clips from E9a (Level 10 `afterJump`, Level 11 `triangle`),
-   dynamic clips from the log's tick-0 angle (unique double: Level 9 cranks, Level 13 `kingStar1`,
-   Level 16 `axe1`, the Level 11 train line: all 36 clips share one matrix, so one measurement fits).
-4. Spike calibration for rotated/scaled Shipik rows (Levels 17, 9, 10, 11, 15; the E8c method of
+   matrix) with the E9a values (static and dynamic clips alike: E9a reports every clip's rotation;
+   Level 10 `afterJump`, Level 11 `triangle` and train line, Level 13 `kingStar1`, Level 16 `axe1`).
+4. Spike calibration for rotated/scaled Shipik rows (Levels 17, 10, 11, 15; the E8c method of
    docs/STATS_LOGGING.md), `wrongWay` (Level 16) and Level 11's turned-flag box rounding.
 5. Known simplifications to check against logs: Level 11 does not step the world after death while
    Flash keeps stepping it (matters only for a flag still moving at death); Level 15 `killLine` is
@@ -230,9 +242,9 @@ and Level 11's `levelAim` being a **dynamic body** (`Sim::aimBody`, `Sim::GoalTa
 6. When a level is verified: add it to `LevelVerified()`, move it in the README tables, add its logs'
    numbers to "Verification status".
 
-Observed (unverified) idle behaviour, a useful first comparison: with no input the ball dies on Level 9
-(frame 130, rolls into spikes), Level 13 (145, the loose star hits it) and Level 17 (78, rolls off the
-crown spike it starts on); it survives 600 frames on Levels 10, 11, 15 and 16.
+Observed (unverified) idle behaviour, a first comparison: with no input the ball dies on Level 13
+(frame 145, the loose star hits it) and Level 17 (78, rolls off the crown); it survives 600 frames on
+Levels 10, 11, 15 and 16. (The Level 9 prediction, death at 130, matched Flash.)
 
 **Search-side next steps** (for whoever takes the bruteforcer): better beam score (moving platforms /
 timing, calibrate with `--explain` against L2 186, L4 274, L8 405); exhaustive window proofs and endgame
@@ -242,7 +254,7 @@ proofs; physics profiling for contact-heavy levels (must stay bit-exact).
 
 ```bash
 git clone https://github.com/Theme25/project-unnamed.git && cd project-unnamed
-make && ./rbsim test                  # expect ALL PASSED (62)
+make && ./rbsim test                  # expect ALL PASSED (65)
 
 # Windows cross build + Wine (to check the Windows build)
 mv /etc/apt/sources.list.d/nodesource* /tmp/ 2>/dev/null   # a broken repo blocks apt-get update

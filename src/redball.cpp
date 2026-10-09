@@ -223,8 +223,8 @@ static const TimelineRotation kTimelineRotations[] = {
     // this by ~1e-4 degrees on timeline clips (see above), so a rotated BODY clip is only exact once its value
     // is replaced by the one from an E9a dump (static clips) or from a log's tick-0 angle (dynamic clips).
     // g_provisionalRotations counts how many of these a level construction used.
-    {9, "firstCrank", 0x4050b1a897c857d8ULL, false},  // provisional atan2 = 66.77591509403953
-    {9, "secondCrank", 0xc039bbcc9d4566b0ULL, false},  // provisional atan2 = -25.733590917056688
+    {9, "firstCrank", 0x4050b1ad40000000ULL, true},   // rb1_calib_L9.tsv E9a: 66.776199340820312 (atan2: 66.77591509403953)
+    {9, "secondCrank", 0xc039bbdb00000000ULL, true},  // rb1_calib_L9.tsv E9a: -25.733810424804688 (atan2: -25.733590917056688)
     {10, "afterJump", 0xc0667b2f170e499eULL, false},  // provisional atan2 = -179.8494982985548
     {11, "kolesoTrain1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
     {11, "kolesoTrain2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
@@ -1098,9 +1098,7 @@ static void L13_Update(Sim& s) {
 // that is re-created dynamic with density 3, two kill roll balls, a swinging axe and the wrongWay trigger.
 // wrongWay (hitTestObject, no IsLive() guard, so also after death) sets lastCheckNum = 0 AFTER Level.Update's checkpoint
 // loop, and Level_16.isStrelka = true (static: survives R).
-// Quirk reproduced: killRollBall1Direction / killRollBall2Direction start at 0 (never initialised), so a ball that
-// starts between its two turning points keeps angular velocity 5 * 0 = 0 every frame. Ball 2 (x = 2439, range 2120..2495)
-// does; ball 1 (x = 1784 > 1750) turns to -1 on the first Update.
+// Field initialisers: killRollBall1Direction = 1, killRollBall2Direction = -1.
 enum { L16_MP1 = 0, L16_MP2 = 1, L16_JUMP = 2, L16_BLUEPLATE = 3, L16_DROP = 4, L16_BALL1 = 5, L16_BALL2 = 6, L16_AXE = 7 };
 enum { L16I_MP1DIR = 0, L16I_MP2DIR = 1, L16I_BALL1DIR = 2, L16I_BALL2DIR = 3, L16I_JUMPJOINT = 4 };
 static void L16_Construct(Sim& s) {
@@ -1141,6 +1139,8 @@ static void L16_Construct(Sim& s) {
     JointDef rj;
     w.InitRevoluteJointDef(rj, s.lvBody[L16_AXE], w.groundBody, Vec2(2767 / PHYS_SCALE, -60 / PHYS_SCALE));
     w.CreateJoint(rj);
+    s.lvInt[L16I_BALL1DIR] = 1;   // private var killRollBall1Direction:int = 1
+    s.lvInt[L16I_BALL2DIR] = -1;  // private var killRollBall2Direction:int = -1
 }
 static void L16_Switches(Sim& s) {  // unguarded hit tests (alive or dead ball)
     if (SwitchHit(s, "wrongWay")) {
@@ -1189,11 +1189,8 @@ static void L16_Update(Sim& s) {
 
 // Level_9.as: three-bar crank (motorised revolute -> two revolute links -> boom with a prismatic guide), a ten-plank
 // bridge pinned at both ends, a patrolling green platform removed by any of three green switches, a kill roll ball and three
-// pendulum jump balls on distance joints.
-// Quirks reproduced: greenPlatformBodyDirection and killRollBallDirection are never initialised (0). The roll ball
-// starts at x = 972, inside its turning points (740..1200), so its direction stays 0 and SetAngularVelocity(5 * 0)
-// zeroes its spin every frame until it leaves that range; the platform starts at x = 401 > 387 and turns on frame 1.
-// Three distinct joint defs are reused exactly as in the AS3 (the crank def keeps motorSpeed/maxMotorTorque after
+// pendulum jump balls on distance joints. Field initialisers: greenPlatformBodyDirection = 1, killRollBallDirection = 1.
+// Three joint defs are reused exactly as in the AS3 (the crank def keeps motorSpeed/maxMotorTorque after
 // enableMotor = false, which is harmless because the motor is off).
 enum { L9_GREEN = 0, L9_BOOM = 1, L9_ROLL = 2 };
 enum { L9I_GREENDIR = 0, L9I_ROLLDIR = 1 };
@@ -1253,8 +1250,8 @@ static void L9_Construct(Sim& s) {
     w.CreateJoint(dj);
     w.InitDistanceJointDef(dj, jb3, w.groundBody, Vec2(2761 / PHYS_SCALE, 63 / PHYS_SCALE), Vec2(2698 / PHYS_SCALE, -56 / PHYS_SCALE));
     w.CreateJoint(dj);
-    s.lvInt[L9I_GREENDIR] = 0;
-    s.lvInt[L9I_ROLLDIR] = 0;
+    s.lvInt[L9I_GREENDIR] = 1;  // private var greenPlatformBodyDirection:int = 1
+    s.lvInt[L9I_ROLLDIR] = 1;   // private var killRollBallDirection:int = 1
 }
 static void L9_Switches(Sim& s) {  // greenCheck1..3: each destroys the same platform (2nd/3rd are no-ops)
     static const char* green[3] = {"greenCheck1", "greenCheck2", "greenCheck3"};
@@ -1585,7 +1582,7 @@ int32_t Sim::LoggedFlags() const {
 }
 
 bool LevelVerified(int32_t id) {
-    static const int32_t verified[] = {1, 2, 3, 4, 5, 6, 7, 8, 12, 14};
+    static const int32_t verified[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 14};
     for (int32_t v : verified)
         if (v == id) return true;
     return false;

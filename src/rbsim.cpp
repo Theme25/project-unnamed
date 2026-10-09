@@ -513,6 +513,8 @@ static int CmdTest() {
         const Case cases[] = {
             {4, "d12e1w3a2n5a2n31d8n78a1n1e1n13w2n1w1e1w12n9w1n43w6n1w3n9w2n2w1n2w17n3", 273, 274, true, "level 4 any% TAS: death warp 1 frame after death"},
             {4, "n27d1S1d123e1d2e22d24e48d22e5d1e8n24", 285, 309, true, "level 4 delayed death warp: flag 24 frames after death"},
+            {9, "d2n3d3a1d1n1d1n1d30e21d64e8d3e5d29e1d3e1d12e1d1e1d18e10d6e1d48e2d7e1q9w1q2e2q1e1d7n3d12a1q1a1q1w1a2w1a2n2a3n1d2n1d8n1d1a5n1",
+             358, 359, true, "level 9 death warp on boomCrank (Flash log rb1_stats6): death 358, flag 359"},
         };
         for (const Case& c : cases) {
             LevelTemplate t(c.level);
@@ -587,10 +589,25 @@ static int CmdTest() {
         const bool backAfterFresh = a->world.bodies[a->lvBody[5]].inWorld && !a->staticFlag[0];
         check(wallThere && goneAfterR && backAfterFresh, "level 7 redCheckLevel: survives a checkpoint restart, cleared by a fresh load");
     }
-    // 18b. Levels 9, 10, 11, 13, 15, 16, 17: scripted from the AS3, NOT yet checked against Flash logs
+    // 18a. Level 9 against its Flash logs (rb1_stats1-7, all bit-exact): idle spike death, checkpoint-3 win
+    {
+        LevelTemplate t(9);
+        auto s = std::make_unique<Sim>();
+        s->Load(&t);
+        for (int f = 0; f < 200; ++f) s->Tick(IN_NONE);
+        check(s->deathFrame == 130, "level 9 idle: dies on the 2.48-degree spike row at frame 130 (Flash: 130)");
+        auto c = std::make_unique<Sim>();
+        c->Load(&t, 3);
+        for (uint8_t k : DecodeInputs("d21e1d17q31w1e14w1e102d36")) {
+            c->Tick(k);
+            if (c->isTimeStop) break;
+        }
+        check(c->winFrame == 224 && c->deathFrame < 0, "level 9 from checkpoint 3: flag at frame 224 (Flash: 224)");
+    }
+    // 18b. Levels 10, 11, 13, 15, 16, 17: scripted from the AS3, NOT yet checked against Flash logs
     {
         bool idleOk = true, detOk = true;
-        for (int lv : {9, 10, 11, 13, 15, 16, 17}) {
+        for (int lv : {10, 11, 13, 15, 16, 17}) {
             LevelTemplate t(lv);
             auto a = std::make_unique<Sim>(), b = std::make_unique<Sim>(), c = std::make_unique<Sim>();
             a->Load(&t);
@@ -603,22 +620,25 @@ static int CmdTest() {
                 c->Tick(in);
             }
             const FrameStats x = a->Stats(0), y = b->Stats(0), z = c->Stats(0);
-            // Informational only (no Flash log yet): an idle ball dies on levels 9 (spike rows below the start slope),
-            // 13 (the loose heavy star rolls into it) and 17 (the start sits on a crown spike that slopes away).
+            // Informational only (no Flash log yet): an idle ball dies on levels 13 (the loose heavy star rolls into it)
+            // and 17 (it rolls off the crown it starts on).
             if (!a->playerAlive) std::printf("       note: level %d idle ball dies at frame %d (unverified)\n", lv, a->deathFrame);
             if (!std::isfinite(x.px) || !std::isfinite(x.py) || !std::isfinite(y.px) || !std::isfinite(y.py)) idleOk = false;
             if (std::memcmp(&y.px, &z.px, 8) || std::memcmp(&y.py, &z.py, 8) || y.contactCount != z.contactCount) detOk = false;
         }
-        check(idleOk, "levels 9, 10, 11, 13, 15, 16, 17: 600 idle ticks run, positions finite");
-        check(detOk, "levels 9, 10, 11, 13, 15, 16, 17: two runs are bit-identical");
+        check(idleOk, "levels 10, 11, 13, 15, 16, 17: 600 idle ticks run, positions finite");
+        check(detOk, "levels 10, 11, 13, 15, 16, 17: two runs are bit-identical");
 
-        // uninitialised AS3 ints are 0: the Level 9 roll ball (x = 972, inside 740..1200) keeps direction 0 and no spin
+        // field initialisers: Level 9 killRollBallDirection = 1 (Flash: spin 5 from tick 1); Level 16 roll balls 1 / -1
         LevelTemplate t9(9);
         auto s9 = std::make_unique<Sim>();
         s9->Load(&t9);
-        for (int f = 0; f < 30; ++f) s9->Tick(IN_NONE);
-        const int32_t roll = s9->lvBody[2];
-        check(s9->lvInt[1] == 0 && s9->world.bodies[roll].angularVelocity == 0, "level 9: killRollBall direction stays 0 inside its range (spin zeroed each frame)");
+        s9->Tick(IN_NONE);
+        LevelTemplate t16(16);
+        auto s16 = std::make_unique<Sim>();
+        s16->Load(&t16);
+        check(s9->lvInt[1] == 1 && s9->world.bodies[s9->lvBody[2]].angularVelocity == 5 && s16->lvInt[2] == 1 && s16->lvInt[3] == -1,
+              "level 9 / 16: roll-ball directions start at their field initialisers (9: 1; 16: 1, -1)");
 
         // Level 17: movePlatform1 direction is set twice (ends -1); movePlatform2's direction starts 0
         LevelTemplate t17(17);

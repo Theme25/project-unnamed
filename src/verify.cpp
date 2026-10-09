@@ -261,6 +261,7 @@ int CmdVerify(int argc, char** argv) {
     if (cfgMathSpikes >= 0 || cfgGless >= 0)
         std::printf("log config: mathspikes %d, gless %d\n", cfgMathSpikes, cfgGless);
     auto sim = std::make_unique<Sim>();
+    long uncertainTotal = 0;  // hit tests (goal/checkpoints/switches/spikes) that a 1-unit change could flip
     int perfect = 0, diverged = 0, unsupported = 0, shown = 0, extraGroupsSeen = 0, deathsMatched = 0;
     long framesCompared = 0, framesMatched = 0, trailingSkipped = 0, deathInputFromPrev = 0, postDeathFrames = 0, winsAfterDeath = 0;
     std::map<std::string, int> firstFieldHist;
@@ -441,6 +442,7 @@ int CmdVerify(int argc, char** argv) {
             }
         }
         (void)endReason;
+        uncertainTotal += sim->displayUncertain;
         if (ok) ++perfect;
         else ++diverged;
     }
@@ -460,6 +462,7 @@ int CmdVerify(int argc, char** argv) {
                     g_cameraFramesChecked, g_matrixFramesChecked, g_stateFramesChecked);
     if (deathsMatched) std::printf("deaths on the same tick as Flash (player fields exact, debris not simulated): %d\n", deathsMatched);
     if (extraGroupsSeen) std::printf("extra bodies compared per frame: up to %d\n", extraGroupsSeen);
+    std::printf("hit-test decisions within one rounding unit of flipping (uncalibrated spikes/targets): %ld\n", uncertainTotal);
     if (!firstFieldHist.empty()) {
         std::printf("first-divergence fields:\n");
         for (auto& kv : firstFieldHist) std::printf("  %-28s %d\n", kv.first.c_str(), kv.second);
