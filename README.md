@@ -22,12 +22,19 @@ frame matches that Flash Player to the last bit.
 
 ## Route viewer (Windows, no command line)
 
+**[⬇ Download rbview.exe](https://github.com/Theme25/project-unnamed/releases/latest/download/rbview.exe)**
+(latest release; one file, no installer). Windows may show "Windows protected your PC" the first time
+because the exe is not signed: click **More info**, then **Run anyway**.
+
 `rbview.exe` is a single double-click program: pick a level, paste a route (or open/drag a route file
 or a stats log), press Play. It draws the level, moving parts, spikes, checkpoints, switches, the flag
 and the ball with the game's camera, lists deaths/checkpoints/switches/the flag frame, steps and seeks
 frame by frame, and shows a "warp ghost" after a death so death warps are visible. Everything is
 computed by the same bit-exact simulator. Guide: [`docs/WINDOWS.md`](docs/WINDOWS.md).
 Build: `make viewer` (MinGW-w64 cross build; Win32 + GDI+, static, ~1.6 MB; source in `viewer/`).
+To publish a new version: create a GitHub release (new tag, e.g. `v1.1`) and attach the exe named
+exactly `rbview.exe`, so the download link above keeps pointing at the newest one
+(`gh release create v1.1 rbview.exe --title "..." --notes "..."` does the same from the command line).
 
 ![rbview: the Level 11 death warp, the warp ghost touching the falling flag](docs/rbview.png)
 
