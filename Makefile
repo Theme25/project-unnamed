@@ -45,4 +45,7 @@ levels:
 	python3 tools/extract_levels.py $(SWFXML) > levels.json
 	python3 tools/gen_levels_data.py levels.json > src/levels_data.h
 
-.PHONY: test clean libm levels windows
+.PHONY: test clean libm levels windows deathcause
+
+deathcause: tools/deathcause.cpp src/*.cpp src/*.h src/libm_intel.S
+	$(CXX) $(CXXFLAGS) -o tools/deathcause tools/deathcause.cpp src/libm_intel.S src/b2collision.cpp src/b2world.cpp src/b2joints.cpp src/redball.cpp

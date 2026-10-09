@@ -225,7 +225,7 @@ static const TimelineRotation kTimelineRotations[] = {
     // g_provisionalRotations counts how many of these a level construction used.
     {9, "firstCrank", 0x4050b1ad40000000ULL, true},   // rb1_calib_L9.tsv E9a: 66.776199340820312 (atan2: 66.77591509403953)
     {9, "secondCrank", 0xc039bbdb00000000ULL, true},  // rb1_calib_L9.tsv E9a: -25.733810424804688 (atan2: -25.733590917056688)
-    {10, "afterJump", 0xc0667b2f170e499eULL, false},  // provisional atan2 = -179.8494982985548
+    {10, "afterJump", 0xc0667b3020000000ULL, true},  // rb1_calib_L10.tsv E9a: -179.8502197265625 (atan2: -179.8494982985548)
     {11, "kolesoTrain1", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
     {11, "kolesoTrain2", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
     {11, "train", 0x3fc64c0df5d3498bULL, false},  // provisional atan2 = 0.17419600012960887
@@ -1582,7 +1582,7 @@ int32_t Sim::LoggedFlags() const {
 }
 
 bool LevelVerified(int32_t id) {
-    static const int32_t verified[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 14};
+    static const int32_t verified[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14};
     for (int32_t v : verified)
         if (v == id) return true;
     return false;

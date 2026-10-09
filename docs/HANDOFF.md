@@ -40,15 +40,15 @@ recorded in README.md ("Verification status") and below.
 | area | status |
 |---|---|
 | physics core | bit-exact (Box2DFlash quirks replicated; Intel LIBM `sin`/`cos`) |
-| levels **1-9, 12, 14** | **bit-exact** against Flash logs (55 logs, 67,516 frames; table in README) |
-| levels 10, 11, 13, 15, 16, 17 | **scripted from the AS3, NOT verified** (no Flash logs yet; `rbsim` warns when one is used; section 8) |
+| levels **1-10, 12, 14** | **bit-exact** against Flash logs (59 logs, 73,757 frames; table in README) |
+| levels 11, 13, 15, 16, 17 | **scripted from the AS3, NOT verified** (no Flash logs yet; `rbsim` warns when one is used; section 8) |
 | display layer | exact: rotation matrix, hit tests, camera, standardized spikes (section 6) |
 | death / death warp | exact: post-death camera + unguarded goal/checkpoint/switch tests; 4 logged warps verified (incl. Level 9 boomCrank, death 358 / flag 359) |
 | Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical |
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-Self-tests: `./rbsim test` → 65 tests, `ALL PASSED` (also under Wine).
+Self-tests: `./rbsim test` → 68 tests, `ALL PASSED` (also under Wine).
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
@@ -227,14 +227,25 @@ transform (uncalibrated); every logged spike decision matched and none was near 
 prints that count). The mod's `flags` bit 9 never fires on Level 9: its switches are named
 `greenCheck1-3`, not `greenCheck` (the platform disappearing in the extra-body columns shows the press).
 
-**To verify (per level, in this order: 13, 16, 17, then 10, 11, 15):**
+**Level 10: VERIFIED.** `rb1_calib_L10.tsv`: 22/22 placements, all hit-test boxes exact (three walls 1 twip
+off: nested scaled sprites, not hit-tested); `afterJump` rotation is Flash's -179.8502197265625. Logs
+`rb1_stats10.1-4`: 20 segments, 6,241 frames bit-exact: idle, fall deaths (also from checkpoint 1 after R),
+`roundBlock` death 171, TAS win 394. No log touches `afterJump`, `cube1/2`, `jumpPlatform3` or checkpoints 2/3
+(same calibrated data and mechanics as the logged parts), and none dies on a spike. Open: the 13 rotated and
+scaled spikes at the two ends of the finish pit (x 1015-1050, 1820-1850) are uncalibrated; the TAS passes
+15 px from one. `make deathcause && tools/deathcause <level> <RLE> [cp]` replays inputs and prints each
+death cause (contacts or spike row) or the win.
+
+The user said the remaining levels' logs are all recorded and will come one by one.
+
+**To verify (per level: 11, 13, 15, 16, 17):**
 1. The user records the standard set (docs/STATS_LOGGING.md 6.0: idle, each death kind, checkpoint-1
    restart, a win) plus an E9level/E9a/E10 dump; Level 11 also needs a run that pushes the flag.
 2. `./rbsim verify <log>` (`diverged: 0`) and `./rbsim calib <dump>` (`CALIB OK`).
 3. Replace the provisional entries of `kTimelineRotations` (measured = false; `atan2` of the placement
    matrix) with the E9a values (static and dynamic clips alike: E9a reports every clip's rotation;
-   Level 10 `afterJump`, Level 11 `triangle` and train line, Level 13 `kingStar1`, Level 16 `axe1`).
-4. Spike calibration for rotated/scaled Shipik rows (Levels 17, 10, 11, 15; the E8c method of
+   Level 11 `triangle` and train line, Level 13 `kingStar1`, Level 16 `axe1`).
+4. Spike calibration for rotated/scaled Shipik rows (Levels 17, 11, 15 and the pit ends of 9/10; the E8c method of
    docs/STATS_LOGGING.md), `wrongWay` (Level 16) and Level 11's turned-flag box rounding.
 5. Known simplifications to check against logs: Level 11 does not step the world after death while
    Flash keeps stepping it (matters only for a flag still moving at death); Level 15 `killLine` is
@@ -244,7 +255,7 @@ prints that count). The mod's `flags` bit 9 never fires on Level 9: its switches
 
 Observed (unverified) idle behaviour, a first comparison: with no input the ball dies on Level 13
 (frame 145, the loose star hits it) and Level 17 (78, rolls off the crown); it survives 600 frames on
-Levels 10, 11, 15 and 16. (The Level 9 prediction, death at 130, matched Flash.)
+Levels 11, 15 and 16. (The Level 9 and 10 predictions matched Flash.)
 
 **Search-side next steps** (for whoever takes the bruteforcer): better beam score (moving platforms /
 timing, calibrate with `--explain` against L2 186, L4 274, L8 405); exhaustive window proofs and endgame
@@ -254,7 +265,7 @@ proofs; physics profiling for contact-heavy levels (must stay bit-exact).
 
 ```bash
 git clone https://github.com/Theme25/project-unnamed.git && cd project-unnamed
-make && ./rbsim test                  # expect ALL PASSED (65)
+make && ./rbsim test                  # expect ALL PASSED (68)
 
 # Windows cross build + Wine (to check the Windows build)
 mv /etc/apt/sources.list.d/nodesource* /tmp/ 2>/dev/null   # a broken repo blocks apt-get update
