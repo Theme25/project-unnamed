@@ -427,6 +427,25 @@ Here `name` is `m_userData.name`, and the six numbers are hex doubles of
   if it appears.
 - `rbsim verify` compares these groups by name; the order doesn't matter.
 
+### 3.11 Turned/scaled spikes and the turned Level 11 flag (E11, E12)
+
+The last two display-layer pieces that are modelled but not calibrated (every logged decision matched,
+see README "Level status"):
+
+- **E11, turned/scaled spikes** (Levels 9, 10, 11, 15, 17). For every Shipik whose matrix relative to
+  the Level is not the identity (one per distinct matrix), log `E11s idx gx gy a b c d` (origin in Level
+  space, matrix), then place the ball on a 0.41 px grid over the spike's `getBounds(L)` plus 11.3 px, at
+  ball rotations 0 and 37.3, with the cover at (0,0), and log `E11 idx rot x y hit` where
+  `hit = pb.HitTestObjectControlPoints(spike)` (hex for numbers).
+- **E12, the turned flag** (Level 11). For 8 angles, set `levelAim.rotation`, log `E12b rot ax ay` + its
+  `getBounds(L)`, then place the ball (rotation 0) on a 0.43 px grid over those bounds plus 12.3 px and
+  log `E12 rot ax ay bx by hit` with `hit = pb.hitTestObject(levelAim)`.
+
+The AS3 is in `docs/mod_sweeps.as` (paste into Game.as, two calls added to `dbgLevelCalib`). Run the level
+calibration key on Levels 9, 10, 11, 15 and 17. `rbsim calib` checks every row (`E11`/`E12` lines in its
+output); expected sizes 1-9 MB per level. The checker was tested on synthetic dumps written by the sim
+itself (all spikes found, 100% agreement); real Flash data is the actual test.
+
 ## 4. Where to hook in
 
 ### 4.1 `Game.as` — both update paths

@@ -291,8 +291,10 @@ win 338. Not logged: `movePlatform2` (direction starts at 0, reproduced).
 3. `kTimelineRotations` now holds Flash's measured value for every rotated body clip (no provisional entries).
 4. Spike calibration for rotated/scaled Shipik rows (Level 17 and the turned/scaled rows of 9, 10, 11, 15; the E8c method of
    docs/STATS_LOGGING.md).
-5. The most useful open calibrations: a turned/scaled Shipik sweep (E8c on e.g. Level 17's 15-degree row or Level
-   15's scaled rows), and near-edge flag contacts on Level 11 (corner rounding of the turned flag's box).
+5. The two open calibrations have ready tooling: `docs/mod_sweeps.as` (E11 turned/scaled spike sweep, E12 Level 11
+   turned-flag sweep; docs/STATS_LOGGING.md 3.11) and their checks in `rbsim calib`. Waiting for the user to run
+   them on Levels 9, 10, 11, 15, 17. If E11 disagrees: the spike model is `BallHitsSpike`'s non-`plain` branch
+   (continuous inverse); if E12 disagrees: `AimBox`/`AimRound` in `Sim::GoalTarget`.
 
 Every idle prediction made before the logs arrived (Levels 9, 10, 11, 13, 15, 16, 17) matched Flash.
 

@@ -340,5 +340,5 @@ Joint code: every field write in all 48 joint methods was cross-checked against 
 1. Search: a better beam score (account for moving platforms and timing; calibrate against known
    TASes with `--explain`); resumable, splittable window proofs; endgame proofs; physics profiling
    for contact-heavy levels.
-2. Simulator: optional calibration of turned/scaled spikes (an E8c-style sweep on a turned Shipik) and of the
-   turned-flag box rounding (Level 11); both only matter for decisions within a twip of an edge.
+2. Simulator: calibration sweeps for turned/scaled spikes (E11) and the turned Level 11 flag (E12) are ready
+   (`docs/mod_sweeps.as`, checked by `rbsim calib`); they only matter for decisions within a twip of an edge.
