@@ -40,7 +40,7 @@ recorded in README.md ("Verification status") and below.
 | area | status |
 |---|---|
 | physics core | bit-exact (Box2DFlash quirks replicated; Intel LIBM `sin`/`cos`) |
-| levels **1-17 (all)** | **bit-exact** against Flash logs (81 logs, 97,966 frames; table in README) |
+| levels **1-17 (all)** | **bit-exact** against Flash logs (83 logs, 99,170 frames; table in README) |
 | turned spikes / turned flag | calibrated by the E11/E12 sweeps (390,665 / 390,670 and 148,074 / 148,074; the 5 spike rows within 0.003 twip of a half-twip are flagged as uncertain) |
 | display layer | exact: rotation matrix, hit tests, camera, standardized spikes (section 6) |
 | death / death warp | exact: ball body destroyed, full `Update` keeps running (world, machinery), unguarded goal/checkpoint/switch tests; 5 logged warps verified (incl. L9 death 358 / flag 359, L11 onto the moving flag 1110 / 1117). Debris (random) not simulated |

@@ -13,7 +13,7 @@ frame matches that Flash Player to the last bit.
 
 | | |
 |---|---|
-| levels | **all 17 bit-exact** against Flash logs: 81 logs, 97,966 frames, every death and win on Flash's frame |
+| levels | **all 17 bit-exact** against Flash logs: 83 logs, 99,170 frames, every death and win on Flash's frame |
 | display layer | calibrated: rotation matrices, hit-test boxes, camera, plain spikes (E8c 30,000/30,000), turned/scaled spikes (E11 390,665/390,670, the other 5 flagged as uncertain), the turned Level 11 flag (E12 148,074/148,074) |
 | death | death warps (onto checkpoints, flags, a moving flag, the Level 16 wrong-way trigger) and real-game pause timing |
 | platforms | Linux and Windows (x86-64), identical results; `rbview.exe`: a double-click route viewer for Windows |
@@ -41,8 +41,8 @@ make                 # see "Build flags" below; do not change them
 ./rbsim test         # 86 self-tests (physics, display layer, spikes, death warps, all 17 levels, snapshots, ...)
 ./rbsim run --level 2 --inputs "n20w1d25n40" [--hex] [--every N] [--checkpoint K]
 ./rbsim log --level 2 --inputs "..."      # simulator log in the Flash mod's TSV format
-./rbsim bench        # throughput
-./rbsim verify rb1_stats.tsv [--verbose N] [--ignore sr,...] [--gless 0|1]
+./rbsim bench [--frames N]                # throughput
+./rbsim verify rb1_stats.tsv [--verbose N] [--ignore sr,...] [--gless 0|1] [--trig intel|glibc]
 ./rbsim calib rb1_calib.tsv                # checks a calibration dump (docs/STATS_LOGGING.md)
 ./rbsim optimize --level N --inputs RLE    # improve a known route, see below
 ./rbsim beam --level N --memory 10G        # find a route from any start, see below
@@ -77,8 +77,9 @@ MSVC is not supported: Flash's `sin`/`cos` (`src/libm_intel.S`) is GNU assembly,
 to preserve the registers the Windows x64 calling convention requires. The simulator does not depend
 on the host's math library (it only uses exact functions: `sqrt`, `fmod`, `floor`, `trunc`).
 
-Checked under Wine 9 for every change: all self-tests, the calibration dumps and the stats logs give
-the same results as Linux, and seeded `optimize`/`beam` runs print identical routes.
+Checked under Wine 9 after every change: all self-tests, the calibration dumps and the stats logs give
+the same results as Linux. Seeded `optimize` and `beam` runs were checked to print identical routes
+when those commands were added.
 
 **Build flags:** use the Makefile's (`-O2 -ffp-contract=off -fno-fast-math
 -fexcess-precision=standard`, `-pthread`). `-O3 -march=native` breaks bit-exactness on Levels 3, 8
@@ -290,7 +291,7 @@ Calibration results:
 | `localToGlobal` / spike `testPoint` | Flash's twip truncation and rounding (plain spikes: 16,000 + 26,040 + 30,000 cases) |
 | turned/scaled spikes (E11) | 390,665 / 390,670 (the 5 others flagged as uncertain) |
 | turned Level 11 flag (E12) | 148,074 / 148,074 |
-| placements and bounds (E9a/E10) | every level: all placements, every hit-test target exact |
+| placements and bounds (E9a/E10) | every dumped level (5, 8-17): all placements and every hit-test target exact; a few nested scaled walls that are never hit-tested are 1 twip off (Flash's rounding of nested rotated+scaled bounds is not modelled) |
 
 An older custom ActiveX host (Flash 11.5) has different `sin`/`cos` (1 ulp on ~3.5% of inputs): never
 use logs from it.
