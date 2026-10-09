@@ -2,8 +2,10 @@
 
 ## Route viewer: `rbview.exe` (no command line)
 
-**Download `rbview.exe` and double-click it.** It is one file: no installer, nothing else to
-install, no command prompt. It plays a route through the bit-exact simulator and draws the level,
+**[Download `rbview.exe`](https://github.com/Theme25/project-unnamed/releases/latest/download/rbview.exe)
+and double-click it.** It is one file: no installer, nothing else to install, no command prompt.
+If Windows says "Windows protected your PC" (the exe is not signed), click **More info**, then
+**Run anyway**. It plays a route through the bit-exact simulator and draws the level,
 the moving parts, spikes, checkpoints, switches, the flag and the ball, with the game's camera.
 
 1. **Level** and **Start from** (the start or a checkpoint), **Glitchless** if the route is
