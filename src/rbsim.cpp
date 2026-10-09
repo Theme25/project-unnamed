@@ -799,6 +799,45 @@ static int CmdTest() {
         check(s11->aimBody >= 0 && g0.x0 == t11.aim->x0 && g0.y0 == t11.aim->y0 && (g1.x0 != g0.x0 || g1.y0 != g0.y0),
               "level 11: levelAim follows its dynamic body (hit box starts at the placement, then moves)");
     }
+    // 18c. Turned/scaled spikes: boundary rows of the E11 sweeps (rb1_calib_L9/10/11/15/17.tsv; the next grid point flips)
+    {
+        struct Row { int level; double tx, ty; const char *rot, *x, *y; bool hit; };
+        const Row rows[] = {
+            {10, 1847.65, -300.15, "0000000000000000", "409ce4999999999a", "c073c0cccccccccd", true},
+            {10, 1015.15, -307.4, "4042a66666666666", "408fee0000000000", "c07301999999999a", true},
+            {10, 1835.2, -290.1, "0000000000000000", "409cc4999999999a", "c072326666666666", false},
+            {10, 1050.4, -287.4, "0000000000000000", "4090323333333333", "c0728e6666666666", true},
+            {15, 1605.65, 412.25, "0000000000000000", "409946999999999a", "40797e6666666666", false},
+            {15, 1601.45, 412.85, "0000000000000000", "4098ff6666666666", "407a366666666666", true},
+            {15, 1629.95, 406.35, "4042a66666666666", "4099830000000000", "4078c33333333333", false},
+            {15, 1601.45, 412.85, "4042a66666666666", "4099203333333333", "407a15999999999a", true},
+            {17, 1455.55, 431.95, "4042a66666666666", "4096c53333333333", "407b18cccccccccd", true},
+            {17, 1455.55, 431.95, "0000000000000000", "4096ae3333333333", "407b680000000000", false},
+            {17, 1455.55, 431.95, "0000000000000000", "4096efcccccccccd", "407b39999999999a", false},
+            {9, -1140.65, -239.7, "0000000000000000", "c091da0000000000", "c06fdccccccccccd", true},
+            {9, -1140.65, -239.7, "0000000000000000", "c091b5cccccccccd", "c06dd00000000000", true},
+            {11, -317.45, -248.85, "4042a66666666666", "c073c9999999999a", "c06eb00000000000", true},
+            {11, -317.45, -248.85, "4042a66666666666", "c073f80000000000", "c070933333333333", true},
+        };
+        auto hx = [](const char* h) {
+            const uint64_t u = std::strtoull(h, nullptr, 16);
+            double d;
+            std::memcpy(&d, &u, 8);
+            return d;
+        };
+        int ok = 0, n = 0;
+        for (const Row& r : rows) {
+            LevelTemplate t(r.level);
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);  // the sweep runs right after SetLevel: camera centred on checkpoint 0
+            const SpikeObj* sp = nullptr;
+            for (int32_t i = 0; i < t.spikeCount; ++i)
+                if (std::fabs(t.spikes[i].tx - r.tx) < 1e-6 && std::fabs(t.spikes[i].ty - r.ty) < 1e-6) sp = &t.spikes[i];
+            ++n;
+            if (sp && BallHitsSpike(hx(r.x), hx(r.y), hx(r.rot), 0, 0, *sp, s->camX, s->camY).hit == r.hit) ++ok;
+        }
+        check(ok == n, "turned/scaled spikes: 15 boundary rows of the Flash E11 sweeps reproduced");
+    }
     // 19. Compact snapshots (src/snapshot.h): byte-exact round trip, identical continuation, portable base
     {
         struct R { int lv; const char* in; };

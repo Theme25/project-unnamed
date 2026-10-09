@@ -57,11 +57,15 @@ bool RectsHit(const Rect& a, const Rect& b);
 // (10.5 px radius, through the ball's display matrix). Each point, in Level space, must lie in the
 // Shipik's getBounds rectangle; then it is shifted by -dp (the camera step of this frame) and tested
 // strictly against the triangle (0,0) (3,-9.65) (6,0), with Flash's twip conversions reproduced exactly
-// (docs/STATS_LOGGING.md 3.8). Rotated/scaled Shipiks (later levels) are not calibrated yet: decisions
-// within SPIKE_EDGE_MARGIN twips of an edge there are counted in Sim::displayUncertain.
-constexpr double SPIKE_EDGE_MARGIN = 1.0;
+// (docs/STATS_LOGGING.md 3.8). Turned/scaled Shipiks (docs/STATS_LOGGING.md 3.11, E11 sweep): Flash's
+// globalToLocal works in screen twips (camera included): double inverse of the spike's matrix, inverse translation
+// rounded to a twip, local point rounded to a twip; 390,665 of 390,670 sweep rows agree, the other 5 lie within
+// 0.003 twip of a half-twip, so decisions within SPIKE_HALF_TWIP_MARGIN of one count in Sim::displayUncertain.
+// camXpx/camYpx = Level.x/y (px) at the time of the test (only turned/scaled spikes depend on it).
+constexpr double SPIKE_HALF_TWIP_MARGIN = 0.005;  // twips
 struct SpikeResult { bool hit; bool uncertain; };
-SpikeResult BallHitsSpike(double spriteXpx, double spriteYpx, double rotationDeg, double dpx, double dpy, const SpikeObj& s);
+SpikeResult BallHitsSpike(double spriteXpx, double spriteYpx, double rotationDeg, double dpx, double dpy, const SpikeObj& s,
+                          double camXpx = 0, double camYpx = 0);
 
 // Real-game timers (not in the TAS hack; teammate data, 31 fps): after a death the game respawns 1.2 s later
 // and after the flag it enters the next level 2.839 s later; both timers run while paused, the actions only

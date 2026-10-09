@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
             double x = s->spriteX[s->playerBody], y = s->spriteY[s->playerBody];
             int sp = -1;
             for (int i = 0; i < t.spikeCount; i++) {
-                auto r = BallHitsSpike(x, y, s->spriteRotW[s->playerBody], s->dpX, s->dpY, t.spikes[i]);
+                auto r = BallHitsSpike(x, y, s->spriteRotW[s->playerBody], s->dpX, s->dpY, t.spikes[i], s->camX, s->camY);
                 if (r.hit) { sp = i; break; }
             }
             std::printf("death at frame %d, sprite (%.2f, %.2f), spike index %d", s->deathFrame, x, y, sp);

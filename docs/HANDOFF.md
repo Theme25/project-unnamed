@@ -41,14 +41,14 @@ recorded in README.md ("Verification status") and below.
 |---|---|
 | physics core | bit-exact (Box2DFlash quirks replicated; Intel LIBM `sin`/`cos`) |
 | levels **1-17 (all)** | **bit-exact** against Flash logs (81 logs, 97,966 frames; table in README) |
-| open details | turned/scaled spikes and the turned-flag box rounding: modelled, every logged decision matched, not calibrated by a sweep |
+| turned spikes / turned flag | calibrated by the E11/E12 sweeps (390,665 / 390,670 and 148,074 / 148,074; the 5 spike rows within 0.003 twip of a half-twip are flagged as uncertain) |
 | display layer | exact: rotation matrix, hit tests, camera, standardized spikes (section 6) |
 | death / death warp | exact: ball body destroyed, full `Update` keeps running (world, machinery), unguarded goal/checkpoint/switch tests; 5 logged warps verified (incl. L9 death 358 / flag 359, L11 onto the moving flag 1110 / 1117). Debris (random) not simulated |
 | Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical |
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-Self-tests: `./rbsim test` → 85 tests, `ALL PASSED` (also under Wine).
+Self-tests: `./rbsim test` → 86 tests, `ALL PASSED` (also under Wine).
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
@@ -223,7 +223,7 @@ rotations are now Flash's (66.776199340820312, -25.733810424804688; `atan2` was 
 post-death frames): idle spike death at 130, spike/kill-roll-ball/boom-crank deaths, green switch,
 checkpoint-3 R and win at 224, a death-warp win (death 358 on `boomCrank`, flag 359). Not exercised: the
 fall death, checkpoints 1/2 as restart points. Its rotated spike rows are modelled by a continuous inverse
-transform (uncalibrated); every logged spike decision matched and none was near an edge (`verify` now
+transform (uncalibrated then; since calibrated by the E11 sweep, item 5 below); every logged spike decision matched and none was near an edge (`verify` now
 prints that count). The mod's `flags` bit 9 never fires on Level 9: its switches are named
 `greenCheck1-3`, not `greenCheck` (the platform disappearing in the extra-body columns shows the press).
 
@@ -232,7 +232,7 @@ off: nested scaled sprites, not hit-tested); `afterJump` rotation is Flash's -17
 `rb1_stats10.1-4`: 20 segments, 6,241 frames bit-exact: idle, fall deaths (also from checkpoint 1 after R),
 `roundBlock` death 171, TAS win 394. No log touches `afterJump`, `cube1/2`, `jumpPlatform3` or checkpoints 2/3
 (same calibrated data and mechanics as the logged parts), and none dies on a spike. Open: the 13 rotated and
-scaled spikes at the two ends of the finish pit (x 1015-1050, 1820-1850) are uncalibrated; the TAS passes
+scaled spikes at the two ends of the finish pit (x 1015-1050, 1820-1850) were uncalibrated (since: E11, item 5); the TAS passes
 15 px from one. `make deathcause && tools/deathcause <level> <RLE> [cp]` replays inputs and prints each
 death cause (contacts or spike row) or the win.
 
@@ -267,7 +267,7 @@ moment of death (`g_playerDieHook`, a debug hook outside the simulated state).
 `killLine`, so the shifted-static-box model holds). Logs `rb1_stats15.1-4`: 14 segments, 3,573 frames bit-exact:
 idle, `killLine` deaths after R from checkpoint 2 (level built without `luk`), the red switch (gate rebuilt as a
 hinged dynamic door), two wins (204, 464). Open: all 44 spike rows are turned and scaled (~0.71 x 0.6) and
-uncalibrated; the winning runs cross their bounds on 70 frames with no near-edge decision, but no log dies on one.
+uncalibrated then (since: E11, item 5); the winning runs cross their bounds on 70 frames with no near-edge decision.
 
 **Level 16: VERIFIED (no simulation change).** `rb1_calib_L16.tsv`: 23/23 placements and boxes exact; `axe1`
 rotation is Flash's -72.02842712402344 (`wrongWay` 5.5239105224609375 recorded too). Logs `rb1_stats16.1-5`: 16
@@ -291,10 +291,15 @@ win 338. Not logged: `movePlatform2` (direction starts at 0, reproduced).
 3. `kTimelineRotations` now holds Flash's measured value for every rotated body clip (no provisional entries).
 4. Spike calibration for rotated/scaled Shipik rows (Level 17 and the turned/scaled rows of 9, 10, 11, 15; the E8c method of
    docs/STATS_LOGGING.md).
-5. The two open calibrations have ready tooling: `docs/mod_sweeps.as` (E11 turned/scaled spike sweep, E12 Level 11
-   turned-flag sweep; docs/STATS_LOGGING.md 3.11) and their checks in `rbsim calib`. Waiting for the user to run
-   them on Levels 9, 10, 11, 15, 17. If E11 disagrees: the spike model is `BallHitsSpike`'s non-`plain` branch
-   (continuous inverse); if E12 disagrees: `AimBox`/`AimRound` in `Sim::GoalTarget`.
+5. **E11/E12 sweeps done** (`docs/mod_sweeps.as`, `rbsim calib`, dumps `rb1_calib_L9/10/11/15/17.tsv` with sweeps):
+   - E12 (Level 11 flag, 8 angles): 148,074 / 148,074 with the per-part box and round-to-nearest corners (1,113
+     decisions where floor/truncation differ), so `GoalTarget` no longer flags anything as uncertain.
+   - E11 (turned/scaled spikes): the continuous inverse was wrong on 1,469 of 390,670 rows. Fitted model
+     (`tools`-free, see `BallHitsSpike`): screen twips (Level.x/y added: the camera matters, 1,315 misses without
+     it; a 1-twip camera error gives ~550), double inverse of the matrix, inverse translation rounded to a twip,
+     local point rounded to a twip: 390,665 agree. The 5 others are within 0.003 twip of a half-twip (not float32:
+     every float/double mix was tried); decisions within 0.005 twip of one count in `displayUncertain`.
+     `BallHitsSpike` now takes the camera (`Sim::camX/camY`).
 
 Every idle prediction made before the logs arrived (Levels 9, 10, 11, 13, 15, 16, 17) matched Flash.
 
@@ -306,7 +311,7 @@ proofs; physics profiling for contact-heavy levels (must stay bit-exact).
 
 ```bash
 git clone https://github.com/Theme25/project-unnamed.git && cd project-unnamed
-make && ./rbsim test                  # expect ALL PASSED (85)
+make && ./rbsim test                  # expect ALL PASSED (86)
 
 # Windows cross build + Wine (to check the Windows build)
 mv /etc/apt/sources.list.d/nodesource* /tmp/ 2>/dev/null   # a broken repo blocks apt-get update

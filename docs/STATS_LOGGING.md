@@ -443,8 +443,12 @@ see README "Level status"):
 
 The AS3 is in `docs/mod_sweeps.as` (paste into Game.as, two calls added to `dbgLevelCalib`). Run the level
 calibration key on Levels 9, 10, 11, 15 and 17. `rbsim calib` checks every row (`E11`/`E12` lines in its
-output); expected sizes 1-9 MB per level. The checker was tested on synthetic dumps written by the sim
-itself (all spikes found, 100% agreement); real Flash data is the actual test.
+output); expected sizes 1-9 MB per level.
+
+**Results (FP 11.4):** E12 148,074 / 148,074 (per-part box, round-to-nearest corners). E11 390,665 / 390,670
+after fitting: `globalToLocal` into a turned spike uses screen twips (camera included), a double inverse, the
+inverse translation and the result rounded to whole twips; the 5 others lie within 0.003 twip of a half-twip and
+are flagged by the sim as uncertain.
 
 ## 4. Where to hook in
 

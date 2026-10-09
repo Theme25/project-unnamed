@@ -110,31 +110,7 @@ static bool ShipikPointInTriangle(double x, double y) {
     const bool d3 = ShipikSign(x, y, w, 0, 0, 0);
     return d1 == d2 && d2 == d3;
 }
-// distance (px) from (x,y) to the triangle's boundary, for the uncertainty margin
-static double ShipikEdgeDistance(double x, double y) {
-    const double ax[3] = {0, 3, 6}, ay[3] = {0, -9.65, 0};
-    double best = 1e300;
-    for (int e = 0; e < 3; ++e) {
-        const double x0 = ax[e], y0 = ay[e], x1 = ax[(e + 1) % 3], y1 = ay[(e + 1) % 3];
-        const double dx = x1 - x0, dy = y1 - y0, L2 = dx * dx + dy * dy;
-        double t = ((x - x0) * dx + (y - y0) * dy) / L2;
-        t = t < 0 ? 0 : (t > 1 ? 1 : t);
-        const double ex = x - (x0 + t * dx), ey = y - (y0 + t * dy);
-        best = std::fmin(best, std::sqrt(ex * ex + ey * ey));  // sqrt is exact everywhere; hypot is not
-    }
-    return best;
-}
-
-// Standardized spike check, calibrated in docs/STATS_LOGGING.md 3.8 (FP 11.4, rb1_calib_mathspikes.tsv):
-//  - localToGlobal truncates the point to twips, applies the 16.16 display matrix and rounds to the nearest
-//    twip (E8a 16,000/16,000); globalToLocal for pure translations is exact twip subtraction;
-//  - Shipik.testPoint: Level point (twips / 20) in getBounds(Level) (doubles, left/top inclusive), minus
-//    cover.x/y (= dp through the DisplayObject setter, i.e. truncated to twips), L.localToGlobal truncates to
-//    twips, S.globalToLocal subtracts the Shipik origin, strict sign test (E8b 26,040/26,040);
-//  - whole HitTestObjectControlPoints: E8c 30,000/30,000.
-// Only translated Shipiks are calibrated; rotated/scaled ones (later levels) use exact doubles and count
-// decisions within SPIKE_EDGE_MARGIN twips of an edge as uncertain.
-SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s) {
+SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s, double camXpx, double camYpx) {
     const double bx0 = s.bx0 / 20.0, by0 = s.by0 / 20.0, bw = (s.bx1 - s.bx0) / 20.0, bh = (s.by1 - s.by0) / 20.0;
     if (sx + 11 < bx0 || sx - 11 > bx0 + bw || sy + 11 < by0 || sy - 11 > by0 + bh) return {false, false};
     const int64_t X = std::llround(sx * 20), Y = std::llround(sy * 20);  // sprite x/y: whole twips
@@ -164,11 +140,22 @@ SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, doubl
             ux = (double)((id * vx - ic * vy) * idet) / 20.0;  // inverse of a 0/+-1 matrix = adjugate * det
             uy = (double)((-ib * vx + ia * vy) * idet) / 20.0;
         } else {
+            // this.globalToLocal(global point): screen twips (Level.x/y added), inverse of the concatenated matrix in
+            // doubles, inverse translation rounded to a twip, result rounded to a twip (E11: 390,665 / 390,670).
+            const double cx = std::llround(camXpx * 20), cy = std::llround(camYpx * 20);
             const double det = s.a * s.d - s.b * s.c;
-            const double vx = tx / 20.0 - s.tx, vy = ty / 20.0 - s.ty;
-            ux = (s.d * vx - s.c * vy) / det;
-            uy = (-s.b * vx + s.a * vy) / det;
-            if (ShipikEdgeDistance(ux, uy) < SPIKE_EDGE_MARGIN / 20.0) uncertain = true;
+            const double ia = s.d / det, ib = -s.b / det, ic = -s.c / det, id = s.a / det;
+            const double TX = std::llround(s.tx * 20) + cx, TY = std::llround(s.ty * 20) + cy;
+            const double GX = (double)tx + cx, GY = (double)ty + cy;
+            const double itx = std::floor(-(ia * TX + ic * TY) + 0.5), ity = std::floor(-(ib * TX + id * TY) + 0.5);
+            const double lx = ia * GX + ic * GY + itx, ly = ib * GX + id * GY + ity;
+            ux = std::floor(lx + 0.5) / 20;
+            uy = std::floor(ly + 0.5) / 20;
+            // a local coordinate this close to a half twip could round the other way in Flash
+            const double m = SPIKE_HALF_TWIP_MARGIN;
+            for (const double ax : {std::floor(lx + 0.5 - m), std::floor(lx + 0.5 + m)})
+                for (const double ay : {std::floor(ly + 0.5 - m), std::floor(ly + 0.5 + m)})
+                    if (ShipikPointInTriangle(ax / 20, ay / 20) != ShipikPointInTriangle(ux, uy)) uncertain = true;
         }
         if (ShipikPointInTriangle(ux, uy)) hit = true;
     }
@@ -1857,8 +1844,8 @@ double Sim::TargetOverlap(const DisplayObj& o) const {
 // sprite transforms EACH CHILD's box separately and unions the results (not the rotated union box): the levelAim
 // symbol (68) holds the pole (shape 65) and the flag cloth (morph 64 at ratio 0, startBounds). Fitted on the Level 11
 // logs: 11 near-contact frames with the flag turned -4.3..49 degrees, all agree; the rotated-union model got 10 wrong.
-// Corner rounding (16.16 product -> twips) is taken as round-to-nearest like the ball's box; the logs cannot tell
-// it from floor/truncation, so a decision those modes would flip counts in displayUncertain.
+// Corner rounding (16.16 product -> twips) is round-to-nearest: the E12 sweep (rb1_calib_L11.tsv, 148,074 decisions with
+// the flag turned to 8 angles) agrees on all of them, including 1,113 where floor or truncation would differ.
 static const int64_t kAimChildren[2][4] = {{-20, -184, 106, 626}, {78, 71, 282, 255}};  // twips, clip space
 static int64_t AimRound(int64_t v, int mode) {
     if (mode == 0) return (v + 32768) >> 16;
@@ -1889,16 +1876,6 @@ DisplayObj Sim::GoalTarget() {
     const int64_t tx = std::llround(spriteX[aimBody] * 20), ty = std::llround(spriteY[aimBody] * 20);
     const FlashMatrix m = FlashRotationMatrix(spriteRotW[aimBody]);
     o = AimBox(o, tx, ty, m, 0);
-    if (m.b != 0 || m.a != 65536) {
-        const Rect ball = BallBounds(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], 0);
-        const double ox = playerAlive ? 0 : camX * 20, oy = playerAlive ? 0 : camY * 20;
-        bool h[3];
-        for (int mode = 0; mode < 3; ++mode) {
-            const DisplayObj c = AimBox(o, tx, ty, m, mode);
-            h[mode] = RectsHit(ball, Rect{c.x0 + ox, c.y0 + oy, c.x1 + ox, c.y1 + oy});
-        }
-        if (h[0] != h[1] || h[0] != h[2]) ++displayUncertain;
-    }
     return o;
 }
 
@@ -1914,7 +1891,7 @@ void Sim::DisplayUpdate() {
     // Spikes: any Shipik/Ships10 hit by a control point kills a live ball (PlayerDie is guarded here).
     if (playerAlive) {
         for (int32_t i = 0; i < tpl->spikeCount; ++i) {
-            const SpikeResult r = BallHitsSpike(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], dpX, dpY, tpl->spikes[i]);
+            const SpikeResult r = BallHitsSpike(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], dpX, dpY, tpl->spikes[i], camX, camY);
             if (r.uncertain) ++displayUncertain;
             if (r.hit) {
                 PlayerDie();
