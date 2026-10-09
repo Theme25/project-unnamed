@@ -725,30 +725,39 @@ static int CmdTest() {
             check(death == c.death && s->winFrame == c.win && (int)s->staticFlag[2] == c.strelka && s->displayUncertain == 0, c.name);
         }
     }
-    // 18b. Level 17: scripted from the AS3, NOT yet checked against Flash logs
+    // 18a-17. Level 17 against its Flash logs (rb1_stats17.1-4, all bit-exact)
     {
-        bool idleOk = true, detOk = true;
-        for (int lv : {17}) {
-            LevelTemplate t(lv);
-            auto a = std::make_unique<Sim>(), b = std::make_unique<Sim>(), c = std::make_unique<Sim>();
-            a->Load(&t);
-            b->Load(&t);
-            c->Load(&t);
-            for (int f = 0; f < 600; ++f) {
-                a->Tick(IN_NONE);
-                const uint8_t in = f % 90 < 45 ? IN_R : IN_NONE;  // a wandering run (may die: only determinism is checked)
-                b->Tick(in);
-                c->Tick(in);
+        LevelTemplate t(17);
+        struct C { const char* in; int death, win; const char* name; };
+        const C cases[] = {
+            {"n100", 78, -1, "level 17 idle (rb1_stats17.1): rolls off the crown, fall death at frame 78"},
+            {"e21d18e44d62e3d7n57", 155, -1, "level 17 (rb1_stats17.2): killStarPart death at frame 155"},
+            {"e21d18e44d62e75d19e2d60R1d15e1d31a1d10n48", 359, -1, "level 17 (rb1_stats17.3): R from checkpoint 1, death on the 15-degree spike row at 359"},
+            {"n1d5e1d12e1d3n8a1n2d6e1d2w1d2e1d35e2d22e8d15e13d54a1d16e10d11e14d1e33d1e3d10e1n41", -1, 338, "level 17 TAS (rb1_stats17.4): flag at frame 338"},
+        };
+        for (const C& c : cases) {
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);
+            int death = -1;
+            for (uint8_t k : DecodeInputs(c.in)) {
+                if (k == IN_RESTART) {
+                    s->Restart();
+                    continue;
+                }
+                s->Tick(k);
+                if (s->deathFrame >= 0 && death < 0) death = s->frameCount;
+                if (s->isTimeStop) break;
             }
-            const FrameStats x = a->Stats(0), y = b->Stats(0), z = c->Stats(0);
-            // Informational only (no Flash log yet): an idle ball dies on level 17 (it rolls off the crown it
-            // starts on).
-            if (!a->playerAlive) std::printf("       note: level %d idle ball dies at frame %d (unverified)\n", lv, a->deathFrame);
-            if (!std::isfinite(x.px) || !std::isfinite(x.py) || !std::isfinite(y.px) || !std::isfinite(y.py)) idleOk = false;
-            if (std::memcmp(&y.px, &z.px, 8) || std::memcmp(&y.py, &z.py, 8) || y.contactCount != z.contactCount) detOk = false;
+            check(death == c.death && s->winFrame == c.win && s->displayUncertain == 0, c.name);
         }
-        check(idleOk, "level 17: 600 idle ticks run, positions finite");
-        check(detOk, "level 17: two runs are bit-identical");
+    }
+    // 18b. AS3 quirks of the later levels (all levels now verified against Flash logs)
+    {
+        // Level 17: movePlatform1 direction is set twice (ends -1); movePlatform2's direction starts 0
+        LevelTemplate t17(17);
+        auto s17 = std::make_unique<Sim>();
+        s17->Load(&t17);
+        check(s17->lvInt[0] == -1 && s17->lvInt[1] == 0, "level 17: movePlatform1 direction -1 (set twice), movePlatform2 direction 0 (uninitialised)");
 
         // field initialisers: Level 9 killRollBallDirection = 1 (Flash: spin 5 from tick 1); Level 16 roll balls 1 / -1
         LevelTemplate t9(9);
@@ -760,12 +769,6 @@ static int CmdTest() {
         s16->Load(&t16);
         check(s9->lvInt[1] == 1 && s9->world.bodies[s9->lvBody[2]].angularVelocity == 5 && s16->lvInt[2] == 1 && s16->lvInt[3] == -1,
               "level 9 / 16: roll-ball directions start at their field initialisers (9: 1; 16: 1, -1)");
-
-        // Level 17: movePlatform1 direction is set twice (ends -1); movePlatform2's direction starts 0
-        LevelTemplate t17(17);
-        auto s17 = std::make_unique<Sim>();
-        s17->Load(&t17);
-        check(s17->lvInt[0] == -1 && s17->lvInt[1] == 0, "level 17: movePlatform1 direction -1 (set twice), movePlatform2 direction 0 (uninitialised)");
 
         // Level 13 greenCheckLevel is static: the barrier is not built after a checkpoint restart, back after a fresh load
         LevelTemplate t13(13);

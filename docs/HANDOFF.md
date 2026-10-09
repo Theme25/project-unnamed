@@ -40,15 +40,15 @@ recorded in README.md ("Verification status") and below.
 | area | status |
 |---|---|
 | physics core | bit-exact (Box2DFlash quirks replicated; Intel LIBM `sin`/`cos`) |
-| levels **1-16** | **bit-exact** against Flash logs (77 logs, 90,273 frames; table in README) |
-| level 17 | **scripted from the AS3, NOT verified** (no Flash logs yet; `rbsim` warns when one is used; section 8) |
+| levels **1-17 (all)** | **bit-exact** against Flash logs (81 logs, 97,966 frames; table in README) |
+| open details | turned/scaled spikes and the turned-flag box rounding: modelled, every logged decision matched, not calibrated by a sweep |
 | display layer | exact: rotation matrix, hit tests, camera, standardized spikes (section 6) |
 | death / death warp | exact: ball body destroyed, full `Update` keeps running (world, machinery), unguarded goal/checkpoint/switch tests; 5 logged warps verified (incl. L9 death 358 / flag 359, L11 onto the moving flag 1110 / 1117). Debris (random) not simulated |
 | Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical |
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-Self-tests: `./rbsim test` → 83 tests, `ALL PASSED` (also under Wine).
+Self-tests: `./rbsim test` → 85 tests, `ALL PASSED` (also under Wine).
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
@@ -202,8 +202,8 @@ search grows ~2x per frame even with merging (prototype: last 16 frames of L8 ~2
 
 ## 8. Next steps
 
-The bruteforcer (beam/optimize work in section 7) is now someone else's task; this chat line is about
-**finishing the simulator on every level**.
+The bruteforcer (beam/optimize work in section 7) is someone else's task. **The simulator is finished: all 17
+levels are bit-exact against Flash logs.** What follows records how the last seven got there.
 
 **Scripted from the AS3 (chat before last):** levels 9, 10, 11, 13, 15, 16, 17 (`Level_N.as` of the
 Practice Hack SWF). Bodies and joints in AS3 order; polygons from `src/level_polys.h`. `LevelVerified()` /
@@ -280,20 +280,21 @@ segments with isGless off, then 2 with it on): `verify` now detects isGless per 
 with it on while the camera moves) and takes `--gless 0|1` to force it. Not logged: blue switches, `axe1` and
 `killRollBall2` deaths.
 
-**To verify: Level 17.**
-1. The user records the standard set (docs/STATS_LOGGING.md 6.0: idle, each death kind, checkpoint-1
-   restart, a win) plus an E9level/E9a/E10 dump; Level 11 also needs a run that pushes the flag.
-2. `./rbsim verify <log>` (`diverged: 0`) and `./rbsim calib <dump>` (`CALIB OK`).
-3. Replace the provisional entries of `kTimelineRotations` (measured = false; `atan2` of the placement
-   matrix) with the E9a values (static and dynamic clips alike: E9a reports every clip's rotation;
-   none left except Level 17's, if any).
+**Level 17: VERIFIED (no simulation change).** `rb1_calib_L17.tsv`: 12/12 placements, 11/11 boxes exact (`kingLogo`
+is a click target with empty bounds, skipped). Logs `rb1_stats17.1-4`: 25 segments, 7,693 frames bit-exact: idle
+fall death 78, `killStarPart` death 155, spike deaths on the 15-degree row (five, after R from checkpoint 1), TAS
+win 338. Not logged: `movePlatform2` (direction starts at 0, reproduced).
+
+**If anything is reopened later** (for a route that depends on it):
+1. Record the case with the mod (docs/STATS_LOGGING.md 6.0) and run `./rbsim verify <log>`.
+2. `./rbsim calib <dump>` for any new placement question.
+3. `kTimelineRotations` now holds Flash's measured value for every rotated body clip (no provisional entries).
 4. Spike calibration for rotated/scaled Shipik rows (Level 17 and the turned/scaled rows of 9, 10, 11, 15; the E8c method of
    docs/STATS_LOGGING.md).
-5. When a level is verified: add it to `LevelVerified()`, move it in the README tables, add its logs'
-   numbers to "Verification status".
+5. The most useful open calibrations: a turned/scaled Shipik sweep (E8c on e.g. Level 17's 15-degree row or Level
+   15's scaled rows), and near-edge flag contacts on Level 11 (corner rounding of the turned flag's box).
 
-Observed (unverified) idle behaviour, a first comparison: with no input the ball dies on Level 17 (78, rolls
-off the crown); (The Level 9, 10, 11, 13, 15 and 16 predictions matched Flash.)
+Every idle prediction made before the logs arrived (Levels 9, 10, 11, 13, 15, 16, 17) matched Flash.
 
 **Search-side next steps** (for whoever takes the bruteforcer): better beam score (moving platforms /
 timing, calibrate with `--explain` against L2 186, L4 274, L8 405); exhaustive window proofs and endgame
@@ -303,7 +304,7 @@ proofs; physics profiling for contact-heavy levels (must stay bit-exact).
 
 ```bash
 git clone https://github.com/Theme25/project-unnamed.git && cd project-unnamed
-make && ./rbsim test                  # expect ALL PASSED (83)
+make && ./rbsim test                  # expect ALL PASSED (85)
 
 # Windows cross build + Wine (to check the Windows build)
 mv /etc/apt/sources.list.d/nodesource* /tmp/ 2>/dev/null   # a broken repo blocks apt-get update
