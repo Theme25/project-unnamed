@@ -263,7 +263,7 @@ static const TimelineRotation kTimelineRotations[] = {
     {11, "koleso_10_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
     {11, "koleso_11_1", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
     {11, "koleso_11_2", 0x3fc6450000000000ULL, true},  // rb1_calib_L11.tsv E9a: 0.173980712890625 (whole train line)
-    {13, "kingStar1", 0xc02a43c2b50393aeULL, false},  // provisional atan2 = -13.132344872175818
+    {13, "kingStar1", 0xc02a43e200000000ULL, true},  // rb1_calib_L13.tsv E9a: -13.132583618164062
     {16, "axe1", 0xc05201d69b7c0003ULL, false},  // provisional atan2 = -72.0287235938013
 };
 bool LookupTimelineRotation(int32_t level, const char* name, double& out, bool* measured) {
@@ -363,12 +363,14 @@ int32_t Sim::CreateCircleBody(const char* name, double density, double friction,
     return b;
 }
 
+void (*g_playerDieHook)(const Sim&) = nullptr;
 void Sim::PlayerDie() {
     // Level.PlayerDie: OutControl(); 8 debris bodies (playerDiePart0-7, positions from Math.random(): NOT simulated);
     // playerBox.Kill() -> m_world.DestroyBody(ball) and the ball leaves the display list (its sprite stays frozen).
     // The level keeps running its full Update afterwards (world step, moving parts, Level_N.Update), see Sim::Tick.
     if (!playerAlive) return;
     deathFrame = frameCount + 1;  // this Update's frame
+    if (g_playerDieHook) g_playerDieHook(*this);
     playerAlive = false;
     world.DestroyBody(playerBody);
 }
@@ -1582,7 +1584,7 @@ int32_t Sim::LoggedFlags() const {
 }
 
 bool LevelVerified(int32_t id) {
-    static const int32_t verified[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14};
+    static const int32_t verified[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14};
     for (int32_t v : verified)
         if (v == id) return true;
     return false;

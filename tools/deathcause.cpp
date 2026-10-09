@@ -4,8 +4,16 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <string>
 using namespace rb;
+static std::string g_contacts;
+static void OnDie(const Sim& s) {
+    g_contacts.clear();
+    for (int i = 0; i < s.world.listener.count; i++) g_contacts += " " + s.BodyName(s.world.listener.bodies[i]);
+    if (s.spriteY[s.playerBody] > 0 && g_contacts.empty()) g_contacts = " (none)";
+}
 int main(int argc, char** argv) {
+    g_playerDieHook = OnDie;
     int lv = atoi(argv[1]);
     LevelTemplate t(lv);
     auto s = std::make_unique<Sim>();
@@ -27,9 +35,7 @@ int main(int argc, char** argv) {
                 auto& S = t.spikes[sp];
                 std::printf(" (matrix a=%.4f b=%.4f c=%.4f d=%.4f at %.2f,%.2f)", S.a, S.b, S.c, S.d, S.tx, S.ty);
             }
-            std::printf(", contacts:");
-            for (int i = 0; i < s->world.listener.count; i++) std::printf(" %s", s->BodyName(s->world.listener.bodies[i]).c_str());
-            std::printf("\n");
+            std::printf(", contacts at death:%s\n", g_contacts.c_str());
         }
         if (s->isTimeStop) { std::printf("win at frame %d\n", s->winFrame); break; }
     }

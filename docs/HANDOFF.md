@@ -40,15 +40,15 @@ recorded in README.md ("Verification status") and below.
 | area | status |
 |---|---|
 | physics core | bit-exact (Box2DFlash quirks replicated; Intel LIBM `sin`/`cos`) |
-| levels **1-12, 14** | **bit-exact** against Flash logs (64 logs, 78,264 frames; table in README) |
-| levels 13, 15, 16, 17 | **scripted from the AS3, NOT verified** (no Flash logs yet; `rbsim` warns when one is used; section 8) |
+| levels **1-14** | **bit-exact** against Flash logs (68 logs, 82,286 frames; table in README) |
+| levels 15, 16, 17 | **scripted from the AS3, NOT verified** (no Flash logs yet; `rbsim` warns when one is used; section 8) |
 | display layer | exact: rotation matrix, hit tests, camera, standardized spikes (section 6) |
 | death / death warp | exact: ball body destroyed, full `Update` keeps running (world, machinery), unguarded goal/checkpoint/switch tests; 5 logged warps verified (incl. L9 death 358 / flag 359, L11 onto the moving flag 1110 / 1117). Debris (random) not simulated |
 | Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical |
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-Self-tests: `./rbsim test` → 72 tests, `ALL PASSED` (also under Wine).
+Self-tests: `./rbsim test` → 76 tests, `ALL PASSED` (also under Wine).
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
@@ -257,13 +257,20 @@ Two engine changes came out of it:
 holds a shape plus a TextField ("Wrong way!"); `tools/gen_display_data.py` skips TextFields, so its stored box is
 probably wrong even before the per-part question. Use its E10 row and the logs (any run through it) to fix it.
 
-**To verify (per level: 13, 15, 16, 17):**
+**Level 13: VERIFIED.** `rb1_calib_L13.tsv`: 17/17 placements and boxes exact; `kingStar1` rotation is Flash's
+-13.132583618164062. Logs `rb1_stats13.1-4`: 12 segments, 4,022 frames bit-exact: idle death at 145 (the loose
+`kingStar1` rolls into the ball), `kingStar1` and `killStar2` deaths, R from checkpoints 1 and 2, two wins (481 and
+850 in `Game.frameCount`, counting across R). Not logged: the green switch / `greenCheckLevel` (same code path as
+Level 7's verified red switch), the fall death, `killStar1`. `tools/deathcause` now prints the contacts at the
+moment of death (`g_playerDieHook`, a debug hook outside the simulated state).
+
+**To verify (per level: 15, 16, 17):**
 1. The user records the standard set (docs/STATS_LOGGING.md 6.0: idle, each death kind, checkpoint-1
    restart, a win) plus an E9level/E9a/E10 dump; Level 11 also needs a run that pushes the flag.
 2. `./rbsim verify <log>` (`diverged: 0`) and `./rbsim calib <dump>` (`CALIB OK`).
 3. Replace the provisional entries of `kTimelineRotations` (measured = false; `atan2` of the placement
    matrix) with the E9a values (static and dynamic clips alike: E9a reports every clip's rotation;
-   Level 13 `kingStar1`, Level 16 `axe1`).
+   Level 16 `axe1`).
 4. Spike calibration for rotated/scaled Shipik rows (Levels 17, 15 and the turned rows of 9, 10, 11; the E8c method of
    docs/STATS_LOGGING.md), `wrongWay` (Level 16).
 5. Known simplification to check against logs: Level 15 `killLine` is modelled as its static box
@@ -271,9 +278,8 @@ probably wrong even before the per-part question. Use its E10 row and the logs (
 6. When a level is verified: add it to `LevelVerified()`, move it in the README tables, add its logs'
    numbers to "Verification status".
 
-Observed (unverified) idle behaviour, a first comparison: with no input the ball dies on Level 13
-(frame 145, the loose star hits it) and Level 17 (78, rolls off the crown); it survives 600 frames on
-Levels 15 and 16. (The Level 9, 10 and 11 predictions matched Flash.)
+Observed (unverified) idle behaviour, a first comparison: with no input the ball dies on Level 17 (78, rolls
+off the crown); it survives 600 frames on Levels 15 and 16. (The Level 9, 10, 11 and 13 predictions matched Flash.)
 
 **Search-side next steps** (for whoever takes the bruteforcer): better beam score (moving platforms /
 timing, calibrate with `--explain` against L2 186, L4 274, L8 405); exhaustive window proofs and endgame
@@ -283,7 +289,7 @@ proofs; physics profiling for contact-heavy levels (must stay bit-exact).
 
 ```bash
 git clone https://github.com/Theme25/project-unnamed.git && cd project-unnamed
-make && ./rbsim test                  # expect ALL PASSED (72)
+make && ./rbsim test                  # expect ALL PASSED (76)
 
 # Windows cross build + Wine (to check the Windows build)
 mv /etc/apt/sources.list.d/nodesource* /tmp/ 2>/dev/null   # a broken repo blocks apt-get update

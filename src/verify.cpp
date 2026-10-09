@@ -482,7 +482,7 @@ int CmdVerify(int argc, char** argv) {
     if (deathsMatched) std::printf("deaths on the same tick as Flash (player fields exact, debris not simulated): %d\n", deathsMatched);
     if (extraGroupsSeen) std::printf("extra bodies compared per frame: up to %d\n", extraGroupsSeen);
     if (pdBodyFrames)
-        std::printf("after deaths, level bodies bit-exact on %ld of %ld frames (%d segment(s) differ, debris is random; --verbose 1 shows where)\n",
+        std::printf("after deaths, level bodies bit-exact on %ld of %ld frames (%d segment(s) differ, debris is random; listed above unless --verbose 0)\n",
                     pdBodyExact, pdBodyFrames, pdBodyDivergedSegs);
     std::printf("hit-test decisions within one rounding unit of flipping (uncalibrated spikes/targets): %ld\n", uncertainTotal);
     if (!firstFieldHist.empty()) {

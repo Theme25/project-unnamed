@@ -89,6 +89,8 @@ const LevelScript& GetLevelScript(int32_t id);
 // True for the levels whose scripts reproduce Flash logs bit-for-bit (README "Verification status"). The others are
 // ported from the AS3 only: runs, searches and routes on them must be re-checked in Flash.
 bool LevelVerified(int32_t id);
+// Debug hook for tools (not part of the simulated state): called by PlayerDie before the ball's body is destroyed.
+extern void (*g_playerDieHook)(const Sim&);
 // Prints a one-line warning on stderr when the level is scripted but not verified (run/log/optimize/beam).
 void WarnIfUnverified(int32_t id);
 

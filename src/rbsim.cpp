@@ -645,10 +645,36 @@ static int CmdTest() {
             check(s->deathFrame == c.death && s->winFrame == c.win && s->displayUncertain == 0, c.name);
         }
     }
-    // 18b. Levels 13, 15, 16, 17: scripted from the AS3, NOT yet checked against Flash logs
+    // 18a-13. Level 13 against its Flash logs (rb1_stats13.1-4, all bit-exact); R restarts from the checkpoint reached
+    {
+        LevelTemplate t(13);
+        struct C { const char* in; int death, win; const char* name; };
+        const C cases[] = {
+            {"n200", 145, -1, "level 13 idle (rb1_stats13.1): the loose kingStar1 kills the ball at frame 145"},
+            {"d40n2a16n7d4n15d3n11d13e3", 114, -1, "level 13 (rb1_stats13.3): kingStar1 death at frame 114"},
+            {"d14n74a2n4d22e1d29R1n16d14e1d6S18e5w4d7e2d18n1d1w1e1d3e14d44R1a8q1a6d1n1d22e1d38e2q2e1d10e1d21e10d54", -1, 481, "level 13 (rb1_stats13.2): R at checkpoints 1 and 2, flag at frame 481"},
+            {"d14n74a2n4d22e1d29R1a12n1d1n1d17a1d10e6d14a1d15e1d5e2a1d2a1d9e26d41e2q20w22e17w1q23w18e11w1q14w25e11q12w25e4w1e13d14e2a1d14a1d6e2q3w1n14a4n7a2n7a13n5d8n4a4n14d6e5n1R1a13n6d34e40S1d2e83d41", 670, 850, "level 13 (rb1_stats13.4): killStar2 death at 670, R from checkpoint 2, flag at 850"},
+        };
+        for (const C& c : cases) {
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);
+            int death = -1;
+            for (uint8_t k : DecodeInputs(c.in)) {
+                if (k == IN_RESTART) {
+                    s->Restart();
+                    continue;
+                }
+                s->Tick(k);
+                if (s->deathFrame >= 0 && death < 0) death = s->frameCount;
+                if (s->isTimeStop) break;
+            }
+            check(death == c.death && s->winFrame == c.win && s->displayUncertain == 0, c.name);
+        }
+    }
+    // 18b. Levels 15, 16, 17: scripted from the AS3, NOT yet checked against Flash logs
     {
         bool idleOk = true, detOk = true;
-        for (int lv : {13, 15, 16, 17}) {
+        for (int lv : {15, 16, 17}) {
             LevelTemplate t(lv);
             auto a = std::make_unique<Sim>(), b = std::make_unique<Sim>(), c = std::make_unique<Sim>();
             a->Load(&t);
@@ -661,14 +687,14 @@ static int CmdTest() {
                 c->Tick(in);
             }
             const FrameStats x = a->Stats(0), y = b->Stats(0), z = c->Stats(0);
-            // Informational only (no Flash log yet): an idle ball dies on levels 13 (the loose heavy star rolls into it)
-            // and 17 (it rolls off the crown it starts on).
+            // Informational only (no Flash log yet): an idle ball dies on level 17 (it rolls off the crown it
+            // starts on).
             if (!a->playerAlive) std::printf("       note: level %d idle ball dies at frame %d (unverified)\n", lv, a->deathFrame);
             if (!std::isfinite(x.px) || !std::isfinite(x.py) || !std::isfinite(y.px) || !std::isfinite(y.py)) idleOk = false;
             if (std::memcmp(&y.px, &z.px, 8) || std::memcmp(&y.py, &z.py, 8) || y.contactCount != z.contactCount) detOk = false;
         }
-        check(idleOk, "levels 13, 15, 16, 17: 600 idle ticks run, positions finite");
-        check(detOk, "levels 13, 15, 16, 17: two runs are bit-identical");
+        check(idleOk, "levels 15, 16, 17: 600 idle ticks run, positions finite");
+        check(detOk, "levels 15, 16, 17: two runs are bit-identical");
 
         // field initialisers: Level 9 killRollBallDirection = 1 (Flash: spin 5 from tick 1); Level 16 roll balls 1 / -1
         LevelTemplate t9(9);
