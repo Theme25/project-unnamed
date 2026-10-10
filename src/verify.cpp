@@ -224,6 +224,17 @@ int CmdVerify(int argc, char** argv) {
             }
             continue;
         }
+        if (line.rfind("#ENV\t", 0) == 0) {  // #ENV<TAB>key<TAB>value... (Shipik.envLine, docs/MATHSPIKES_RESOLUTION.md)
+            std::vector<std::string> c = Split(line);
+            std::string win, mode;
+            for (size_t k = 1; k + 1 < c.size(); k += 2) {
+                if (c[k] == "mathspikes" && cfgMathSpikes < 0) cfgMathSpikes = std::stoi(c[k + 1]);
+                if (c[k] == "window") win = c[k + 1];
+                if (c[k] == "scaleMode") mode = c[k + 1];
+            }
+            std::printf("recorded in a %s window (%s)\n", win.c_str(), mode.c_str());
+            continue;
+        }
         if (line.empty() || line[0] == '#') continue;
         if (line.rfind("LEVEL", 0) == 0) {
             int lv = 0, cp = 0;

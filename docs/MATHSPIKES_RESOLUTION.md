@@ -64,7 +64,8 @@ which favours A or something close to it. The data in §4 decides.
 ## 3. MATHSPIKES 2
 
 Files: `docs/mathspikes2/Shipik.as`, `docs/mathspikes2/PlayerBox.as` (the original classes plus the new
-branch). In a ready-made SWF only these two classes are recompiled; every other method's bytecode is
+branch, plus `envLine` for the `#ENV` line, §4). In the ready-made SWF only these two classes are
+recompiled. `Game` only gets the three `#ENV` calls inserted as bytecode, and every other method is
 unchanged apart from method numbering. Enable it with `/config mathspikes 2`.
 
 What it computes:
@@ -107,31 +108,55 @@ bit for bit. **This still needs confirming with one sweep (§4, step 3).**
 it with JPEXS FFDec **18.x** (`-swf2xml`); newer FFDec versions write matrix scales as rounded decimals,
 which `tools/swf_geom.py` cannot read exactly.
 
-## 4. Experiments (the existing calibration key `]`, no new mod code needed)
+## 4. Experiments
 
-Optionally, add this line to `dbgLevelCalib()` in the mod, right after `L = this.m_currLevel;`. It records
-the window transform Flash really uses; the `L.transform.concatenatedMatrix` part is what decides
-between A and B.
+### The resolution is written into every dump
 
-```as3
-var envSt:* = Preloader.stageLink; var envM:Matrix = L.transform.concatenatedMatrix;
-var envP:Point = L.localToGlobal(new Point(0,0));
-out.push(["#ENV",Capabilities.version,Capabilities.playerType,envSt.stageWidth,envSt.stageHeight,envSt.align,
-   envSt.scaleMode,envSt.quality,envSt.displayState,hex(this.x),hex(this.y),hex(this.scaleX),hex(this.scaleY),
-   hex(envM.a),hex(envM.b),hex(envM.c),hex(envM.d),hex(envM.tx),hex(envM.ty),hex(envP.x),hex(envP.y),
-   CONFIG.MATHSPIKES,int(this.isGless)].join("\t"));
+`Shipik.envLine` (in `docs/mathspikes2/Shipik.as`) builds a `#ENV` line. `tools/abc_patch_env.py` patches
+the mod's `Game` bytecode so the line is written at the top of each dump. `Game` is **not** recompiled:
+the tool inserts one call into each of three methods and moves nothing else.
+
+| key | dump | `#ENV` written |
+|---|---|---|
+| `]` | `rb1_calib_L<id>.tsv` (E9/E10/E11/E12) | after the level is loaded |
+| Shift+`]` on Level 3 | `rb1_calib.tsv` (E8 plain-spike dump) | at the start of the E8 block |
+| `[` | `rb1_stats.tsv` (stats log) | first line (window at **export** time) |
+
+The line is key/value pairs, tab separated:
+
+```
+#ENV  window 813x1032  scaleMode showAll  align   stageSize 550x400  quality HIGH  displayState normal
+      screen 1920x1080  player WIN 11,4,402,287  playerType StandAlone  mathspikes 1
+      rootMatrix a,b,c,d,tx,ty  levelMatrix a,b,c,d,tx,ty  levelOrigin x,y  levelXY x,y   (matrices as hex doubles)
 ```
 
-`rbsim calib` prints the `#ENV` line together with the model it is checking against.
+- `window` is the real window client size. Under showAll `stage.stageWidth` stays 550, so `envLine`
+  switches to noScale for an instant to read the window size, then restores the mode in the same call.
+- `rootMatrix` / `levelMatrix` are `transform.concatenatedMatrix`. They show the scale and offset Flash
+  really applies, which is exactly what decides between hypotheses A and B.
+- `rbsim calib` prints the line. `rbsim verify` prints the window and takes `mathspikes` from it (a log
+  recorded with `/config mathspikes 2` is checked under MATHSPIKES 2 automatically). `rbview` does the same.
+
+To rebuild the SWF from a fresh Practice Hack:
+1. Compile `docs/mathspikes2/Shipik.as` and `PlayerBox.as` in with FFDec:
+   `ffdec -replace in.swf mid.swf Shipik Shipik.as PlayerBox PlayerBox.as`.
+2. Run `python3 tools/abc_patch_env.py mid.swf out.swf`.
+
+### What to record
 
 1. **MATHSPIKES 1, showAll, two or three window sizes** (for example 813 px wide and 939 px tall, and
-   one more). Press `]` on **Level 10** (4 of the 5 old near-ties) and **Level 3** (plain spikes,
-   E8c-style). Name the files with the size, e.g. `rb1_calib_L10_w813.tsv`.
-2. Run `./rbsim calib rb1_calib_L10_w813.tsv --screen-offset X Y` and
-   `... --stage-scale S [--window-variant 0|1]` to fit the window model. Level 3 should come out
-   identical to the reference under A and change under B.
-3. **MATHSPIKES 2** (`/config mathspikes 2` in the patched SWF): the same `]` dumps at two sizes. They
-   must be **identical to each other** and give `CALIB OK` under `./rbsim calib <file> --mathspikes 2`.
+   one more). Press `]` on **Level 10** (4 of the 5 old near-ties), and Shift+`]` on **Level 3**
+   (plain spikes, E8c).
+2. Fit the window model:
+   - `./rbsim calib <file> --screen-offset X Y` (hypothesis A);
+   - `./rbsim calib <file> --stage-scale S [--window-variant 0|1]` (hypothesis B).
+
+   Level 3 should come out identical to the reference under A and change under B.
+3. **MATHSPIKES 2** (`/config mathspikes 2`): the same dumps at two sizes. They must be **identical to
+   each other** (apart from the `#ENV` line) and give `CALIB OK` under
+   `./rbsim calib <file> --mathspikes 2`.
+4. Any MATHSPIKES route that lives at one resolution and dies at another: record it with `[` at both
+   sizes and send both logs.
 
 ## 5. Note on the Level 11 string from the chat
 

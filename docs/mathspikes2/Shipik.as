@@ -8,6 +8,9 @@ package
    import flash.geom.Matrix;
    import flash.geom.Point;
    import flash.geom.Rectangle;
+   import flash.display.Stage;
+   import flash.system.Capabilities;
+   import flash.utils.ByteArray;
    
    // Practice Hack Shipik with MATHSPIKES 2 (testLevelPoint). Everything else is the original class.
    // MATHSPIKES 2 = MATHSPIKES 1 done in Level coordinates with plain Numbers: no localToGlobal/globalToLocal,
@@ -49,6 +52,57 @@ package
       
       private var m2h:Number = 0;
       
+      private static var envBA:ByteArray = new ByteArray();
+      
+      private static function envHex(n:Number) : String
+      {
+         envBA.position = 0;
+         envBA.writeDouble(n);
+         envBA.position = 0;
+         var s:String = "";
+         var i:int = 0;
+         var b:uint = 0;
+         while(i < 8)
+         {
+            b = envBA.readUnsignedByte();
+            s += (b < 16 ? "0" : "") + b.toString(16);
+            i++;
+         }
+         return s;
+      }
+      
+      // "#ENV" line for the logging mod's dumps (called from Game.dbgLevelCalib / dbgCalib / dbgExport):
+      // the window size (read by switching to noScale for an instant), the scale mode and the matrices Flash
+      // really uses between the Level and the window. Key/value pairs, tab separated.
+      public static function envLine(L:*) : String
+      {
+         var st:Stage = Preloader.stageLink;
+         var mode:String = st.scaleMode;
+         var cw:int = st.stageWidth;
+         var ch:int = st.stageHeight;
+         st.scaleMode = "noScale";
+         var winW:int = st.stageWidth;
+         var winH:int = st.stageHeight;
+         st.scaleMode = mode;
+         var out:Array = ["#ENV","window",winW + "x" + winH,"scaleMode",mode,"align",st.align,"stageSize",cw + "x" + ch,"quality",st.quality,"displayState",st.displayState,"screen",Capabilities.screenResolutionX + "x" + Capabilities.screenResolutionY,"player",Capabilities.version,"playerType",Capabilities.playerType,"mathspikes",CONFIG.MATHSPIKES];
+         var m:Matrix = null;
+         var p:Point = null;
+         if(st.numChildren > 0)
+         {
+            m = st.getChildAt(0).transform.concatenatedMatrix;
+            out.push("rootMatrix",[envHex(m.a),envHex(m.b),envHex(m.c),envHex(m.d),envHex(m.tx),envHex(m.ty)].join(","));
+         }
+         if(L != null && L is DisplayObject)
+         {
+            m = (L as DisplayObject).transform.concatenatedMatrix;
+            out.push("levelMatrix",[envHex(m.a),envHex(m.b),envHex(m.c),envHex(m.d),envHex(m.tx),envHex(m.ty)].join(","));
+            p = (L as DisplayObject).localToGlobal(new Point(0,0));
+            out.push("levelOrigin",envHex(p.x) + "," + envHex(p.y));
+            out.push("levelXY",envHex((L as DisplayObject).x) + "," + envHex((L as DisplayObject).y));
+         }
+         return out.join("\t");
+      }
+
       public function Shipik()
       {
          super();

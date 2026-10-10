@@ -655,6 +655,12 @@ static void LoadRouteFile(const wchar_t* file) {
         if (line.rfind("# inputs\t", 0) == 0) {
             route = line.substr(9);
             isLog = true;
+        } else if (line.rfind("#ENV\t", 0) == 0) {  // the mod's environment line: follow its spike rule
+            const size_t k = line.find("\tmathspikes\t");
+            if (k != std::string::npos) {
+                const int ms = std::atoi(line.c_str() + k + 12);
+                if (ms == 1 || ms == 2) GetDisplayConfig().mathSpikes = ms;
+            }
         } else if (line.rfind("LEVEL ", 0) == 0) {
             if (!prevR) {  // a new recording starts here
                 std::sscanf(line.c_str() + 6, "%d %d", &level, &cp);
