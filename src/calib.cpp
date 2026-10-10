@@ -76,6 +76,12 @@ int CmdCalib(int argc, char** argv) {
     while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         std::vector<std::string> f = Split(line);
+        if (f[0] == "#ENV") {  // recording environment (docs/MATHSPIKES_RESOLUTION.md): report it with the model in use
+            const DisplayConfig& dc = GetDisplayConfig();
+            std::printf("recorded with: %s\n  model: mathspikes %d, screen offset %g,%g twips, stage scale %.6f, window variant %d\n",
+                        line.c_str() + 5, dc.mathSpikes, dc.screenOffX, dc.screenOffY, dc.stageScale16 / 65536.0, dc.windowVariant);
+            continue;
+        }
         if ((f[0] == "E1" || f[0] == "E1a") && f.size() >= 9) {
             const double x = H(f[2]), y = H(f[3]), rot = H(f[4]);
             const long cx = Tw(x), cy = Tw(y);

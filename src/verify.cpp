@@ -261,6 +261,7 @@ int CmdVerify(int argc, char** argv) {
         std::printf("this log was recorded with MATHSPIKES 0 (original shape-test spikes): rbsim simulates the standardized\n"
                     "check only (MATHSPIKES 1), so spike decisions in it are not comparable. Re-record with mathspikes 1.\n");
     }
+    if (cfgMathSpikes == 1 || cfgMathSpikes == 2) GetDisplayConfig().mathSpikes = cfgMathSpikes;  // the log decides
     if (cfgMathSpikes >= 0 || cfgGless >= 0)
         std::printf("log config: mathspikes %d, gless %d\n", cfgMathSpikes, cfgGless);
     auto sim = std::make_unique<Sim>();

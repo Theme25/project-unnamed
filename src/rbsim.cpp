@@ -6,6 +6,7 @@
 #include "redball.h"
 #include "snapshot.h"
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <algorithm>
 #include <cinttypes>
@@ -825,18 +826,33 @@ static int CmdTest() {
             std::memcpy(&d, &u, 8);
             return d;
         };
-        int ok = 0, n = 0;
-        for (const Row& r : rows) {
-            LevelTemplate t(r.level);
-            auto s = std::make_unique<Sim>();
-            s->Load(&t);  // the sweep runs right after SetLevel: camera centred on checkpoint 0
-            const SpikeObj* sp = nullptr;
-            for (int32_t i = 0; i < t.spikeCount; ++i)
-                if (std::fabs(t.spikes[i].tx - r.tx) < 1e-6 && std::fabs(t.spikes[i].ty - r.ty) < 1e-6) sp = &t.spikes[i];
-            ++n;
-            if (sp && BallHitsSpike(hx(r.x), hx(r.y), hx(r.rot), 0, 0, *sp, s->camX, s->camY).hit == r.hit) ++ok;
-        }
-        check(ok == n, "turned/scaled spikes: 15 boundary rows of the Flash E11 sweeps reproduced");
+        // MATHSPIKES 1 in the reference window, whatever the command line set; then the same rows in shifted windows
+        DisplayConfig& dc = GetDisplayConfig();
+        const DisplayConfig saved = dc;
+        auto countOk = [&](int mode, double ox, double oy) {
+            dc.mathSpikes = mode;
+            dc.screenOffX = ox;
+            dc.screenOffY = oy;
+            int ok = 0;
+            for (const Row& r : rows) {
+                LevelTemplate t(r.level);
+                auto s = std::make_unique<Sim>();
+                s->Load(&t);  // the sweep runs right after SetLevel: camera centred on checkpoint 0
+                const SpikeObj* sp = nullptr;
+                for (int32_t i = 0; i < t.spikeCount; ++i)
+                    if (std::fabs(t.spikes[i].tx - r.tx) < 1e-6 && std::fabs(t.spikes[i].ty - r.ty) < 1e-6) sp = &t.spikes[i];
+                if (sp && BallHitsSpike(hx(r.x), hx(r.y), hx(r.rot), 0, 0, *sp, s->camX, s->camY).hit == r.hit) ++ok;
+            }
+            return ok;
+        };
+        const int n = (int)(sizeof rows / sizeof rows[0]);
+        check(countOk(1, 0, 0) == n, "turned/scaled spikes: 15 boundary rows of the Flash E11 sweeps reproduced");
+        int worst = n;
+        for (int ox = 0; ox <= 100; ox += 10)
+            for (int oy = 0; oy <= 100; oy += 10) worst = std::min(worst, countOk(1, ox, oy));
+        std::printf("       E11 boundary rows: %d/%d in the reference window, as few as %d/%d in a window up to 10 px larger;"
+                    " MATHSPIKES 2: %d/%d\n", n, n, worst, n, countOk(2, 0, 0), n);
+        dc = saved;
     }
     // 19. Compact snapshots (src/snapshot.h): byte-exact round trip, identical continuation, portable base
     {
@@ -901,6 +917,58 @@ static int CmdTest() {
         check(portable, "compact snapshot: decodes against a base built elsewhere and replays identically");
         std::printf("       compact snapshot: avg %zu bytes, max %zu bytes (full state %zu)\n", sumBytes / count, maxBytes, sizeof(Sim));
     }
+    // 20. Display resolution (docs/MATHSPIKES_RESOLUTION.md). MATHSPIKES 1 rounds turned/scaled spikes in window
+    //     twips, so a stage -> window offset changes them; plain spikes cannot see a whole-twip offset. MATHSPIKES 2
+    //     equals MATHSPIKES 1 on every plain spike and sees no offset at all.
+    {
+        DisplayConfig& dc = GetDisplayConfig();
+        const DisplayConfig saved = dc;
+        uint64_t rs = 0x9E3779B97F4A7C15ULL;
+        auto rnd = [&]() {  // [-1, 1)
+            rs ^= rs << 13; rs ^= rs >> 7; rs ^= rs << 17;
+            return (double)(rs >> 11) / 4503599627370496.0 - 1;
+        };
+        long plainN = 0, plainDiff = 0, plainOffDiff = 0, turnedN = 0, turnedOffDiff = 0, ms2OffDiff = 0;
+        for (int32_t lv = 1; lv <= 17; ++lv) {
+            LevelTemplate t(lv);
+            for (int32_t i = 0; i < t.spikeCount; ++i) {
+                const SpikeObj& s = t.spikes[i];
+                auto unit = [](double v) { return v == 0 || v == 1 || v == -1; };
+                const bool plain = unit(s.a) && unit(s.b) && unit(s.c) && unit(s.d);
+                const double cx = (s.bx0 + s.bx1) / 40, cy = (s.by0 + s.by1) / 40;
+                for (int k = 0; k < 300; ++k) {
+                    const double ang = rnd() * AS3_PI, dist = 10.5 + 6 * rnd();
+                    const double x = std::trunc((cx + dist * std::cos(ang)) * 20) / 20, y = std::trunc((cy + dist * std::sin(ang)) * 20) / 20;
+                    const double rot = k % 4 ? rnd() * 400 : 0;
+                    const double dpx = k % 2 ? std::trunc(rnd() * 300) / 20 : 0, dpy = k % 3 ? std::trunc(rnd() * 100) / 20 : 0;
+                    const double camX = std::trunc(rnd() * 40000) / 20, camY = std::trunc(rnd() * 8000) / 20;
+                    auto hit = [&](int mode, double ox, double oy) {
+                        dc.mathSpikes = mode;
+                        dc.screenOffX = ox;
+                        dc.screenOffY = oy;
+                        return BallHitsSpike(x, y, rot, dpx, dpy, s, camX, camY).hit;
+                    };
+                    const bool h1 = hit(1, 0, 0), h1o = hit(1, 10, 130), h2 = hit(2, 0, 0), h2o = hit(2, 10, 130);
+                    if (plain) {
+                        ++plainN;
+                        plainDiff += h1 != h2;
+                        plainOffDiff += h1 != h1o;
+                    } else {
+                        ++turnedN;
+                        turnedOffDiff += h1 != h1o;
+                    }
+                    ms2OffDiff += h2 != h2o;
+                }
+            }
+        }
+        dc = saved;
+        check(plainN > 100000 && plainDiff == 0, "MATHSPIKES 2 = MATHSPIKES 1 on every plain spike (random grazing states)");
+        check(plainOffDiff == 0, "MATHSPIKES 1 plain spikes ignore a whole-twip window offset");
+        check(turnedOffDiff > 0, "MATHSPIKES 1 turned/scaled spikes change with the window offset");
+        check(ms2OffDiff == 0, "MATHSPIKES 2 ignores the window offset");
+        std::printf("       resolution: %ld plain states, %ld turned states (%ld flip with a 0.5,6.5 px window offset)\n", plainN, turnedN,
+                    turnedOffDiff);
+    }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }
@@ -931,7 +999,38 @@ static int CmdBench(int argc, char** argv) {
     return 0;
 }
 
+// Global display options, removed from argv before the command sees them:
+//   --mathspikes 1|2      spike rule (default 1, the Practice Hack's MATHSPIKES 1; 0 switches spikes off for analysis)
+//   --screen-offset X Y   MATHSPIKES 1 resolution model: extra translation (twips) between Level space and the
+//                         coordinates Flash rounds in (docs/MATHSPIKES_RESOLUTION.md, hypothesis A)
+//   --stage-scale S       MATHSPIKES 1 resolution model: window scale (showAll), every conversion through it
+//                         (hypothesis B, BallHitsSpikeWindow); --window-variant N picks a sub-variant
+static bool ParseDisplayOptions(int& argc, char** argv) {
+    DisplayConfig& dc = GetDisplayConfig();
+    int o = 1;
+    for (int i = 1; i < argc; ++i) {
+        if (!std::strcmp(argv[i], "--mathspikes") && i + 1 < argc) {
+            dc.mathSpikes = std::atoi(argv[++i]);
+            if (dc.mathSpikes < 0 || dc.mathSpikes > 2) { std::fprintf(stderr, "--mathspikes 1|2 (0: spikes off, analysis only)\n"); return false; }
+        } else if (!std::strcmp(argv[i], "--screen-offset") && i + 2 < argc) {
+            dc.screenOffX = std::atof(argv[i + 1]);
+            dc.screenOffY = std::atof(argv[i + 2]);
+            i += 2;
+        } else if (!std::strcmp(argv[i], "--stage-scale") && i + 1 < argc) {
+            dc.stageScale16 = (int32_t)std::llround(std::atof(argv[++i]) * 65536);
+        } else if (!std::strcmp(argv[i], "--window-variant") && i + 1 < argc) {
+            dc.windowVariant = std::atoi(argv[++i]);
+        } else {
+            argv[o++] = argv[i];
+        }
+    }
+    argc = o;
+    argv[argc] = nullptr;
+    return true;
+}
+
 int main(int argc, char** argv) {
+    if (!ParseDisplayOptions(argc, argv)) return 2;
     for (int i = 1; i + 1 < argc; ++i)
         if (!std::strcmp(argv[i], "--trig")) {
             if (!std::strcmp(argv[i + 1], "glibc")) g_trigImpl = TrigImpl::Glibc;

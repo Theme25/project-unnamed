@@ -110,7 +110,130 @@ static bool ShipikPointInTriangle(double x, double y) {
     const bool d3 = ShipikSign(x, y, w, 0, 0, 0);
     return d1 == d2 && d2 == d3;
 }
+// MATHSPIKES 2 (docs/mathspikes2/Shipik.as testLevelPoint + PlayerBox.as HitTestObjectControlPoints), operation
+// for operation. Control points: the same twip pipeline as localToGlobal (truncate, 16.16 matrix, round) but in
+// Level space, so a window/zoom/camera offset never enters. Cover shift: as MATHSPIKES 1 (twips, truncated).
+// Spike: Level -> Shipik matrix concatenated in doubles from each clip's transform.matrix (translations in
+// twips), exact AABB of the shape box, inverse in doubles, no rounding of the local point.
+static SpikeResult BallHitsSpikeMath(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s) {
+    if (s.n < 1) fatal("spike without a matrix chain (regenerate display_data.h)");
+    // Shipik.prepare()
+    double a = s.chain[0].a, b = s.chain[0].b, c = s.chain[0].c, d = s.chain[0].d, tx = s.chain[0].tx, ty = s.chain[0].ty;
+    for (int i = 1; i < s.n; ++i) {
+        const SpikeMat& m = s.chain[i];
+        const double na = m.a * a + m.c * b, nb = m.b * a + m.d * b;
+        const double nc = m.a * c + m.c * d, nd = m.b * c + m.d * d;
+        const double ntx = m.a * tx + m.c * ty + m.tx, nty = m.b * tx + m.d * ty + m.ty;
+        a = na; b = nb; c = nc; d = nd; tx = ntx; ty = nty;
+    }
+    const double det = a * d - b * c;
+    const double ia = d / det, ib = -b / det, ic = -c / det, id = a / det;
+    const double W = 6, H = 9.65;  // Shipik.w, Shipik.h
+    const double kx[4] = {0, W, 0, W}, ky[4] = {-H, -H, 0, 0};
+    double bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+    for (int k = 0; k < 4; ++k) {
+        const double X = (a * kx[k] + c * ky[k]) * 20 + tx, Y = (b * kx[k] + d * ky[k]) * 20 + ty;
+        if (k == 0 || X < bx0) bx0 = X;
+        if (k == 0 || X > bx1) bx1 = X;
+        if (k == 0 || Y < by0) by0 = Y;
+        if (k == 0 || Y > by1) by1 = Y;
+    }
+    const double rl = bx0 / 20, rt = by0 / 20, rw = (bx1 - bx0) / 20, rh = (by1 - by0) / 20;
+    // quick reject, as BallHitsSpike (the ball cannot reach)
+    if ((sx + 11) * 20 < bx0 || (sx - 11) * 20 > bx1 || (sy + 11) * 20 < by0 || (sy - 11) * 20 > by1) return {false, false};
+    // PlayerBox: ball matrix (16.16) and position (twips)
+    const int64_t X = std::llround(sx * 20), Y = std::llround(sy * 20);
+    const FlashMatrix fm = FlashRotationMatrix(rotDeg);
+    const double coverX = SpriteCoord(dpx), coverY = SpriteCoord(dpy);
+    const double r = PLAYER_SPRITE_WIDTH_TWIPS / 20.0 / 2;
+    const double step = 2 * AS3_PI / 16;
+    for (int k = 0; k < 16; ++k) {
+        const int64_t qx = (int64_t)std::trunc(r * as3_cos(step * k) * 20), qy = (int64_t)std::trunc(r * as3_sin(step * k) * 20);
+        const int64_t gx = X + ((fm.a * qx - fm.b * qy + 32768) >> 16);
+        const int64_t gy = Y + ((fm.b * qx + fm.a * qy + 32768) >> 16);
+        // Shipik.testLevelPoint(gx, gy)
+        const double px = (double)gx / 20, py = (double)gy / 20;
+        // bounds as a Rectangle in px (left/top + width/height, like getBounds(p).containsPoint in MATHSPIKES 1)
+        if (!(px >= rl && px < rl + rw && py >= rt && py < rt + rh)) continue;
+        const double ux0 = (double)(int64_t)std::trunc((px - coverX) * 20);  // point.subtract(cover), to twips
+        const double uy0 = (double)(int64_t)std::trunc((py - coverY) * 20);
+        const double ddx = ux0 - tx, ddy = uy0 - ty;
+        const double ux = (ia * ddx + ic * ddy) / 20, uy = (ib * ddx + id * ddy) / 20;
+        if (ShipikPointInTriangle(ux, uy)) return {true, false};
+    }
+    return {false, false};
+}
+
+// ---- window model (hypothesis): Flash's display matrices are 16.16 with whole-twip translations; a forward
+// transform rounds to the nearest twip; an inverse is taken in doubles with its translation rounded to a twip and
+// the result rounded (the E11 fit). localToGlobal = window matrix forward, then the stage matrix inverted;
+// globalToLocal = the stage matrix forward, then the window matrix inverted. At scale 1, offset 0 this is exactly
+// the calibrated MATHSPIKES 1 model above.
+namespace {
+struct WM { int64_t a, b, c, d, tx, ty; };
+inline int64_t RShift16(int64_t v) { return v >> 16; }  // arithmetic shift = floor
+inline void Fwd(const WM& m, int64_t x, int64_t y, int64_t& ox, int64_t& oy) {
+    ox = RShift16(m.a * x + m.c * y + 32768) + m.tx;
+    oy = RShift16(m.b * x + m.d * y + 32768) + m.ty;
+}
+inline WM Concat(const WM& m1, const WM& m2) {  // m1 after m2
+    WM r;
+    r.a = RShift16(m1.a * m2.a + m1.c * m2.b + 32768);
+    r.b = RShift16(m1.b * m2.a + m1.d * m2.b + 32768);
+    r.c = RShift16(m1.a * m2.c + m1.c * m2.d + 32768);
+    r.d = RShift16(m1.b * m2.c + m1.d * m2.d + 32768);
+    Fwd(m1, m2.tx, m2.ty, r.tx, r.ty);
+    return r;
+}
+inline void Inv(const WM& m, int64_t x, int64_t y, int64_t& ox, int64_t& oy) {
+    const double a = m.a / 65536.0, b = m.b / 65536.0, c = m.c / 65536.0, d = m.d / 65536.0;
+    const double det = a * d - b * c;
+    const double ia = d / det, ib = -b / det, ic = -c / det, id = a / det;
+    const double TX = (double)m.tx, TY = (double)m.ty;
+    const double itx = std::floor(-(ia * TX + ic * TY) + 0.5), ity = std::floor(-(ib * TX + id * TY) + 0.5);
+    ox = (int64_t)std::floor(ia * (double)x + ic * (double)y + itx + 0.5);
+    oy = (int64_t)std::floor(ib * (double)x + id * (double)y + ity + 0.5);
+}
+}  // namespace
+
+SpikeResult BallHitsSpikeWindow(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s, double camXpx,
+                                double camYpx) {
+    const double bx0 = s.bx0 / 20.0, by0 = s.by0 / 20.0, bw = (s.bx1 - s.bx0) / 20.0, bh = (s.by1 - s.by0) / 20.0;
+    if (sx + 11 < bx0 || sx - 11 > bx0 + bw || sy + 11 < by0 || sy - 11 > by0 + bh) return {false, false};
+    const DisplayConfig& dc = GetDisplayConfig();
+    const WM S{dc.stageScale16, 0, 0, dc.stageScale16, std::llround(dc.screenOffX), std::llround(dc.screenOffY)};
+    const WM L{65536, 0, 0, 65536, std::llround(camXpx * 20), std::llround(camYpx * 20)};
+    const FlashMatrix fm = FlashRotationMatrix(rotDeg);
+    const WM B{fm.a, fm.b, -(int64_t)fm.b, fm.a, std::llround(sx * 20), std::llround(sy * 20)};
+    const WM K{std::llround(s.a * 65536), std::llround(s.b * 65536), std::llround(s.c * 65536), std::llround(s.d * 65536),
+               std::llround(s.tx * 20), std::llround(s.ty * 20)};
+    const WM SL = Concat(S, L), SLB = Concat(SL, B), SLK = Concat(SL, K);
+    const double coverX = SpriteCoord(dpx), coverY = SpriteCoord(dpy);
+    const double r = PLAYER_SPRITE_WIDTH_TWIPS / 20.0 / 2;
+    const double step = 2 * AS3_PI / 16;
+    for (int k = 0; k < 16; ++k) {
+        const int64_t qx = (int64_t)std::trunc(r * as3_cos(step * k) * 20), qy = (int64_t)std::trunc(r * as3_sin(step * k) * 20);
+        int64_t wx, wy, gx, gy, px, py;
+        Fwd(SLB, qx, qy, wx, wy);                          // pb.localToGlobal: to the window
+        if (dc.windowVariant & 1) { gx = wx; gy = wy; }    //   (variant: stays in window twips)
+        else { Inv(S, wx, wy, gx, gy); Fwd(S, gx, gy, wx, wy); }  //   back to stage twips; p.globalToLocal: to the window again
+        Inv(SL, wx, wy, px, py);                           //   ... and into the Level
+        const double lpx = px / 20.0, lpy = py / 20.0;
+        if (!(lpx >= bx0 && lpx < bx0 + bw && lpy >= by0 && lpy < by0 + bh)) continue;
+        const int64_t tx = (int64_t)std::trunc((lpx - coverX) * 20), ty = (int64_t)std::trunc((lpy - coverY) * 20);
+        int64_t ux, uy;
+        Fwd(SL, tx, ty, wx, wy);                           // p.localToGlobal(point - cover)
+        if (!(dc.windowVariant & 1)) { Inv(S, wx, wy, gx, gy); Fwd(S, gx, gy, wx, wy); }
+        Inv(SLK, wx, wy, ux, uy);                          // this.globalToLocal
+        if (ShipikPointInTriangle(ux / 20.0, uy / 20.0)) return {true, false};
+    }
+    return {false, false};
+}
+
 SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s, double camXpx, double camYpx) {
+    if (GetDisplayConfig().mathSpikes == 1 && GetDisplayConfig().stageScale16 != 65536) return BallHitsSpikeWindow(sx, sy, rotDeg, dpx, dpy, s, camXpx, camYpx);
+    if (GetDisplayConfig().mathSpikes == 0) return {false, false};  // analysis only: spikes switched off
+    if (GetDisplayConfig().mathSpikes == 2) return BallHitsSpikeMath(sx, sy, rotDeg, dpx, dpy, s);
     const double bx0 = s.bx0 / 20.0, by0 = s.by0 / 20.0, bw = (s.bx1 - s.bx0) / 20.0, bh = (s.by1 - s.by0) / 20.0;
     if (sx + 11 < bx0 || sx - 11 > bx0 + bw || sy + 11 < by0 || sy - 11 > by0 + bh) return {false, false};
     const int64_t X = std::llround(sx * 20), Y = std::llround(sy * 20);  // sprite x/y: whole twips
@@ -142,7 +265,8 @@ SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, doubl
         } else {
             // this.globalToLocal(global point): screen twips (Level.x/y added), inverse of the concatenated matrix in
             // doubles, inverse translation rounded to a twip, result rounded to a twip (E11: 390,665 / 390,670).
-            const double cx = std::llround(camXpx * 20), cy = std::llround(camYpx * 20);
+            const DisplayConfig& dc = GetDisplayConfig();
+            const double cx = std::llround(camXpx * 20) + dc.screenOffX, cy = std::llround(camYpx * 20) + dc.screenOffY;
             const double det = s.a * s.d - s.b * s.c;
             const double ia = s.d / det, ib = -s.b / det, ic = -s.c / det, id = s.a / det;
             const double TX = std::llround(s.tx * 20) + cx, TY = std::llround(s.ty * 20) + cy;

@@ -18,7 +18,7 @@ frame matches that Flash Player to the last bit.
 | death | death warps (onto checkpoints, flags, a moving flag, the Level 16 wrong-way trigger) and real-game pause timing |
 | platforms | Linux and Windows (x86-64), identical results; `rbview.exe`: a double-click route viewer for Windows |
 | search | `rbsim beam` (finds routes from any start, resumable), `rbsim optimize` (improves a known route) |
-| tests | `rbsim test`: 86 self-tests |
+| tests | `rbsim test`: 90 self-tests |
 
 ## Route viewer (Windows, no command line)
 
@@ -45,7 +45,7 @@ exactly `rbview.exe`, so the download link above keeps pointing at the newest on
 
 ```
 make                 # see "Build flags" below; do not change them
-./rbsim test         # 86 self-tests (physics, display layer, spikes, death warps, all 17 levels, snapshots, ...)
+./rbsim test         # 90 self-tests (physics, display layer, spikes, death warps, all 17 levels, snapshots, ...)
 ./rbsim run --level 2 --inputs "n20w1d25n40" [--hex] [--every N] [--checkpoint K]
 ./rbsim log --level 2 --inputs "..."      # simulator log in the Flash mod's TSV format
 ./rbsim bench [--frames N]                # throughput
@@ -53,6 +53,7 @@ make                 # see "Build flags" below; do not change them
 ./rbsim calib rb1_calib.tsv                # checks a calibration dump (docs/STATS_LOGGING.md)
 ./rbsim optimize --level N --inputs RLE    # improve a known route, see below
 ./rbsim beam --level N --memory 10G        # find a route from any start, see below
+# any command: --mathspikes 1|2 picks the spike rule (docs/MATHSPIKES_RESOLUTION.md)
 make deathcause && tools/deathcause <level> <RLE> [checkpoint] [gless]   # what killed the ball, when
 ```
 
@@ -215,7 +216,11 @@ Details and numbers: `docs/STATS_LOGGING.md` §3.5-3.11.
   conversions. Turned/scaled spikes: Flash's `globalToLocal` works in screen twips (camera
   included), inverts the matrix in doubles and rounds the inverse translation and the result to
   whole twips (E11: 390,665/390,670; the other 5 lie within 0.003 twip of a half-twip, and the sim
-  counts any decision that close in `displayUncertain`).
+  counts any decision that close in `displayUncertain`). Because that rounding happens in absolute
+  window coordinates, turned-spike decisions depend on the window resolution; plain spikes do not.
+  **MATHSPIKES 2** (`--mathspikes 2`, AS3 in `docs/mathspikes2/`) does the same test in Level
+  coordinates and cannot depend on the window: identical to MATHSPIKES 1 on plain spikes. See
+  `docs/MATHSPIKES_RESOLUTION.md`.
 - **Death:** `PlayerDie` destroys the ball's body and the level keeps running its full `Update`
   (world step, moving parts, level script); the camera follows the frozen ball and the goal,
   checkpoint and switch tests (no `IsLive()` guard) compare the ball, now off the display list, with

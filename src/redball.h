@@ -45,6 +45,20 @@ bool LookupTimelineRotation(int32_t level, const char* name, double& out, bool* 
 extern int32_t g_provisionalRotations;  // uses of provisional (unmeasured) timeline rotations
 struct DisplayConfig {
     bool inclusive = true;  // touching edges count as a hit (VERIFIED: E2 calibration, 5/5 touching cases hit)
+    // Resolution model A (HYPOTHESIS, docs/MATHSPIKES_RESOLUTION.md): an extra whole-twip translation between Level
+    // space and the absolute coordinates Flash's globalToLocal rounds in (the window/letterbox offset). Only the
+    // turned/scaled spike test rounds in a way that sees it. 0 = the calibrated reference window.
+    double screenOffX = 0, screenOffY = 0;
+    // 1: Practice Hack MATHSPIKES 1 (Shipik.testPoint through Flash's display transforms).
+    // 2: MATHSPIKES 2 (docs/mathspikes2/*.as): the same test done in Level coordinates with plain doubles, no
+    //    display round-trips, so it cannot depend on the window, align, zoom or camera. Identical to 1 on plain
+    //    spikes; on turned/scaled spikes it drops 1's window-dependent twip rounding of the inverse transform.
+    int mathSpikes = 1;
+    // Stage -> window scale in 16.16 (65536 = 1:1). != 65536 runs MATHSPIKES 1 through BallHitsSpikeWindow, a
+    // MODEL (unverified) in which every localToGlobal/globalToLocal goes through the window matrix
+    // (docs/MATHSPIKES_RESOLUTION.md). Variant switches for fitting it to Flash data:
+    int32_t stageScale16 = 65536;
+    int windowVariant = 0;  // bit0: ball points stay in window twips (no round trip through stage twips)
 };
 DisplayConfig& GetDisplayConfig();
 // adj = -1/0/+1 on the matrix entries (in 1/65536 units): the fitted matrix is exact on 14,496 of
@@ -64,6 +78,9 @@ bool RectsHit(const Rect& a, const Rect& b);
 // camXpx/camYpx = Level.x/y (px) at the time of the test (only turned/scaled spikes depend on it).
 constexpr double SPIKE_HALF_TWIP_MARGIN = 0.005;  // twips
 struct SpikeResult { bool hit; bool uncertain; };
+// MATHSPIKES 1 with every display conversion done in window twips (scale + offset from DisplayConfig).
+SpikeResult BallHitsSpikeWindow(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s, double camXpx,
+                                double camYpx);
 SpikeResult BallHitsSpike(double spriteXpx, double spriteYpx, double rotationDeg, double dpx, double dpy, const SpikeObj& s,
                           double camXpx = 0, double camYpx = 0);
 

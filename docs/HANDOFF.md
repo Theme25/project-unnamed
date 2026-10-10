@@ -48,7 +48,7 @@ recorded in README.md ("Verification status") and below.
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-Self-tests: `./rbsim test` → 86 tests, `ALL PASSED` (also under Wine).
+Self-tests: `./rbsim test` → 90 tests, `ALL PASSED` (also under Wine).
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
