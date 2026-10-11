@@ -214,11 +214,12 @@ int CmdCalib(int argc, char** argv) {
                 ++e9Other;  // e.g. TextField x/y include the text box margin; not a body, not used by the sim
                 std::printf("  E9a %s differs from levels_data.h (not a physics body: ignored)\n", f[1].c_str());
             } else std::printf("  E9a %s differs from levels_data.h\n", f[1].c_str());
-            if (!(p.b == 0 && p.c == 0 && p.a > 0) && std::strncmp(f[1].c_str(), "shipik", 6)) {
-                double v = 0;
+            // rotation of a timeline clip: the player's fixed-point atan2 of this row's own 16.16 matrix
+            const int32_t ra = (int32_t)std::lround(H(f[7]) * 65536), rb = (int32_t)std::lround(H(f[8]) * 65536);
+            if (!(rb == 0 && std::lround(H(f[9]) * 65536) == 0 && ra > 0)) {
                 ++e9RotN;
-                if (LookupTimelineRotation(dumpLevel, f[1].c_str(), v) && v == H(f[4])) ++e9RotOk;
-                else std::printf("  E9a %s rotation %.17g not in the measured table\n", f[1].c_str(), H(f[4]));
+                if (TimelineClipRotation(ra, rb) == H(f[4])) ++e9RotOk;
+                else std::printf("  E9a %s rotation %.17g, fixed-point atan2 gives %.17g\n", f[1].c_str(), H(f[4]), TimelineClipRotation(ra, rb));
             }
         } else if (f[0] == "E9b" && f.size() >= 9) {
             // rotation getter of a code-set matrix: atan2(b, a) * 180 / PI on the stored entries
@@ -249,7 +250,7 @@ int CmdCalib(int argc, char** argv) {
                 e1far);
     if (mN) std::printf("rotation -> 16.16 matrix (E4/E7a/E7b): %ld / %ld exact\n", mOk, mN);
     if (e9N)
-        std::printf("Level %d placements (E9a): %ld / %ld match; rotated body clips with a measured rotation: %ld / %ld\n", dumpLevel,
+        std::printf("Level %d placements (E9a): %ld / %ld match; rotated clips whose rotation the fixed-point atan2 reproduces: %ld / %ld\n", dumpLevel,
                     e9Ok, e9N, e9RotOk, e9RotN);
     if (e10N)
         std::printf("Level %d object bounds (E10): %ld / %ld exact (hit-test targets: %ld, all must match); %ld other objects differ, %ld "

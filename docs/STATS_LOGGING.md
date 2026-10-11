@@ -250,6 +250,10 @@ across predecessors, E7c no drift). `x = trunc(rotation * 65536)`; for `|x| <= 9
 `T[i] = trunc(sin(i * 0.25 deg) * 2^30)`, result `(v + 2^13) >> 14` (16.16), sign of x.
 Beyond 90 deg the sine uses `180 - |x|`; `cos(x) = sin(90 - |x|)` (negative mirror beyond
 90). Exact on 14,496 / 14,500 matrices; the 4 misses are near-ties (< 0.0013 unit).
+**Superseded by the decompiled player** (`docs/FLASH_PLAYER_RE.md` §3): the real table is
+`trunc(sin(i * 0.25 deg) * 2^31)` with the same quarter-weight interpolation, rounded half up; rbsim now
+uses that routine. (The fit differs from it on 1,622 of 26.2M rotations; whether the 4 misses above were
+among them can be checked if `rb1_calib3_7.tsv` is still around: `./rbsim calib rb1_calib3_7.tsv`.)
 Box: half-extent = `round(210 * (|a| + |b|) / 65536)` twips, exact on all 3,200 E1 rows.
 Tool: `rbsim calib <file>`.
 
@@ -336,9 +340,10 @@ For matrices set from code the getter is `atan2(b, a) * 180 / Math.PI` on the st
 (E9b 10,000/10,000 within 1e-12 deg, 7,824 bit-exact). For **timeline** clips it is not:
 `killSpusk2` stores the SWF's 16.16 matrix (-65400, -566) but reports -179.50430297851562
 versus atan2 = -179.50414982270968 (~10 float32 ulps; an internal routine). `rbsim` therefore
-uses the Flash-reported value from a table (`kTimelineRotations`) and refuses to build a rotated
-body clip that is not in it. For each new level with rotated body clips, an E9a dump of that
-level fills the table.
+used the Flash-reported value from a table (`kTimelineRotations`). **Solved by the decompiled player**
+(`docs/FLASH_PLAYER_RE.md` §3): a timeline placement stores `atan2_fixed(b, a) / 65536`, the player's
+fixed-point atan2; rbsim computes it and reproduces all 46 measured values, so new levels need no E9a
+dump for rotations.
 
 `Level.CreateBody` takes a body's angle from `clip.rotation`. For a clip placed with a rotated
 timeline matrix (Level 8's `killSpusk2`: 16.16 matrix a = -65400, b = -566, c = 566, d = -65400)
@@ -446,9 +451,9 @@ calibration key on Levels 9, 10, 11, 15 and 17. `rbsim calib` checks every row (
 output); expected sizes 1-9 MB per level.
 
 **Results (FP 11.4):** E12 148,074 / 148,074 (per-part box, round-to-nearest corners). E11 390,665 / 390,670
-after fitting: `globalToLocal` into a turned spike uses screen twips (camera included), a double inverse, the
-inverse translation and the result rounded to whole twips; the 5 others lie within 0.003 twip of a half-twip and
-are flagged by the sim as uncertain.
+after fitting a double-precision inverse; **390,670 / 390,670** with the player's own float32 matrix
+arithmetic (`docs/FLASH_PLAYER_RE.md` §4): `globalToLocal` into a turned spike works in stage twips (camera
+included), inverts the matrix in float32 and rounds the sums to float32 before rounding to twips.
 
 ## 4. Where to hook in
 

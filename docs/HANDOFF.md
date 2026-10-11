@@ -41,14 +41,14 @@ recorded in README.md ("Verification status") and below.
 |---|---|
 | physics core | bit-exact (Box2DFlash quirks replicated; Intel LIBM `sin`/`cos`) |
 | levels **1-17 (all)** | **bit-exact** against Flash logs (83 logs, 99,170 frames; table in README) |
-| turned spikes / turned flag | calibrated by the E11/E12 sweeps (390,665 / 390,670 and 148,074 / 148,074; the 5 spike rows within 0.003 twip of a half-twip are flagged as uncertain) |
-| display layer | exact: rotation matrix, hit tests, camera, standardized spikes (section 6) |
+| turned spikes / turned flag | the player's float32 arithmetic, ported; E11/E12 sweeps 390,670 / 390,670 and 148,074 / 148,074 |
+| display layer | exact, ported from the decompiled Flash Player 11.4 (`docs/FLASH_PLAYER_RE.md`): rotation matrix, timeline rotations, hit tests, camera, standardized spikes (section 6) |
 | death / death warp | exact: ball body destroyed, full `Update` keeps running (world, machinery), unguarded goal/checkpoint/switch tests; 5 logged warps verified (incl. L9 death 358 / flag 359, L11 onto the moving flag 1110 / 1117). Debris (random) not simulated |
 | Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical. `rbview.exe` (viewer/, `make viewer`): double-click route viewer, tested under Wine + Xvfb with screenshots |
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-Self-tests: `./rbsim test` → 86 tests, `ALL PASSED` (also under Wine).
+Self-tests: `./rbsim test` → 89 tests, `ALL PASSED` (also under Wine).
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
@@ -151,17 +151,17 @@ authoritative. Cross-check field writes for any newly ported engine code. Never 
 ## 6. Calibration facts (details and numbers in `docs/STATS_LOGGING.md` §3.5-3.10)
 
 - `x`/`y` setters truncate toward zero to twips. `sin`/`cos` = Intel LIBM (FP 11.4).
-- **Display matrix:** built from the value *written* to `rotation`: `x = trunc(w*65536)` reduced
-  into [-180, 180] degrees in integers, then a 0.25-degree sine table (sin·2^30, truncated) with a
-  quarter-weight lerp (low 14 bits / 65536), `cos(x) = sin(90 - |x|)`, rounded to 16.16. Exact on
-  26,716 matrices (`FlashRotationMatrix`, `Sim::spriteRotW`).
-- **Bounding boxes:** rotated half-extent = round-nearest(half · (|a| + |c|)); nested levels are
-  rounded one at a time. `hitTestObject` counts touching edges. Known gap: nested rotated+scaled
-  sprites (two walls 1 twip off, never hit-tested).
-- **`rotation` getter of timeline-placed clips:** not atan2 of the stored matrix (an internal
-  approximation). Measured values go in `kTimelineRotations`; the sim aborts on a rotated body
-  clip without one. Dynamic bodies: recover from a log's tick-0 angle (unique double). Static
-  bodies: need an E9a dump.
+- **Display matrix:** built from the value *written* to `rotation`: `x = trunc(w*65536)`, then the
+  player's fixed-point sine/cosine (table trunc(sin(i·0.25°)·2^31), quarter-weight lerp, rounded half
+  up to 16.16), ported from the decompiled player (`docs/FLASH_PLAYER_RE.md` §3). The earlier fit
+  (2^30 table) was 1/65536 off on 1,622 of 26.2M rotations that never occurred in a log.
+  (`FlashRotationMatrix`, `Sim::spriteRotW`).
+- **Bounding boxes:** corners through the player's float32 point transform (round half to even),
+  min/max. `hitTestObject` counts touching edges. Known gap: the generated boxes of nested
+  rotated+scaled sprites (a few walls 1 twip off, never hit-tested).
+- **`rotation` getter of timeline-placed clips:** the player's fixed-point atan2 of the matrix,
+  / 65536 (`TimelineClipRotation`); reproduces all 46 measured values (`kTimelineRotations`, now
+  only a self-test). No E9a dump is needed for new rotated clips.
 - **Camera:** easeOutExpo at t = 1 of 31 frames, `c*1.001*(1 - 2^(-10/31)) + b`, truncated to
   twips; the `pow` constant is stored (`FlashTweenConstant`, 0x3fe996a2ea68dd55).
 - **Standardized spikes:** `localToGlobal` truncates the point to twips, applies the matrix,
@@ -288,7 +288,7 @@ win 338. Not logged: `movePlatform2` (direction starts at 0, reproduced).
 **If anything is reopened later** (for a route that depends on it):
 1. Record the case with the mod (docs/STATS_LOGGING.md 6.0) and run `./rbsim verify <log>`.
 2. `./rbsim calib <dump>` for any new placement question.
-3. `kTimelineRotations` now holds Flash's measured value for every rotated body clip (no provisional entries).
+3. Timeline rotations are computed like the player does (fixed-point atan2); `kTimelineRotations` is only a cross-check.
 4. Spike calibration for rotated/scaled Shipik rows (Level 17 and the turned/scaled rows of 9, 10, 11, 15; the E8c method of
    docs/STATS_LOGGING.md).
 5. **E11/E12 sweeps done** (`docs/mod_sweeps.as`, `rbsim calib`, dumps `rb1_calib_L9/10/11/15/17.tsv` with sweeps):
@@ -297,9 +297,9 @@ win 338. Not logged: `movePlatform2` (direction starts at 0, reproduced).
    - E11 (turned/scaled spikes): the continuous inverse was wrong on 1,469 of 390,670 rows. Fitted model
      (`tools`-free, see `BallHitsSpike`): screen twips (Level.x/y added: the camera matters, 1,315 misses without
      it; a 1-twip camera error gives ~550), double inverse of the matrix, inverse translation rounded to a twip,
-     local point rounded to a twip: 390,665 agree. The 5 others are within 0.003 twip of a half-twip (not float32:
-     every float/double mix was tried); decisions within 0.005 twip of one count in `displayUncertain`.
-     `BallHitsSpike` now takes the camera (`Sim::camX/camY`).
+     local point rounded to a twip: 390,665 agree. The decompiled player then showed the exact arithmetic
+     (float32 inverse, `ty` exact but `tx` rounded to float, sums rounded to float32 before `fistp`): 390,670 / 390,670,
+     and the uncertainty margin is gone. `BallHitsSpike` takes the camera (`Sim::camX/camY`).
 
 Every idle prediction made before the logs arrived (Levels 9, 10, 11, 13, 15, 16, 17) matched Flash.
 

@@ -14,11 +14,11 @@ frame matches that Flash Player to the last bit.
 | | |
 |---|---|
 | levels | **all 17 bit-exact** against Flash logs: 83 logs, 99,170 frames, every death and win on Flash's frame |
-| display layer | calibrated: rotation matrices, hit-test boxes, camera, plain spikes (E8c 30,000/30,000), turned/scaled spikes (E11 390,665/390,670, the other 5 flagged as uncertain), the turned Level 11 flag (E12 148,074/148,074) |
+| display layer | ported from Flash Player 11.4 itself (decompiled, `docs/FLASH_PLAYER_RE.md`) and checked against every dump: rotation matrices, hit-test boxes, camera, plain spikes (E8c 30,000/30,000), turned/scaled spikes (E11 390,670/390,670), the turned Level 11 flag (E12 148,074/148,074) |
 | death | death warps (onto checkpoints, flags, a moving flag, the Level 16 wrong-way trigger) and real-game pause timing |
 | platforms | Linux and Windows (x86-64), identical results; `rbview.exe`: a double-click route viewer for Windows |
 | search | `rbsim beam` (finds routes from any start, resumable), `rbsim optimize` (improves a known route) |
-| tests | `rbsim test`: 86 self-tests |
+| tests | `rbsim test`: 89 self-tests |
 
 ## Route viewer (Windows, no command line)
 
@@ -45,7 +45,7 @@ exactly `rbview.exe`, so the download link above keeps pointing at the newest on
 
 ```
 make                 # see "Build flags" below; do not change them
-./rbsim test         # 86 self-tests (physics, display layer, spikes, death warps, all 17 levels, snapshots, ...)
+./rbsim test         # 89 self-tests (physics, display layer, spikes, death warps, all 17 levels, snapshots, ...)
 ./rbsim run --level 2 --inputs "n20w1d25n40" [--hex] [--every N] [--checkpoint K]
 ./rbsim log --level 2 --inputs "..."      # simulator log in the Flash mod's TSV format
 ./rbsim bench [--frames N]                # throughput
@@ -183,13 +183,14 @@ loaded level; byte-identical round trip, portable between processes).
 | `src/levels_data.h` | named placements of all 17 levels (`tools/extract_levels.py`, `tools/gen_levels_data.py`) |
 | `src/level_polys.h` | polygon tables of levels 9-17 as written in the AS3 (`tools/gen_level_polys.py`) |
 | `src/display_data.h` | bounds of every named object and every spike, per level (`tools/gen_display_data.py`, `tools/swf_geom.py`) |
-| `src/flash_sintab.h` | Flash's display-matrix sine table (`tools/gen_flash_sintab.py`) |
+| `src/flash_sintab.h` | Flash's fixed-point sine table (`tools/gen_flash_sintab.py`; identical to the player's) |
 | `src/snapshot.cpp` / `snapshot.h` | compact, portable, byte-exact snapshots |
 | `src/search.cpp` / `src/beam.cpp` | `rbsim optimize` / `rbsim beam` |
 | `src/verify.cpp` / `src/calib.cpp` | stats-log replay / calibration-dump checks |
 | `src/rbsim.cpp` | CLI, self-tests, benchmark |
 | `tools/deathcause.cpp` | replays inputs and prints each death's cause (contacts or spike row) and the win |
 | `docs/mod_sweeps.as` | AS3 for the logging mod's E11/E12 calibration sweeps |
+| `docs/FLASH_PLAYER_RE.md` | what the decompiled Flash Player 11.4 does (addresses, formulas, the shape hit test) |
 | `viewer/rbview.cpp` (+ `.rc`, `.ico`, `.manifest`) | the Windows route viewer (`make viewer`) |
 
 All mutable state lives in fixed arrays linked by `int` indices, so `Sim copy = sim;` is a complete,
@@ -200,22 +201,22 @@ sim per thread is safe.
 
 Details and numbers: `docs/STATS_LOGGING.md` §3.5-3.11.
 
-- **Display matrix:** built from the value *written* to `rotation` (16.16 fixed-point degrees, reduced
-  in integers) with Flash's own 0.25-degree sine table and its quarter-weight interpolation bug;
-  exact on 26,716 matrices. Timeline-placed rotated clips use the rotation Flash reports (measured
-  per level, `kTimelineRotations`; every rotated body clip of every level is measured).
-- **Hit tests:** `hitTestObject` on twip bounding boxes (touching edges count); rotated boxes round
-  each half-extent to the nearest twip. A turned multi-part clip (Level 11's pushed flag: pole +
+- **Display matrix:** built from the value *written* to `rotation` (16.16 fixed-point degrees) with
+  the player's own fixed-point sine/cosine (0.25-degree table, quarter-weight interpolation bug),
+  ported from the decompiled player; exact on 26,716 logged matrices. Timeline-placed rotated clips
+  get the rotation the player derives with its fixed-point atan2 (reproduces all 46 values measured
+  in dumps, so new rotated clips need no E9a dump).
+- **Hit tests:** `hitTestObject` on twip bounding boxes (touching edges count); rotated boxes come from
+  the player's float32 corner transform (round half to even). A turned multi-part clip (Level 11's pushed flag: pole +
   cloth) is boxed per part with round-to-nearest corners, then unioned (E12: 148,074/148,074).
   `getBounds` of a nested sprite follows a different (union) rule, so the two are not the same call.
 - **Camera:** Tweener easeOutExpo at t = 1 of 31 frames per `Update`, truncated to twips; `dp` is the
   camera step of the frame.
 - **Standardized spikes** (`MATHSPIKES = 1`): 16 control points, `getBounds` test, shift by `-dp`
   (the **spike glitch**; `--gless` for glitchless), strict triangle test with Flash's twip
-  conversions. Turned/scaled spikes: Flash's `globalToLocal` works in screen twips (camera
-  included), inverts the matrix in doubles and rounds the inverse translation and the result to
-  whole twips (E11: 390,665/390,670; the other 5 lie within 0.003 twip of a half-twip, and the sim
-  counts any decision that close in `displayUncertain`).
+  conversions. Turned/scaled spikes: Flash's `globalToLocal` works in stage twips (camera
+  included) with float32 matrices (SWF >= 8): the player's float32 inverse and point transform are
+  ported exactly (E11: 390,670/390,670).
 - **Death:** `PlayerDie` destroys the ball's body and the level keeps running its full `Update`
   (world step, moving parts, level script); the camera follows the frozen ball and the goal,
   checkpoint and switch tests (no `IsLive()` guard) compare the ball, now off the display list, with
@@ -291,12 +292,12 @@ Calibration results:
 | question | answer |
 |---|---|
 | twip quantisation of `x`/`y` | truncation toward zero (2,400/2,400) |
-| `rotation` getter | written value, `fmod`-normalised to (-180, 180] (720/720); timeline clips: Flash's own value, measured per level |
-| display matrix from `rotation` | see above (26,716/26,716) |
+| `rotation` getter | written value, `fmod`-normalised to (-180, 180] (720/720); timeline clips: the player's fixed-point atan2 of the matrix (46/46 measured values) |
+| display matrix from `rotation` | the player's fixed-point trig, ported (26,716/26,716 logged) |
 | x87 extended precision in physics | no; all arithmetic matches SSE2 doubles |
-| `Math.sin`/`cos` (FP 11.4) | Intel LIBM (0/4,096 mismatches) |
+| `Math.sin`/`cos` (FP 11.4) | Intel LIBM (0/4,096 mismatches; the player's `_CIsin` jumps to `__sin_pentium4`) |
 | `localToGlobal` / spike `testPoint` | Flash's twip truncation and rounding (plain spikes: 16,000 + 26,040 + 30,000 cases) |
-| turned/scaled spikes (E11) | 390,665 / 390,670 (the 5 others flagged as uncertain) |
+| turned/scaled spikes (E11) | 390,670 / 390,670 (float32 inverse ported from the player) |
 | turned Level 11 flag (E12) | 148,074 / 148,074 |
 | placements and bounds (E9a/E10) | every dumped level (5, 8-17): all placements and every hit-test target exact; a few nested scaled walls that are never hit-tested are 1 twip off (Flash's rounding of nested rotated+scaled bounds is not modelled) |
 
@@ -316,4 +317,5 @@ section/symbol directives adapted; ARM (incl. Apple Silicon) cannot run the Inte
    contact-heavy levels.
 2. **Viewer:** `rbview.exe` is done (route playback); a TAS editor (record inputs with the keyboard,
    rewind, export) could build on it.
-3. **Simulator:** complete. Open curiosity only: the 5 E11 rows within 0.003 twip of a half-twip.
+3. **Simulator:** complete; the display layer is the player's own arithmetic. Not modelled: the real
+   game's shape spike test (`MATHSPIKES 0`), whose mechanism is in `docs/FLASH_PLAYER_RE.md` §6.
