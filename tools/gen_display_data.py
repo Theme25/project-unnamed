@@ -46,19 +46,25 @@ def spikes(sid):
             else:
                 bx = g.xrect(SHAPE, M)
             bx = tuple(float(round(v)) for v in bx)
-            out.append((k.get('name') or '', M, bx))
+            # MATHSPIKES 2 recomputes the Level -> Shipik matrix from each clip's own transform.matrix
+            # (16.16 entries as doubles, translation in whole twips): chain = [Shipik, parent Ships10 (if any)].
+            chain = [sm, m] if cid == SHIPS10 else [m]
+            out.append((k.get('name') or '', M, bx, chain))
     return out
 print("// Shipik in Level space: L = (a*x + c*y + tx, b*x + d*y + ty) px; bounds = getBounds(Level), twips.")
-print("struct SpikeObj { double a, b, c, d, tx, ty; double bx0, by0, bx1, by1; };")
+print("// chain: the Shipik's own matrix, then its Ships10 parent's (n = 1 or 2); a-d as Flash's 16.16 values, tx/ty in twips.")
+print("struct SpikeMat { double a, b, c, d, tx, ty; };")
+print("struct SpikeObj { double a, b, c, d, tx, ty; double bx0, by0, bx1, by1; int32_t n; SpikeMat chain[2]; };")
 print("struct LevelSpikes { int32_t id; const SpikeObj* items; int32_t count; };")
 spk = {}
 for lid, sid in LEVELS.items():
     spk[lid] = spikes(sid)
     if not spk[lid]: continue
     print("static const SpikeObj kLevel%dSpikes[] = {" % lid)
-    for name, M, bx in spk[lid]:
+    for name, M, bx, chain in spk[lid]:
         a,b,c,d,tx,ty = M
-        print("    {%r, %r, %r, %r, %r, %r, %r, %r, %r, %r},  // %s" % (float(a), float(b), float(c), float(d), tx/20.0, ty/20.0, *bx, name))
+        ch = ", ".join("{%r, %r, %r, %r, %r, %r}" % tuple(float(v) for v in cm) for cm in chain)
+        print("    {%r, %r, %r, %r, %r, %r, %r, %r, %r, %r, %d, {%s}},  // %s" % (float(a), float(b), float(c), float(d), tx/20.0, ty/20.0, *bx, len(chain), ch, name))
     print("};")
 print("static const LevelSpikes kSpikeTable[] = {")
 for lid in LEVELS:

@@ -206,6 +206,7 @@ int CmdVerify(int argc, char** argv) {
     std::string line;
     int ln = 0, skipped = 0;
     int cfgMathSpikes = -1, cfgGless = -1;  // -1: not stated in the log
+    bool envSeen = false;
     while (std::getline(in, line)) {
         ++ln;
         if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -222,6 +223,23 @@ int CmdVerify(int argc, char** argv) {
                 if (c[k] == "mathspikes") cfgMathSpikes = std::stoi(c[k + 1]);
                 if (c[k] == "gless") cfgGless = std::stoi(c[k + 1]);
             }
+            continue;
+        }
+        if (line.rfind("#ENV\t", 0) == 0) {  // #ENV<TAB>key<TAB>value... (Shipik.envLine, docs/MATHSPIKES_RESOLUTION.md)
+            std::vector<std::string> c = Split(line);
+            std::string win, mode;
+            for (size_t k = 1; k + 1 < c.size(); k += 2) {
+                if (c[k] == "mathspikes" && cfgMathSpikes < 0) cfgMathSpikes = std::stoi(c[k + 1]);
+                if (c[k] == "window") win = c[k + 1];
+                if (c[k] == "scaleMode") mode = c[k + 1];
+            }
+            int ww = 0, wh = 0;
+            if (std::sscanf(win.c_str(), "%dx%d", &ww, &wh) == 2 && !envSeen) {  // the shape test (mathspikes 0) needs it
+                DisplayConfig& dc = GetDisplayConfig();
+                dc.windowW = ww, dc.windowH = wh, dc.showAll = mode != "noScale";
+                std::printf("recorded in a %s window (%s)\n", win.c_str(), mode.c_str());
+            }
+            envSeen = true;
             continue;
         }
         if (line.empty() || line[0] == '#') continue;
@@ -257,10 +275,11 @@ int CmdVerify(int argc, char** argv) {
 
     std::map<int, std::unique_ptr<LevelTemplate>> tpls;
     if (forceGless >= 0) cfgGless = forceGless;
-    if (cfgMathSpikes == 0) {
-        std::printf("this log was recorded with MATHSPIKES 0 (original shape-test spikes): rbsim simulates the standardized\n"
-                    "check only (MATHSPIKES 1), so spike decisions in it are not comparable. Re-record with mathspikes 1.\n");
-    }
+    if (cfgMathSpikes == 0 && !envSeen)
+        std::printf("this log was recorded with MATHSPIKES 0 (Flash's shape test) but has no #ENV line, so the window size\n"
+                    "is unknown: assuming %dx%d (%s). Spike decisions depend on it.\n", GetDisplayConfig().windowW,
+                    GetDisplayConfig().windowH, GetDisplayConfig().showAll ? "showAll" : "noScale");
+    if (cfgMathSpikes >= 0 && cfgMathSpikes <= 2) GetDisplayConfig().mathSpikes = cfgMathSpikes;  // the log decides
     if (cfgMathSpikes >= 0 || cfgGless >= 0)
         std::printf("log config: mathspikes %d, gless %d\n", cfgMathSpikes, cfgGless);
     auto sim = std::make_unique<Sim>();
@@ -409,25 +428,32 @@ int CmdVerify(int argc, char** argv) {
             bool flashDied = false;
             for (size_t k = 21; k + 7 <= e.f.size() - TrailLen(e.f); k += 7)
                 if (e.f[k].rfind("playerDiePart", 0) == 0) flashDied = true;
-            // Artifact: the logger writes input 0 on the death frame although the game read the keys
-            // (every logged death: Flash's velocity matches the previous tick's input). Try the logged
-            // input first, then the previous one.
-            // (PlayerWin also calls OutControl, so the win row has the same artifact)
+            // Artifact: the logger writes input 0 on the death frame although the game read the keys (PlayerDie calls
+            // OutControl before the row is logged; PlayerWin too, so the win row has the same artifact). The keys of
+            // that frame are unknown: usually the previous tick's, but a route can change keys on exactly that frame.
+            // Try the logged 0 first, then the previous tick's input, then the other codes; keep the first that
+            // reproduces Flash's row.
             const bool flashWonHere = e.f[20] == "1" && ei > 0 && sg.entries[ei - 1].f[20] != "1";
             if (ei > 0 && (flashDied || flashWonHere) && code == 0 && ei >= 2 && !sg.entries[ei - 1].restart) {
                 const uint8_t prevCode = (uint8_t)std::stoi(sg.entries[ei - 1].f[2]);
-                if (prevCode != 0) {
+                auto clean = [&](uint8_t c) {
                     auto trial = std::make_unique<Sim>(*sim);
-                    trial->Tick(code);
+                    trial->Tick(c);
                     std::string dummy;
-                    const std::vector<int> b0 = Compare(trial->Stats(code), e.f, dummy);
-                    bool clean = true;
-                    for (int c : b0)
-                        if (!ignore[(size_t)c] && !((c == 14 || c == 15 || c == 16) && !trial->playerAlive)) clean = false;
-                    if (!clean) {
-                        code = prevCode;
-                        ++deathInputFromPrev;
-                    }
+                    for (int k : Compare(trial->Stats(c), e.f, dummy))
+                        if (!ignore[(size_t)k] && !((k == 14 || k == 15 || k == 16) && !trial->playerAlive)) return false;
+                    return true;
+                };
+                if (!clean(0)) {
+                    std::vector<uint8_t> order{prevCode};
+                    for (uint8_t c = 1; c < 8; ++c)
+                        if (c != prevCode) order.push_back(c);
+                    for (uint8_t c : order)
+                        if (c != 0 && clean(c)) {
+                            code = c;
+                            ++deathInputFromPrev;
+                            break;
+                        }
                 }
             }
             if (ei > 0) sim->Tick(code);
@@ -493,7 +519,7 @@ int CmdVerify(int argc, char** argv) {
     if (postDeathFrames || winsAfterDeath)
         std::printf("post-death frames matched (camera, dp, frame, win flag): %ld; wins after death: %ld\n", postDeathFrames, winsAfterDeath);
     if (deathInputFromPrev)
-        std::printf("death/win frames logged as input 0 (OutControl), matched with the previous tick's input: %ld\n", deathInputFromPrev);
+        std::printf("death/win frames logged as input 0 (OutControl), replayed with the keys that reproduce Flash's row: %ld\n", deathInputFromPrev);
     if (trailingSkipped)
         std::printf("trailing rows skipped (logged without the frame advancing, input field unreliable): %ld\n", trailingSkipped);
     if (g_cameraFramesChecked)

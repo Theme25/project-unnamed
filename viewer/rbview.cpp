@@ -195,10 +195,11 @@ static bool ParseRoute(const std::string& raw, std::vector<uint8_t>& out, std::w
 // ------------------------------------------------------------------ app state
 enum : int {
     ID_LEVEL = 100, ID_CHECKPOINT, ID_GLESS, ID_INPUTS, ID_LOAD, ID_OPEN, ID_PASTE, ID_FIRST, ID_BACK, ID_PLAY, ID_FWD, ID_LAST,
-    ID_SPEED, ID_FOLLOW, ID_TRAIL, ID_SLIDER, ID_CANVAS, ID_STATUS, ID_EVENTS, ID_HELP, ID_TIMER = 1
+    ID_SPEED, ID_FOLLOW, ID_TRAIL, ID_SLIDER, ID_CANVAS, ID_STATUS, ID_EVENTS, ID_HELP, ID_SPIKES, ID_WINDOW, ID_SCALE, ID_TIMER = 1
 };
 static HWND g_wnd, g_level, g_cp, g_gless, g_inputs, g_load, g_open, g_paste, g_first, g_back, g_play, g_fwd, g_last, g_speed, g_follow,
-    g_trail, g_slider, g_canvas, g_status, g_events, g_help, g_lblLevel, g_lblCp, g_lblInputs, g_lblSpeed;
+    g_trail, g_slider, g_canvas, g_status, g_events, g_help, g_lblLevel, g_lblCp, g_lblInputs, g_lblSpeed, g_lblSpikes, g_spikes, g_lblWindow,
+    g_window, g_scale;
 static HFONT g_font;
 static double g_dpi = 1.0;
 static Timeline g_tl;
@@ -260,8 +261,61 @@ static void FillCheckpoints(int level, int select) {
     SendMessageW(g_cp, CB_SETCURSEL, (WPARAM)std::max(0, std::min(select, n - 1)), 0);
 }
 
+// ------------------------------------------------------------------ spike rule and window (GetDisplayConfig)
+// Combo order -> CONFIG.MATHSPIKES. Flash's own shape test (0, also the Tournament Edition) depends on the size of the
+// Flash area (the projector window without its menu bar) and on the scale mode, so those two only matter there.
+static const int kSpikeModes[4] = {1, 2, 0, -1};
+static const wchar_t* kSpikeNames[4] = {L"Standardized (mathspikes 1)", L"Level math (mathspikes 2)",
+                                        L"Flash shape test (mathspikes 0, TE)", L"Off (no spike deaths)"};
+static const wchar_t* kWindowPresets[] = {L"550x400", L"640x480", L"800x600", L"829x603", L"935x925", L"1024x768", L"1280x720",
+                                          L"1366x768", L"1600x900", L"1920x1080"};
+
+static bool ParseWindowSize(const std::wstring& t, int& w, int& h) {
+    int a = 0, b = 0;
+    wchar_t x = 0;
+    if (std::swscanf(t.c_str(), L"%d %lc %d", &a, &x, &b) != 3 || (x != L'x' && x != L'X' && x != L'*') || a < 1 || b < 1 || a > 16384 ||
+        b > 16384)
+        return false;
+    w = a, h = b;
+    return true;
+}
+
+static void SetDisplayControls(int mathSpikes, int w, int h, bool showAll) {
+    int sel = 0;
+    for (int i = 0; i < 4; ++i)
+        if (kSpikeModes[i] == mathSpikes) sel = i;
+    SendMessageW(g_spikes, CB_SETCURSEL, (WPARAM)sel, 0);
+    wchar_t b[32];
+    std::swprintf(b, 32, L"%dx%d", w, h);
+    SetWindowTextW(g_window, b);
+    SendMessageW(g_scale, CB_SETCURSEL, showAll ? 0 : 1, 0);
+    const bool flash = mathSpikes == 0;
+    EnableWindow(g_window, flash);
+    EnableWindow(g_scale, flash);
+}
+
+// Controls -> GetDisplayConfig(). A window text that does not parse keeps the previous size.
+static void ReadDisplayControls() {
+    DisplayConfig& dc = GetDisplayConfig();
+    const int sel = (int)SendMessageW(g_spikes, CB_GETCURSEL, 0, 0);
+    dc.mathSpikes = kSpikeModes[sel >= 0 && sel < 4 ? sel : 0];
+    int w, h;
+    if (ParseWindowSize(GetText(g_window), w, h)) dc.windowW = w, dc.windowH = h;
+    dc.showAll = SendMessageW(g_scale, CB_GETCURSEL, 0, 0) != 1;
+    SetDisplayControls(dc.mathSpikes, dc.windowW, dc.windowH, dc.showAll);
+}
+
 static void SaveSettings() {
     if (g_iniPath.empty()) return;
+    {
+        const DisplayConfig& dc = GetDisplayConfig();
+        wchar_t d[32];
+        std::swprintf(d, 32, L"%d", dc.mathSpikes);
+        WritePrivateProfileStringW(L"display", L"mathspikes", d, g_iniPath.c_str());
+        std::swprintf(d, 32, L"%dx%d", dc.windowW, dc.windowH);
+        WritePrivateProfileStringW(L"display", L"window", d, g_iniPath.c_str());
+        WritePrivateProfileStringW(L"display", L"scale", dc.showAll ? L"showAll" : L"noScale", g_iniPath.c_str());
+    }
     wchar_t b[64];
     std::swprintf(b, 64, L"%d", g_tl.level);
     WritePrivateProfileStringW(L"route", L"level", b, g_iniPath.c_str());
@@ -282,6 +336,7 @@ static bool LoadRoute(bool showErrors) {
     g_tl.level = (int)SendMessageW(g_level, CB_GETCURSEL, 0, 0) + 1;
     g_tl.checkpoint = std::max(0, (int)SendMessageW(g_cp, CB_GETCURSEL, 0, 0));
     g_tl.gless = SendMessageW(g_gless, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    ReadDisplayControls();
     g_tl.in = in;
     BuildTimeline(g_tl);
     g_playing = false;
@@ -576,6 +631,15 @@ static void Layout() {
     x += S(140);
     MoveWindow(g_gless, x, y + S(3), S(100), S(22), TRUE);
     x += S(108);
+    MoveWindow(g_lblSpikes, x, y + S(5), S(44), rowH, TRUE);
+    x += S(44);
+    MoveWindow(g_spikes, x, y, S(220), S(300), TRUE);
+    x += S(228);
+    MoveWindow(g_lblWindow, x, y + S(5), S(52), rowH, TRUE);
+    x += S(52);
+    MoveWindow(g_window, x, y, S(96), S(300), TRUE);
+    x += S(102);
+    MoveWindow(g_scale, x, y, S(90), S(300), TRUE);
     MoveWindow(g_help, W - pad - S(60), y, S(60), rowH, TRUE);
     y += rowH + S(6);
     x = pad;
@@ -655,6 +719,24 @@ static void LoadRouteFile(const wchar_t* file) {
         if (line.rfind("# inputs\t", 0) == 0) {
             route = line.substr(9);
             isLog = true;
+        } else if (line.rfind("#ENV\t", 0) == 0) {  // the mod's environment line: follow its spike rule and window
+            std::vector<std::string> kv;
+            size_t q = 5;
+            while (q <= line.size()) {
+                size_t t = line.find('\t', q);
+                if (t == std::string::npos) t = line.size();
+                kv.push_back(line.substr(q, t - q));
+                q = t + 1;
+            }
+            const DisplayConfig& dc = GetDisplayConfig();
+            int ms = dc.mathSpikes, ww = dc.windowW, wh = dc.windowH;
+            bool showAll = dc.showAll;
+            for (size_t i = 0; i + 1 < kv.size(); i += 2) {
+                if (kv[i] == "mathspikes") ms = std::atoi(kv[i + 1].c_str());
+                if (kv[i] == "window") ParseWindowSize(Widen(kv[i + 1]), ww, wh);
+                if (kv[i] == "scaleMode") showAll = kv[i + 1] != "noScale";
+            }
+            if (ms >= 0 && ms <= 2) SetDisplayControls(ms, ww, wh, showAll);
         } else if (line.rfind("LEVEL ", 0) == 0) {
             if (!prevR) {  // a new recording starts here
                 std::sscanf(line.c_str() + 6, "%d %d", &level, &cp);
@@ -735,9 +817,13 @@ static const wchar_t* kHelp =
     L"Home/End start/end, +/- zoom. Mouse: wheel zooms, drag pans (turns off Follow camera).\n\n"
     L"Inputs: n none, d right, w up, e up+right, a left, S left+right, q left+up, W all three,\n"
     L"each followed by a frame count; R = restart from the checkpoint.\n"
-    L"Glitchless: the spike glitch off (Game.isGless).\n\n"
+    L"Glitchless: the spike glitch off (Game.isGless).\n"
+    L"Spikes: the spike rule (CONFIG.MATHSPIKES). \"Flash shape test\" is the original game and the\n"
+    L"Tournament Edition: there, deaths depend on the size of the Flash area (the window without its\n"
+    L"menu bar, e.g. 550x400) and on the scale mode (View > Show All in the projector). A stats log\n"
+    L"from the mod sets all three from its #ENV line.\n\n"
     L"Everything shown is computed by the bit-exact simulator (rbsim): positions, deaths and\n"
-    L"the flag frame match Flash Player 11.4 with the Practice Hack (mathspikes 1).\n"
+    L"the flag frame match Flash Player 11.4 with the Practice Hack (any spike rule above).\n"
     L"After a death the purple dashed \"warp ghost\" shows where the game tests the dead ball\n"
     L"against the flag, checkpoints and switches (shifted by the camera): when it touches the\n"
     L"flag, that is a death warp.\n"
@@ -839,6 +925,15 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             g_cp = MakeCtl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, ID_CHECKPOINT);
             g_gless = MakeCtl(L"BUTTON", L"Glitchless", BS_AUTOCHECKBOX | WS_TABSTOP, ID_GLESS);
             g_help = MakeCtl(L"BUTTON", L"Help", BS_PUSHBUTTON | WS_TABSTOP, ID_HELP);
+            g_lblSpikes = MakeCtl(L"STATIC", L"Spikes", 0, 0);
+            g_spikes = MakeCtl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, ID_SPIKES);
+            for (const wchar_t* n : kSpikeNames) SendMessageW(g_spikes, CB_ADDSTRING, 0, (LPARAM)n);
+            g_lblWindow = MakeCtl(L"STATIC", L"Window", 0, 0);
+            g_window = MakeCtl(L"COMBOBOX", L"", CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP, ID_WINDOW);
+            for (const wchar_t* n : kWindowPresets) SendMessageW(g_window, CB_ADDSTRING, 0, (LPARAM)n);
+            g_scale = MakeCtl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, ID_SCALE);
+            SendMessageW(g_scale, CB_ADDSTRING, 0, (LPARAM)L"Show all");
+            SendMessageW(g_scale, CB_ADDSTRING, 0, (LPARAM)L"No scale");
             g_lblInputs = MakeCtl(L"STATIC", L"Route", 0, 0);
             g_inputs = MakeCtl(L"EDIT", L"", ES_AUTOHSCROLL | WS_TABSTOP, ID_INPUTS, WS_EX_CLIENTEDGE);
             g_paste = MakeCtl(L"BUTTON", L"Paste", BS_PUSHBUTTON | WS_TABSTOP, ID_PASTE);
@@ -877,6 +972,15 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             SendMessageW(g_level, CB_SETCURSEL, (WPARAM)level - 1, 0);
             FillCheckpoints(level, cp);
             SendMessageW(g_gless, BM_SETCHECK, gl ? BST_CHECKED : BST_UNCHECKED, 0);
+            {
+                const int ms = (int)GetPrivateProfileIntW(L"display", L"mathspikes", 1, g_iniPath.c_str());
+                wchar_t win[64] = L"", sc[32] = L"";
+                GetPrivateProfileStringW(L"display", L"window", L"550x400", win, 64, g_iniPath.c_str());
+                GetPrivateProfileStringW(L"display", L"scale", L"showAll", sc, 32, g_iniPath.c_str());
+                int ww = 550, wh = 400;
+                ParseWindowSize(win, ww, wh);
+                SetDisplayControls(ms >= -1 && ms <= 2 ? ms : 1, ww, wh, _wcsicmp(sc, L"noScale") != 0);
+            }
             SetWindowTextW(g_inputs, inputs);
             Layout();
             LoadRoute(false);
@@ -897,7 +1001,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_GETMINMAXINFO: {
             MINMAXINFO* mm = (MINMAXINFO*)lp;
-            mm->ptMinTrackSize = {S(900), S(560)};
+            mm->ptMinTrackSize = {S(1160), S(560)};
             return 0;
         }
         case WM_TIMER:
@@ -927,7 +1031,19 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             const int id = LOWORD(wp), code = HIWORD(wp);
             // Combo boxes and the events list send many notifications (focus, dropdown opened, ...). Only selection
             // changes and close-ups are actions; moving focus on the others closes the dropdown as it opens.
-            const bool isCombo = id == ID_LEVEL || id == ID_CHECKPOINT || id == ID_SPEED;
+            if (id == ID_WINDOW) {  // editable: a preset picked, or typed text confirmed by leaving the box (Enter: message loop)
+                if (code == CBN_SELCHANGE) {
+                    const int sel = (int)SendMessageW(g_window, CB_GETCURSEL, 0, 0);
+                    wchar_t t[64] = L"";
+                    if (sel >= 0 && SendMessageW(g_window, CB_GETLBTEXTLEN, (WPARAM)sel, 0) < 64) SendMessageW(g_window, CB_GETLBTEXT, (WPARAM)sel, (LPARAM)t);
+                    SetWindowTextW(g_window, t);
+                    LoadRoute(false);
+                } else if (code == CBN_KILLFOCUS) {
+                    LoadRoute(false);
+                }
+                return 0;
+            }
+            const bool isCombo = id == ID_LEVEL || id == ID_CHECKPOINT || id == ID_SPEED || id == ID_SPIKES || id == ID_SCALE;
             if (isCombo && code == CBN_CLOSEUP) {
                 SetFocus(g_canvas);
                 return 0;
@@ -946,6 +1062,8 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                     if (code == CBN_SELCHANGE) LoadRoute(false);
                     break;
                 case ID_GLESS:
+                case ID_SPIKES:
+                case ID_SCALE:
                     LoadRoute(false);
                     break;
                 case ID_LOAD:
@@ -1058,7 +1176,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (msg.message == WM_KEYDOWN && GetFocus() != g_inputs) {
+        const bool inWindowBox = GetFocus() && GetParent(GetFocus()) == g_window;
+        if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN && inWindowBox) {
+            LoadRoute(false);
+            SetFocus(g_canvas);
+            continue;
+        }
+        if (msg.message == WM_KEYDOWN && GetFocus() != g_inputs && !inWindowBox) {
             const WPARAM k = msg.wParam;
             if (k == VK_SPACE || k == VK_LEFT || k == VK_RIGHT || k == VK_HOME || k == VK_END || k == VK_OEM_PLUS || k == VK_OEM_MINUS ||
                 k == VK_ADD || k == VK_SUBTRACT) {

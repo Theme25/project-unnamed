@@ -6,6 +6,7 @@
 #include "redball.h"
 #include "snapshot.h"
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <algorithm>
 #include <cinttypes>
@@ -943,6 +944,123 @@ static int CmdTest() {
         check(portable, "compact snapshot: decodes against a base built elsewhere and replays identically");
         std::printf("       compact snapshot: avg %zu bytes, max %zu bytes (full state %zu)\n", sumBytes / count, maxBytes, sizeof(Sim));
     }
+    // 20. Spike rules side by side: MATHSPIKES 2 equals MATHSPIKES 1 on every plain spike; Flash's shape test
+    //     (mathspikes 0, the real game) depends on the window size (docs/RESOLUTION.md).
+    {
+        DisplayConfig& dc = GetDisplayConfig();
+        const DisplayConfig saved = dc;
+        uint64_t rs = 0x9E3779B97F4A7C15ULL;
+        auto rnd = [&]() {  // [-1, 1)
+            rs ^= rs << 13; rs ^= rs >> 7; rs ^= rs << 17;
+            return (double)(rs >> 11) / 4503599627370496.0 - 1;
+        };
+        long plainN = 0, plainDiff = 0, pixN = 0, pixWinDiff = 0, pixVsStd = 0;
+        for (int32_t lv = 1; lv <= 17; ++lv) {
+            LevelTemplate t(lv);
+            for (int32_t i = 0; i < t.spikeCount; ++i) {
+                const SpikeObj& s = t.spikes[i];
+                auto unit = [](double v) { return v == 0 || v == 1 || v == -1; };
+                const bool plain = unit(s.a) && unit(s.b) && unit(s.c) && unit(s.d);
+                const double cx = (s.bx0 + s.bx1) / 40, cy = (s.by0 + s.by1) / 40;
+                for (int k = 0; k < 300; ++k) {
+                    const double ang = rnd() * AS3_PI, dist = 10.5 + 6 * rnd();
+                    const double x = std::trunc((cx + dist * std::cos(ang)) * 20) / 20, y = std::trunc((cy + dist * std::sin(ang)) * 20) / 20;
+                    const double rot = k % 4 ? rnd() * 400 : 0;
+                    const double dpx = k % 2 ? std::trunc(rnd() * 300) / 20 : 0, dpy = k % 3 ? std::trunc(rnd() * 100) / 20 : 0;
+                    const double camX = std::trunc(rnd() * 40000) / 20, camY = std::trunc(rnd() * 8000) / 20;
+                    auto hit = [&](int mode, int w, int h) {
+                        dc.mathSpikes = mode;
+                        dc.windowW = w, dc.windowH = h, dc.showAll = true;
+                        return BallHitsSpike(x, y, rot, dpx, dpy, s, camX, camY).hit;
+                    };
+                    const bool h1 = hit(1, 550, 400), h2 = hit(2, 550, 400);
+                    if (plain) {
+                        ++plainN;
+                        plainDiff += h1 != h2;
+                    }
+                    if (k % 3 == 0) {
+                        const bool p0 = hit(0, 550, 400), p1 = hit(0, 829, 603);
+                        ++pixN;
+                        pixWinDiff += p0 != p1;
+                        pixVsStd += p0 != (dpx == 0 && dpy == 0 ? h1 : p0);
+                    }
+                }
+            }
+        }
+        dc = saved;
+        check(plainN > 100000 && plainDiff == 0, "MATHSPIKES 2 = MATHSPIKES 1 on every plain spike (random grazing states)");
+        check(pixWinDiff > 0, "Flash's shape test (mathspikes 0) depends on the window size");
+        std::printf("       spike rules: %ld plain states; shape test: %ld of %ld grazing states differ between 550x400 and 829x603,"
+                    " %ld differ from the standardized check\n",
+                    plainN, pixWinDiff, pixN, pixVsStd);
+    }
+    // 21. Flash's shape test against hitTestPoint sweeps recorded with the 11.4 projector (Practice Hack, /config
+    //     mathspikes 0) at several window sizes: E8c (Level 3, plain spikes, fresh level) and E11 (turned/scaled).
+    {
+        struct Row { int level, w, h; bool showAll; int64_t camX, camY; double sx, sy; const char *rot, *x, *y; int hit; };
+        const Row rows[] = {
+#include "flashpix_rows.inc"
+        };
+        auto hx = [](const char* h) {
+            const uint64_t u = std::strtoull(h, nullptr, 16);
+            double d;
+            std::memcpy(&d, &u, 8);
+            return d;
+        };
+        DisplayConfig& dc = GetDisplayConfig();
+        const DisplayConfig saved = dc;
+        int ok = 0, n = 0;
+        for (const Row& r : rows) {
+            LevelTemplate t(r.level);
+            const SpikeObj* sp = nullptr;
+            for (int32_t i = 0; i < t.spikeCount; ++i)
+                if (std::fabs(t.spikes[i].tx - r.sx) < 1e-6 && std::fabs(t.spikes[i].ty - r.sy) < 1e-6) sp = &t.spikes[i];
+            dc.mathSpikes = 0, dc.windowW = r.w, dc.windowH = r.h, dc.showAll = r.showAll;
+            ++n;
+            if (sp && BallHitsSpike(hx(r.x), hx(r.y), hx(r.rot), 0, 0, *sp, r.camX / 20.0, r.camY / 20.0).hit == (r.hit != 0)) ++ok;
+        }
+        dc = saved;
+        check(ok == n, "Flash shape test: boundary rows of the 11.4 projector sweeps at 6 window sizes (incl. hidden) reproduced");
+        std::printf("       shape test rows: %d / %d\n", ok, n);
+    }
+    // 22. The shape test in motion: Level 3 routes played back in real time by the 11.4 projector (Practice Hack,
+    //     mathspikes 0) at several window sizes. The ball rolls over a spike row while the camera moves, so whether
+    //     and when it dies depends on the window: the spikes' edges are those of the last redraw (one camera step
+    //     behind) cut to the current, padded box. Death frames = Flash's (stats-log row of the first playerDiePart).
+    {
+        struct Run { const char* route; int w, h; bool showAll; int death; };
+        const char* r1 = "d18e1d58";
+        const char* r3 = "e3n1a5n11n9d12n5d11e6n10w2e8e10n5q3q8q6q12w4a12a3w5e1q10n8e3a8e5d8e8q8e10q12a11d1a4n12d7d4q5a4q6a9n6"
+                         "n10a2d3e7q2n12a2d8w8n6a4a12d5a2d12e7e4n7d2w12n3a1";
+        const Run runs[] = {{r1, 550, 400, true, 62},  {r1, 829, 603, true, 71},   {r1, 935, 925, true, 62},
+                            {r1, 700, 500, false, 62}, {r1, 935, 925, false, 62},  {r3, 550, 400, true, 101},
+                            {r3, 640, 480, true, 99},  {r3, 829, 603, true, 278},  {r3, 935, 925, true, 99},
+                            {r3, 1280, 720, true, 99}, {r3, 700, 500, false, 101}, {r3, 935, 925, false, 101}};
+        DisplayConfig& dc = GetDisplayConfig();
+        const DisplayConfig saved = dc;
+        LevelTemplate t3(3);
+        int ok = 0, n = 0;
+        std::string bad;
+        for (const Run& r : runs) {
+            dc.mathSpikes = 0, dc.windowW = r.w, dc.windowH = r.h, dc.showAll = r.showAll;
+            auto s = std::make_unique<Sim>();
+            s->Load(&t3);
+            int death = -1;
+            for (uint8_t in : DecodeInputs(r.route)) {
+                s->Tick(in);
+                if (!s->playerAlive) {
+                    death = s->frameCount;
+                    break;
+                }
+            }
+            ++n;
+            if (death == r.death) ++ok;
+            else bad += " " + std::to_string(r.w) + "x" + std::to_string(r.h) + ":" + std::to_string(death) + "!=" + std::to_string(r.death);
+        }
+        dc = saved;
+        check(ok == n, "Flash shape test in motion: death frames of real-time Flash playbacks at 7 window setups reproduced");
+        std::printf("       recorded runs: %d / %d%s\n", ok, n, bad.c_str());
+    }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }
@@ -973,7 +1091,39 @@ static int CmdBench(int argc, char** argv) {
     return 0;
 }
 
+// Global display options, removed from argv before the command sees them:
+//   --mathspikes N   spike rule: 1 = the Practice Hack's standardized check (default, the speedrun rule),
+//                    0 = Flash's shape test (the real game / Tournament Edition) at the window below,
+//                    2 = MATHSPIKES 2, -1 = spikes off (analysis only)
+//   --window WxH     window client size for --mathspikes 0 (default 550x400)
+//   --noscale        noScale instead of showAll (the Practice Hack's default scale mode)
+static bool ParseDisplayOptions(int& argc, char** argv) {
+    DisplayConfig& dc = GetDisplayConfig();
+    int o = 1;
+    for (int i = 1; i < argc; ++i) {
+        if (!std::strcmp(argv[i], "--mathspikes") && i + 1 < argc) {
+            dc.mathSpikes = std::atoi(argv[++i]);
+            if (dc.mathSpikes < -1 || dc.mathSpikes > 2) { std::fprintf(stderr, "--mathspikes 0|1|2 (-1: spikes off, analysis only)\n"); return false; }
+        } else if (!std::strcmp(argv[i], "--window") && i + 1 < argc) {
+            if (std::sscanf(argv[++i], "%dx%d", &dc.windowW, &dc.windowH) != 2 || dc.windowW < 1 || dc.windowH < 1) {
+                std::fprintf(stderr, "--window WIDTHxHEIGHT (window client size in pixels)\n");
+                return false;
+            }
+        } else if (!std::strcmp(argv[i], "--noscale")) {
+            dc.showAll = false;
+        } else if (!std::strcmp(argv[i], "--showall")) {
+            dc.showAll = true;
+        } else {
+            argv[o++] = argv[i];
+        }
+    }
+    argc = o;
+    argv[argc] = nullptr;
+    return true;
+}
+
 int main(int argc, char** argv) {
+    if (!ParseDisplayOptions(argc, argv)) return 2;
     for (int i = 1; i + 1 < argc; ++i)
         if (!std::strcmp(argv[i], "--trig")) {
             if (!std::strcmp(argv[i + 1], "glibc")) g_trigImpl = TrigImpl::Glibc;

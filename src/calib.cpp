@@ -67,6 +67,8 @@ int CmdCalib(int argc, char** argv) {
         return *tplL;
     };
     LevelTemplate tpl3(3);
+    double envLevelX = NAN, envLevelY = NAN;  // Level position from the #ENV line (the level the `]` dump sweeps)
+    std::unique_ptr<Sim> e8Cam;               // E8 reloads Level 3 first: its sweep runs on a fresh level
     auto checkM = [&](double rot, const std::string& ha, const std::string& hb) {
         const FlashMatrix m = FlashRotationMatrix(rot);
         ++mN;
@@ -76,6 +78,21 @@ int CmdCalib(int argc, char** argv) {
     while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         std::vector<std::string> f = Split(line);
+        if (f[0] == "#ENV") {  // recording environment (docs/RESOLUTION.md): the dump's spike rule and window decide
+            DisplayConfig& dc = GetDisplayConfig();
+            for (size_t k = 1; k + 1 < f.size(); k += 2) {
+                if (f[k] == "mathspikes") dc.mathSpikes = std::stoi(f[k + 1]);
+                else if (f[k] == "window") std::sscanf(f[k + 1].c_str(), "%dx%d", &dc.windowW, &dc.windowH);
+                else if (f[k] == "scaleMode") dc.showAll = f[k + 1] != "noScale";
+                else if (f[k] == "levelXY") {
+                    const size_t c = f[k + 1].find(',');
+                    envLevelX = H(f[k + 1].substr(0, c)), envLevelY = H(f[k + 1].substr(c + 1));
+                }
+            }
+            std::printf("recorded with: %s\n  model: mathspikes %d, window %dx%d %s\n", line.c_str() + 5, dc.mathSpikes, dc.windowW,
+                        dc.windowH, dc.showAll ? "showAll" : "noScale");
+            continue;
+        }
         if ((f[0] == "E1" || f[0] == "E1a") && f.size() >= 9) {
             const double x = H(f[2]), y = H(f[3]), rot = H(f[4]);
             const long cx = Tw(x), cy = Tw(y);
@@ -108,9 +125,13 @@ int CmdCalib(int argc, char** argv) {
         } else if (f[0] == "E8c" && f.size() >= 5) {
             // pb.HitTestObjectControlPoints(L.ship1) with the covers at (0,0): ship1 = first 11 Level 3 spikes
             const double rot = H(f[1]), x = SpriteCoordC(H(f[2])), y = SpriteCoordC(H(f[3]));
+            if (!e8Cam) {
+                e8Cam.reset(new Sim());
+                e8Cam->Load(&tpl3);
+            }
             bool hit = false;
             for (int32_t i = 0; i < 11 && i < tpl3.spikeCount; ++i)
-                if (BallHitsSpike(x, y, rot, 0, 0, tpl3.spikes[i]).hit) hit = true;
+                if (BallHitsSpike(x, y, rot, 0, 0, tpl3.spikes[i], e8Cam->camX, e8Cam->camY).hit) hit = true;
             ++e8cN;
             if (hit == (std::stoi(f[4]) == 1)) ++e8cOk;
             if (std::stoi(f[4]) == 1) ++e8cHits;
@@ -138,7 +159,8 @@ int CmdCalib(int argc, char** argv) {
                 e11Cam.reset(new Sim());
                 e11Cam->Load(&lvl());
             }
-            const SpikeResult r = BallHitsSpike(H(f[3]), H(f[4]), H(f[2]), 0, 0, *sp, e11Cam->camX, e11Cam->camY);
+            const double cx = std::isnan(envLevelX) ? e11Cam->camX : envLevelX, cy = std::isnan(envLevelY) ? e11Cam->camY : envLevelY;
+            const SpikeResult r = BallHitsSpike(H(f[3]), H(f[4]), H(f[2]), 0, 0, *sp, cx, cy);
             const bool flash = std::stoi(f[5]) == 1;
             ++e11N;
             if (flash) ++e11Hits;

@@ -15,10 +15,11 @@ frame matches that Flash Player to the last bit.
 |---|---|
 | levels | **all 17 bit-exact** against Flash logs: 83 logs, 99,170 frames, every death and win on Flash's frame |
 | display layer | ported from Flash Player 11.4 itself (decompiled, `docs/FLASH_PLAYER_RE.md`) and checked against every dump: rotation matrices, hit-test boxes, camera, plain spikes (E8c 30,000/30,000), turned/scaled spikes (E11 390,670/390,670), the turned Level 11 flag (E12 148,074/148,074) |
+| real-game spikes | the original game's / Tournament Edition's pixel spike test (`--mathspikes 0`) at any window size and scale mode, including the moving-camera spike glitch: 28 real-time Flash playbacks bit-exact to the death frame (`docs/RESOLUTION.md`) |
 | death | death warps (onto checkpoints, flags, a moving flag, the Level 16 wrong-way trigger) and real-game pause timing |
 | platforms | Linux and Windows (x86-64), identical results; `rbview.exe`: a double-click route viewer for Windows |
 | search | `rbsim beam` (finds routes from any start, resumable), `rbsim optimize` (improves a known route) |
-| tests | `rbsim test`: 89 self-tests |
+| tests | `rbsim test`: 93 self-tests |
 
 ## Route viewer (Windows, no command line)
 
@@ -29,8 +30,10 @@ because the exe is not signed: click **More info**, then **Run anyway**.
 `rbview.exe` is a single double-click program: pick a level, paste a route (or open/drag a route file
 or a stats log), press Play. It draws the level, moving parts, spikes, checkpoints, switches, the flag
 and the ball with the game's camera, lists deaths/checkpoints/switches/the flag frame, steps and seeks
-frame by frame, and shows a "warp ghost" after a death so death warps are visible. Everything is
-computed by the same bit-exact simulator. Guide: [`docs/WINDOWS.md`](docs/WINDOWS.md).
+frame by frame, and shows a "warp ghost" after a death so death warps are visible. The **Spikes**,
+**Window** and **Scale** boxes switch to the original game's / Tournament Edition's spike test at a given
+window size (a stats log sets them from its `#ENV` line). Everything is computed by the same bit-exact
+simulator. Guide: [`docs/WINDOWS.md`](docs/WINDOWS.md).
 Build: `make viewer` (MinGW-w64 cross build; Win32 + GDI+, static, ~1.6 MB; source in `viewer/`).
 To publish a new version: create a GitHub release (new tag, e.g. `v1.1`) and attach the exe named
 exactly `rbview.exe`, so the download link above keeps pointing at the newest one
@@ -45,7 +48,7 @@ exactly `rbview.exe`, so the download link above keeps pointing at the newest on
 
 ```
 make                 # see "Build flags" below; do not change them
-./rbsim test         # 89 self-tests (physics, display layer, spikes, death warps, all 17 levels, snapshots, ...)
+./rbsim test         # 93 self-tests (physics, display layer, spikes, death warps, all 17 levels, snapshots, ...)
 ./rbsim run --level 2 --inputs "n20w1d25n40" [--hex] [--every N] [--checkpoint K]
 ./rbsim log --level 2 --inputs "..."      # simulator log in the Flash mod's TSV format
 ./rbsim bench [--frames N]                # throughput
@@ -53,6 +56,9 @@ make                 # see "Build flags" below; do not change them
 ./rbsim calib rb1_calib.tsv                # checks a calibration dump (docs/STATS_LOGGING.md)
 ./rbsim optimize --level N --inputs RLE    # improve a known route, see below
 ./rbsim beam --level N --memory 10G        # find a route from any start, see below
+# any command: --mathspikes 1|2 picks the spike rule (docs/MATHSPIKES_RESOLUTION.md);
+#   --mathspikes 0 --window WxH [--noscale]: the original game / Tournament Edition at that window (docs/RESOLUTION.md)
+make framescan && tools/framescan rb1_stats.tsv      # checks the frame-scan mod's edge scans (docs/RESOLUTION.md)
 make deathcause && tools/deathcause <level> <RLE> [checkpoint] [gless]   # what killed the ball, when
 ```
 
@@ -62,8 +68,9 @@ alive and sleep flags per frame (`--hex`: raw IEEE-754 bits). Inputs use the gam
 a frame count; `R` = checkpoint restart).
 
 `verify` replays a stats log recorded with the logging mod and compares every field of every frame.
-It detects per segment whether the recording had `isGless` on (`--gless` forces it), and also
-reports how many hit-test decisions came within a rounding unit of flipping (should be 0).
+It detects per segment whether the recording had `isGless` on (`--gless` forces it), takes the spike rule, window
+size and scale mode from the log's `#ENV` line, and also reports how many hit-test decisions came within a rounding
+unit of flipping (should be 0).
 
 ### Windows
 
@@ -212,6 +219,10 @@ Details and numbers: `docs/STATS_LOGGING.md` §3.5-3.11.
   `getBounds` of a nested sprite follows a different (union) rule, so the two are not the same call.
 - **Camera:** Tweener easeOutExpo at t = 1 of 31 frames per `Update`, truncated to twips; `dp` is the
   camera step of the frame.
+- **Real-game spikes** (`MATHSPIKES = 0`, original game, Tournament Edition): Flash's renderer hit test in window
+  subpixels (whole-pixel probe, float32 device matrices, fuzzy curve crossings, box padded by 2 subpixels on the
+  right/bottom) against each spike's edges **as of the previous frame's redraw**, the source of window-dependent
+  deaths. `--window WxH [--noscale]`; see `docs/RESOLUTION.md`.
 - **Standardized spikes** (`MATHSPIKES = 1`): 16 control points, `getBounds` test, shift by `-dp`
   (the **spike glitch**; `--gless` for glitchless), strict triangle test with Flash's twip
   conversions. Turned/scaled spikes: Flash's `globalToLocal` works in stage twips (camera
@@ -299,6 +310,7 @@ Calibration results:
 | `localToGlobal` / spike `testPoint` | Flash's twip truncation and rounding (plain spikes: 16,000 + 26,040 + 30,000 cases) |
 | turned/scaled spikes (E11) | 390,670 / 390,670 (float32 inverse ported from the player) |
 | turned Level 11 flag (E12) | 148,074 / 148,074 |
+| real-game spikes (`MATHSPIKES 0`) | still sweeps at 7 window sizes: E8c 240,000 / 240,000, E11 1,172,010 / 1,172,010; moving camera: per-frame edge scans 390 / 390, 28 real-time playbacks at 7 window setups bit-exact to the death frame |
 | placements and bounds (E9a/E10) | every dumped level (5, 8-17): all placements and every hit-test target exact; a few nested scaled walls that are never hit-tested are 1 twip off (Flash's rounding of nested rotated+scaled bounds is not modelled) |
 
 An older custom ActiveX host (Flash 11.5) has different `sin`/`cos` (1 ulp on ~3.5% of inputs): never
@@ -317,5 +329,6 @@ section/symbol directives adapted; ARM (incl. Apple Silicon) cannot run the Inte
    contact-heavy levels.
 2. **Viewer:** `rbview.exe` is done (route playback); a TAS editor (record inputs with the keyboard,
    rewind, export) could build on it.
-3. **Simulator:** complete; the display layer is the player's own arithmetic. Not modelled: the real
-   game's shape spike test (`MATHSPIKES 0`), whose mechanism is in `docs/FLASH_PLAYER_RE.md` §6.
+3. **Simulator:** complete; the display layer is the player's own arithmetic, including the real game's
+   shape spike test at any window size (`MATHSPIKES 0`, `docs/RESOLUTION.md`). Open: confirm it with one stats
+   log recorded on real Windows; the Tournament Edition's Level 15 money tween (0.3 s of real time).

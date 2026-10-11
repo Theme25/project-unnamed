@@ -9,11 +9,14 @@ If Windows says "Windows protected your PC" (the exe is not signed), click **Mor
 the moving parts, spikes, checkpoints, switches, the flag and the ball, with the game's camera.
 
 1. **Level** and **Start from** (the start or a checkpoint), **Glitchless** if the route is
-   meant for the spike glitch off.
+   meant for the spike glitch off. **Spikes:** the spike rule. Keep *Standardized (mathspikes 1)* for the
+   speedrun rules. *Flash shape test (mathspikes 0, TE)* is the original game and the Tournament Edition. There,
+   deaths depend on the Flash area's size (**Window**: the projector window without its menu bar, a preset or a
+   typed size such as `935x925`) and on **Scale** (*Show all* = the projector's View > Show All).
 2. **Route:** paste the input string (`d12e1w3n5...`, the TAS hack's format) and press **Load**
    (or Enter). **Open...** (or drag a file onto the window, or onto `rbview.exe`) loads a `.txt`
-   with the route or a stats log (`.tsv`) from the logging mod: level, checkpoint and glitchless
-   mode are then taken from the log.
+   with the route or a stats log (`.tsv`) from the logging mod: level, checkpoint, glitchless
+   mode and the spike rule, window and scale (its `#ENV` line) are then taken from the log.
 3. **Play** (Space). **<** and **>** (Left/Right arrow) step one frame; **|<** / **>|** (Home/End)
    jump to the start/end; the slider seeks anywhere; **Speed** from 0.1x to 8x (1x = the game's
    31 frames per second).
@@ -76,6 +79,8 @@ rbsim.exe optimize --level 8 --inputs "d19a3n1a1n12d1a1n21d15e1d1e1d3e22d7e5d30e
   keep using the PC while it runs, for example `--threads 4`.
 - `--checkpoint C`: start from checkpoint C instead of the level start.
 - `--gless`: glitchless mode (no spike glitch). Leave it out for the normal TAS rules.
+- `--mathspikes 0 --window WxH` (add `--noscale` for the Practice Hack's default scale mode): optimize for the
+  original game's / Tournament Edition's spikes at that window size. The result is only valid there.
 
 While it runs, every improvement is printed as soon as it is found, for example:
 

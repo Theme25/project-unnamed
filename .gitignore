@@ -8,3 +8,4 @@ tools/deathcause
 rbview.exe
 rbview.ini
 viewer/*.res.o
+tools/framescan

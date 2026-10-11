@@ -2,6 +2,7 @@
 // Game.UpdateHandler) driving the Box2D port.
 #include "redball.h"
 #include "level_polys.h"
+#include "flashpix.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -231,7 +232,124 @@ static bool ShipikPointInTriangle(double x, double y) {
     const bool d3 = ShipikSign(x, y, w, 0, 0, 0);
     return d1 == d2 && d2 == d3;
 }
-SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s, double camXpx, double camYpx) {
+// MATHSPIKES 2 (docs/mathspikes2/Shipik.as testLevelPoint + PlayerBox.as HitTestObjectControlPoints), operation
+// for operation. Control points: the same twip pipeline as localToGlobal (truncate, 16.16 matrix, round) but in
+// Level space, so a window/zoom/camera offset never enters. Cover shift: as MATHSPIKES 1 (twips, truncated).
+// Spike: Level -> Shipik matrix concatenated in doubles from each clip's transform.matrix (translations in
+// twips), exact AABB of the shape box, inverse in doubles, no rounding of the local point.
+static SpikeResult BallHitsSpikeMath(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s) {
+    if (s.n < 1) fatal("spike without a matrix chain (regenerate display_data.h)");
+    // Shipik.prepare()
+    double a = s.chain[0].a, b = s.chain[0].b, c = s.chain[0].c, d = s.chain[0].d, tx = s.chain[0].tx, ty = s.chain[0].ty;
+    for (int i = 1; i < s.n; ++i) {
+        const SpikeMat& m = s.chain[i];
+        const double na = m.a * a + m.c * b, nb = m.b * a + m.d * b;
+        const double nc = m.a * c + m.c * d, nd = m.b * c + m.d * d;
+        const double ntx = m.a * tx + m.c * ty + m.tx, nty = m.b * tx + m.d * ty + m.ty;
+        a = na; b = nb; c = nc; d = nd; tx = ntx; ty = nty;
+    }
+    const double det = a * d - b * c;
+    const double ia = d / det, ib = -b / det, ic = -c / det, id = a / det;
+    const double W = 6, H = 9.65;  // Shipik.w, Shipik.h
+    const double kx[4] = {0, W, 0, W}, ky[4] = {-H, -H, 0, 0};
+    double bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+    for (int k = 0; k < 4; ++k) {
+        const double X = (a * kx[k] + c * ky[k]) * 20 + tx, Y = (b * kx[k] + d * ky[k]) * 20 + ty;
+        if (k == 0 || X < bx0) bx0 = X;
+        if (k == 0 || X > bx1) bx1 = X;
+        if (k == 0 || Y < by0) by0 = Y;
+        if (k == 0 || Y > by1) by1 = Y;
+    }
+    const double rl = bx0 / 20, rt = by0 / 20, rw = (bx1 - bx0) / 20, rh = (by1 - by0) / 20;
+    // quick reject, as BallHitsSpike (the ball cannot reach)
+    if ((sx + 11) * 20 < bx0 || (sx - 11) * 20 > bx1 || (sy + 11) * 20 < by0 || (sy - 11) * 20 > by1) return {false, false};
+    // PlayerBox: ball matrix (16.16) and position (twips)
+    const int64_t X = std::llround(sx * 20), Y = std::llround(sy * 20);
+    const FlashMatrix fm = FlashRotationMatrix(rotDeg);
+    const double coverX = SpriteCoord(dpx), coverY = SpriteCoord(dpy);
+    const double r = PLAYER_SPRITE_WIDTH_TWIPS / 20.0 / 2;
+    const double step = 2 * AS3_PI / 16;
+    for (int k = 0; k < 16; ++k) {
+        const int64_t qx = (int64_t)std::trunc(r * as3_cos(step * k) * 20), qy = (int64_t)std::trunc(r * as3_sin(step * k) * 20);
+        const int64_t gx = X + ((fm.a * qx - fm.b * qy + 32768) >> 16);
+        const int64_t gy = Y + ((fm.b * qx + fm.a * qy + 32768) >> 16);
+        // Shipik.testLevelPoint(gx, gy)
+        const double px = (double)gx / 20, py = (double)gy / 20;
+        // bounds as a Rectangle in px (left/top + width/height, like getBounds(p).containsPoint in MATHSPIKES 1)
+        if (!(px >= rl && px < rl + rw && py >= rt && py < rt + rh)) continue;
+        const double ux0 = (double)(int64_t)std::trunc((px - coverX) * 20);  // point.subtract(cover), to twips
+        const double uy0 = (double)(int64_t)std::trunc((py - coverY) * 20);
+        const double ddx = ux0 - tx, ddy = uy0 - ty;
+        const double ux = (ia * ddx + ic * ddy) / 20, uy = (ib * ddx + id * ddy) / 20;
+        if (ShipikPointInTriangle(ux, uy)) return {true, false};
+    }
+    return {false, false};
+}
+
+// Flash's shape test (CONFIG.MATHSPIKES 0 / the Tournament Edition): PlayerBox.HitTestObjectControlPoints calls
+// spike.hitTestPoint(point, true) for each of the 16 control points. The point is the ball's localToGlobal (stage
+// twips: Level-local float32 transform + the Level's position), handed back as twips / 20 and cut to whole twips by
+// hitTestPoint, then tested against the spike as drawn in the window (src/flashpix.h). The spike's window matrix
+// is the window/root matrix, then the Level (camera), then the spike's clip chain (Ships10 -> Shipik), each level
+// rounding its translation to a quarter window pixel. Edges come from the last redraw (Level at drawnCam), the
+// bounding box from the current matrix.
+static pix::DevMatrix SpikeDevMatrix(const pix::Window& w, const SpikeObj& s, int64_t levelX, int64_t levelY) {
+    if (s.n < 1) fatal("spike without a matrix chain (regenerate display_data.h)");
+    pix::DevMatrix m = pix::Concat(pix::RootMatrix(w), 1, 0, 0, 1, levelX, levelY);
+    for (int i = s.n - 1; i >= 0; --i) {
+        const SpikeMat& c = s.chain[i];
+        m = pix::Concat(m, c.a, c.b, c.c, c.d, std::llround(c.tx), std::llround(c.ty));
+    }
+    return m;
+}
+static SpikeResult BallHitsSpikePixel(double sx, double sy, double rotDeg, const SpikeObj& s, double camXpx, double camYpx,
+                                      double drawnCamXpx, double drawnCamYpx) {
+    const double bx0 = s.bx0 / 20.0, by0 = s.by0 / 20.0, bw = (s.bx1 - s.bx0) / 20.0, bh = (s.by1 - s.by0) / 20.0;
+    if (sx + 12 < bx0 || sx - 12 > bx0 + bw || sy + 12 < by0 || sy - 12 > by0 + bh) return {false, false};
+    const DisplayConfig& dc = GetDisplayConfig();
+    const pix::Window w = pix::MakeWindow(dc.windowW, dc.windowH, dc.showAll);
+    const int64_t LX = std::llround(camXpx * 20), LY = std::llround(camYpx * 20);
+    const int64_t DX = std::isnan(drawnCamXpx) ? LX : std::llround(drawnCamXpx * 20);
+    const int64_t DY = std::isnan(drawnCamYpx) ? LY : std::llround(drawnCamYpx * 20);
+    const pix::DevMatrix now = SpikeDevMatrix(w, s, LX, LY), drawn = (DX == LX && DY == LY) ? now : SpikeDevMatrix(w, s, DX, DY);
+    const int64_t X = std::llround(sx * 20), Y = std::llround(sy * 20);
+    const FlashMatrix fm = FlashRotationMatrix(rotDeg);
+    const double fa = fm.a / 65536.0, fb = fm.b / 65536.0;
+    const double r = PLAYER_SPRITE_WIDTH_TWIPS / 20.0 / 2, step = 2 * AS3_PI / 16;
+    for (int k = 0; k < 16; ++k) {
+        const int64_t qx = (int64_t)std::trunc(r * as3_cos(step * k) * 20), qy = (int64_t)std::trunc(r * as3_sin(step * k) * 20);
+        const int64_t Tx = pix::StageRoundTrip(X + FlashXformX(fa, -fb, qx, qy) + LX);
+        const int64_t Ty = pix::StageRoundTrip(Y + FlashXformY(fb, fa, qx, qy) + LY);
+        int64_t px, py;
+        pix::Probe(w, Tx, Ty, px, py);
+        if (pix::SpikeShapeHit(now, drawn, px, py)) return {true, false};
+    }
+    return {false, false};
+}
+
+bool SpikeOnScreen(const SpikeObj& s, double camXpx, double camYpx) {
+    const DisplayConfig& dc = GetDisplayConfig();
+    const pix::Window w = pix::MakeWindow(dc.windowW, dc.windowH, dc.showAll);
+    const pix::DevMatrix m = SpikeDevMatrix(w, s, std::llround(camXpx * 20), std::llround(camYpx * 20));
+    int64_t x0 = INT64_MAX, x1 = INT64_MIN, y0 = INT64_MAX, y1 = INT64_MIN;
+    for (int64_t x : {0, 120})
+        for (int64_t y : {-193, 0}) {
+            int64_t ox, oy;
+            pix::Xform(m, x, y, ox, oy);
+            x0 = std::min(x0, ox), x1 = std::max(x1, ox), y0 = std::min(y0, oy), y1 = std::max(y1, oy);
+        }
+    // the redraw covers the whole window (letterbox bars included); the box is the padded device box
+    const int64_t L = 0, T = 0, R = 4 * (int64_t)dc.windowW, B = 4 * (int64_t)dc.windowH;
+    x1 += pix::kBoundsPad, y1 += pix::kBoundsPad;
+    return x1 >= L && x0 < R && y1 >= T && y0 < B;
+}
+
+SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s, double camXpx, double camYpx,
+                          double drawnCamXpx, double drawnCamYpx) {
+    const int mode = GetDisplayConfig().mathSpikes;
+    if (mode == 0) return BallHitsSpikePixel(sx, sy, rotDeg, s, camXpx, camYpx, drawnCamXpx, drawnCamYpx);
+    if (mode < 0) return {false, false};  // analysis only: spikes switched off
+    if (mode == 2) return BallHitsSpikeMath(sx, sy, rotDeg, dpx, dpy, s);
     const double bx0 = s.bx0 / 20.0, by0 = s.by0 / 20.0, bw = (s.bx1 - s.bx0) / 20.0, bh = (s.by1 - s.by0) / 20.0;
     if (sx + 11 < bx0 || sx - 11 > bx0 + bw || sy + 11 < by0 || sy - 11 > by0 + bh) return {false, false};
     const int64_t X = std::llround(sx * 20), Y = std::llround(sy * 20);  // sprite x/y: whole twips
@@ -1744,6 +1862,8 @@ void Sim::Restart() {
     }
     for (int32_t i = 0; i < LV_VARS; ++i) lvBody[i] = lvInt[i] = 0;
     aimBody = -1;
+    if (tpl->spikeCount > CAP_SPIKES) fatal("too many spikes (raise CAP_SPIKES)");
+    for (int32_t i = 0; i < CAP_SPIKES; ++i) spDrawn[i] = false, spDrawnX[i] = spDrawnY[i] = 0;
 
     // --- Level() constructor
     AABB worldAABB;
@@ -1796,6 +1916,7 @@ void Sim::Restart() {
     playerAlive = true;
     isTimeStop = false;
     probeC = probeL = probeR = false;
+    RenderSpikes();  // the redraw before the first Update
 }
 
 // ---------------------------------------------------------------- per-frame
@@ -2006,7 +2127,17 @@ void Sim::DisplayUpdate() {
     // Spikes: any Shipik/Ships10 hit by a control point kills a live ball (PlayerDie is guarded here).
     if (playerAlive) {
         for (int32_t i = 0; i < tpl->spikeCount; ++i) {
-            const SpikeResult r = BallHitsSpike(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], dpX, dpY, tpl->spikes[i], camX, camY);
+            // mathSpikes 0: the spikes' edges are from the last redraw in which they were on screen (RenderSpikes)
+            double drawnX = NAN, drawnY = NAN;
+            if (GetDisplayConfig().mathSpikes == 0) {
+                if (!spDrawn[i]) {  // hitTestPoint builds the edges of a never-drawn shape with the current matrix
+                    spDrawn[i] = true;
+                    spDrawnX[i] = std::llround(camX * 20), spDrawnY[i] = std::llround(camY * 20);
+                }
+                drawnX = spDrawnX[i] / 20.0, drawnY = spDrawnY[i] / 20.0;
+            }
+            const SpikeResult r = BallHitsSpike(spriteX[playerBody], spriteY[playerBody], spriteRotW[playerBody], dpX, dpY, tpl->spikes[i], camX,
+                                                camY, drawnX, drawnY);
             if (r.uncertain) ++displayUncertain;
             if (r.hit) {
                 PlayerDie();
@@ -2040,6 +2171,16 @@ void Sim::Tick(uint8_t input) {
     LevelUpdate(left, up, right);
     if (dead) ++deadTicks;
     if (!isTimeStop) ++frameCount;
+    RenderSpikes();
+}
+
+void Sim::RenderSpikes() {
+    if (GetDisplayConfig().mathSpikes != 0) return;
+    for (int32_t i = 0; i < tpl->spikeCount; ++i)
+        if (SpikeOnScreen(tpl->spikes[i], camX, camY)) {
+            spDrawn[i] = true;
+            spDrawnX[i] = std::llround(camX * 20), spDrawnY[i] = std::llround(camY * 20);
+        }
 }
 
 FrameStats Sim::Stats(uint8_t input) const {

@@ -83,7 +83,7 @@ the code below. Before this, it was a model fitted to calibration dumps.
 | point transform 0x004c30d0 | `X = tx + rint(f32(a·f32(x) + c·f32(y)))`, `Y = ty + rint(f32(d·f32(y) + b·f32(x)))`, where `rint` = `fistp`, half to even |
 | inverse 0x004c3ba0 | `det = f32(d·a − c·b)`; `a' = f32(d/det)`, `b' = f32(−b/det)`, `c' = f32(−c/det)`, `d' = f32(a/det)`; `tx' = −rint(f32(ty·c' + a'·f32(tx)))`, `ty' = −rint(f32(ty·d' + b'·f32(tx)))` (note `ty` exact, `tx` rounded to float first). If b = c = 0: `1/a`, `1/d`, `−rint(f32(f32(t)·entry))` |
 | concat 0x004c37e0 | entries as float sums of products; translation `t2 + rint(f32(…))` |
-| rect transform 0x004c33b0 | the 4 corners through the point transform, then min/max |
+| rect transform 0x004c33b0 | b = c = 0: each side `t + rint(f32(v·a))`; otherwise the 4 corners through the point transform, then min/max |
 
 - With this arithmetic the E11 turned-spike sweeps match **390,670 / 390,670**.
 - The 5 rows the old double-precision fit missed were float32 rounding of the inverse's sums. The sum
@@ -133,6 +133,17 @@ Consequences for the real game, inferred from the code:
   - the quality (anti-aliasing factor);
   - the camera position.
 
-This is the mechanism behind the side quest's measurements (¼-pixel render grid). A bit-exact
-MATHSPIKES 0 model would still need the shape edge builder (vtable +0x14 of the shape object:
-how vertices are rounded to device units, how curves are stored) and the value of +0x48 per quality.
+This is the mechanism behind the side quest's measurements (¼-pixel render grid). rbsim now models the whole
+test bit-exactly (`--mathspikes 0`, `src/flashpix.*`, `docs/RESOLUTION.md`). The remaining pieces, also from the
+code:
+
+- **Device bounds** (vtable +0x10 → 0x004b4bd0). The shape bounds go through the rect transform 0x004c33b0
+  (b = c = 0: `tx + rint(f32(x·a))` per side), widened by the stroke padding (none for the spikes). For
+  SWF > 8, `xmax` and `ymax` then grow by `(aa + 1) / 2`, which is 2 subpixels at quality HIGH. 0x004b8450 swaps
+  these bounds in, computed with the current matrix, for the test. It then restores the bounds of the last
+  redraw.
+- **Edges** (vtable +0x14; the shape-record reader 0x004acbb0). Straight edges (record type 2) become curves whose control point is the
+  `>> 1` midpoint, flagged as lines. Points go through the float32 point transform.
+- **Edge cache.** The list is built at redraw time. During a hit test it is not rebuilt for a pure translation, so
+  after a camera step the test uses the previous frame's outline inside the current box. This was measured with
+  per-frame `hitTestPoint` scans and fixes the death frame of real-time playbacks at every window size tried.

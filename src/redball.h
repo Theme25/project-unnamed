@@ -58,6 +58,17 @@ bool LookupTimelineRotation(int32_t level, const char* name, double& out, bool* 
 extern int32_t g_provisionalRotations;  // kept for compatibility: always 0 now
 struct DisplayConfig {
     bool inclusive = true;  // touching edges count as a hit (player 0x004491e0; E2 calibration)
+    // Spike rule:
+    //  1: the Practice Hack's standardized check (CONFIG.MATHSPIKES 1, the speedrun rule; the default).
+    //  0: Flash's own shape test, hitTestPoint(x, y, true): the real game (Tournament Edition) and the Practice
+    //     Hack with MATHSPIKES 0. Depends on the window size below (src/flashpix.h, docs/RESOLUTION.md).
+    //  2: MATHSPIKES 2 (docs/mathspikes2/*.as): the standardized check done in Level coordinates with plain doubles.
+    // -1: spikes off (analysis only).
+    int mathSpikes = 1;
+    // Window for mathSpikes 0: client size in pixels and scale mode (true: showAll, the Tournament Edition; false:
+    // noScale, the Practice Hack's default). Quality is HIGH (the player's default).
+    int windowW = 550, windowH = 400;
+    bool showAll = true;
 };
 DisplayConfig& GetDisplayConfig();
 // adj = -1/0/+1 on the matrix entries (in 1/65536 units), for calibration reports only.
@@ -72,8 +83,14 @@ bool RectsHit(const Rect& a, const Rect& b);
 // included), ported from the player; the E11 sweeps agree on all 390,670 rows.
 // camXpx/camYpx = Level.x/y (px) at the time of the test (only turned/scaled spikes depend on it).
 struct SpikeResult { bool hit; bool uncertain; };  // uncertain: always false (kept for callers)
+// Dispatches on GetDisplayConfig().mathSpikes. For mathSpikes 0 the spike's edges are those of the last redraw,
+// when the Level was at drawnCam (px); by default the current camera (a static scene, as in the sweeps).
 SpikeResult BallHitsSpike(double spriteXpx, double spriteYpx, double rotationDeg, double dpx, double dpy, const SpikeObj& s,
-                          double camXpx = 0, double camYpx = 0);
+                          double camXpx = 0, double camYpx = 0, double drawnCamXpx = NAN, double drawnCamYpx = NAN);
+// mathSpikes 0: is any part of the spike's box inside the window with the Level at cam (px)? Flash only redraws
+// (and so only rebuilds the edges of) shapes that are on screen.
+bool SpikeOnScreen(const SpikeObj& s, double camXpx, double camYpx);
+constexpr int CAP_SPIKES = 256;
 
 // Real-game timers (not in the TAS hack; teammate data, 31 fps): after a death the game respawns 1.2 s later
 // and after the flag it enters the next level 2.839 s later; both timers run while paused, the actions only
@@ -160,6 +177,10 @@ struct Sim {
     double camTargetX = 0, camTargetY = 0;
     bool camTween = false;              // a camera tween was added by the previous Update
     double dpX = 0, dpY = 0;            // Level.dp: camera step of this Update (old - new)
+    // mathSpikes 0 edge cache: the Level position (twips) each spike's edges were last built at (by a redraw while
+    // on screen, or by a hitTestPoint on a never-drawn spike); spDrawn = false: not built yet.
+    int64_t spDrawnX[CAP_SPIKES], spDrawnY[CAP_SPIKES];
+    bool spDrawn[CAP_SPIKES];
     int32_t deadTicks = 0;             // Updates run since the ball died
     // AS3 static level flags: Level_7.redCheckLevel (later: Level_13.greenCheckLevel, Level_16.isStrelka).
     // Cleared by a fresh SetLevel, kept by SetLevel(id, true).
@@ -214,6 +235,7 @@ struct Sim {
     int32_t GetBodyAtPoint(double x, double y, bool includeStatic);
     void LevelUpdate(bool left, bool up, bool right);
     void DisplayUpdate();
+    void RenderSpikes();   // the redraw after each frame: refresh the edge cache of on-screen spikes
     void CameraStep();     // Tweener.onEnterFrame via COMM "TweenEvent"  // win check + checkpoints (Level.Update, after the input forces)
     int32_t Geom(const std::string& key, const ShapeDef& def);
     int32_t BeginBody(const char* name);

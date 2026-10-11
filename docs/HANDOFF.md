@@ -43,12 +43,13 @@ recorded in README.md ("Verification status") and below.
 | levels **1-17 (all)** | **bit-exact** against Flash logs (83 logs, 99,170 frames; table in README) |
 | turned spikes / turned flag | the player's float32 arithmetic, ported; E11/E12 sweeps 390,670 / 390,670 and 148,074 / 148,074 |
 | display layer | exact, ported from the decompiled Flash Player 11.4 (`docs/FLASH_PLAYER_RE.md`): rotation matrix, timeline rotations, hit tests, camera, standardized spikes (section 6) |
+| real-game spikes (`MATHSPIKES 0`, Tournament Edition) | exact at any window size / scale mode (`--mathspikes 0 --window WxH [--noscale]`, `src/flashpix.*`, `docs/RESOLUTION.md`): still sweeps (E8c 240,000, E11 1,172,010), per-frame edge scans (390 / 390) and 28 real-time playbacks at 7 window setups, bit-exact to the death frame. Recorded under Wine (team's 11.4 projector); one real-Windows log still to compare. MATHSPIKES 1/2 do not depend on the window (team's dumps at 5 sizes) |
 | death / death warp | exact: ball body destroyed, full `Update` keeps running (world, machinery), unguarded goal/checkpoint/switch tests; 5 logged warps verified (incl. L9 death 358 / flag 359, L11 onto the moving flag 1110 / 1117). Debris (random) not simulated |
 | Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical. `rbview.exe` (viewer/, `make viewer`): double-click route viewer, tested under Wine + Xvfb with screenshots |
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-Self-tests: `./rbsim test` → 89 tests, `ALL PASSED` (also under Wine).
+Self-tests: `./rbsim test` → 93 tests, `ALL PASSED` (also under Wine).
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
@@ -205,6 +206,18 @@ search grows ~2x per frame even with merging (prototype: last 16 frames of L8 ~2
 The bruteforcer (beam/optimize work in section 7) is someone else's task. **The simulator is finished: all 17
 levels are bit-exact against Flash logs.** What follows records how the last seven got there.
 
+**Window resolution (latest chat).** The team's projector was decompiled (`docs/FLASH_PLAYER_RE.md`) and the real
+game's `hitTestPoint` spike test ported (`src/flashpix.*`). Two things were found only by recording real-time
+playbacks under Wine with a frame-scan mod (`docs/resolution/`):
+- `hitTestPoint` uses each spike's edge list **from the last redraw** (one camera step behind), cut to the
+  current box;
+- the box is padded by 2 subpixels on the right and bottom (0x004b4bd0).
+
+Both are in the model, and self-tests 21-22 lock them. Tooling: `tools/framescan`; the recording recipe is in
+`docs/RESOLUTION.md` §5 (paste the route, never type it). Open:
+- one stats log recorded on real Windows with `/config mathspikes 0`, to compare;
+- the Tournament Edition's Level 15 money tween (0.3 s of real time).
+
 **Scripted from the AS3 (chat before last):** levels 9, 10, 11, 13, 15, 16, 17 (`Level_N.as` of the
 Practice Hack SWF). Bodies and joints in AS3 order; polygons from `src/level_polys.h`. `LevelVerified()` /
 `WarnIfUnverified()` make run, optimize and beam on an unverified level print a warning. AS3 quirks
@@ -354,11 +367,12 @@ kind, checkpoint-1 restart, win/TAS, level-specific cases) and a calibration dum
 E9a, E10). Run `./rbsim verify <log>` (look for `diverged: 0`) and `./rbsim calib <dump>`
 (`CALIB OK`). Before every commit: `./rbsim test` + verify every log available in the chat.
 
-Known log artifacts handled by `verify`: death and win rows log input 0 (retried with the
-previous input); rows logged after the frame counter stops are skipped (but the first `ts=1` win
+Known log artifacts handled by `verify`: death and win rows log input 0 (replayed with the input that
+reproduces Flash's row: usually the previous one, but a route can change keys on that very frame); rows logged after the frame counter stops are skipped (but the first `ts=1` win
 row is compared); frame counter compared segment-relative; static flags carried after `R`.
 Earlier wrong turns worth remembering: an ActiveX-host log looked like a physics bug; logs
-recorded with `MATHSPIKES 0` looked like spike bugs (check the mod settings first).
+recorded with `MATHSPIKES 0` looked like spike bugs before the shape test was modelled (`verify` now takes the
+rule and window from `#ENV`; an old log without `#ENV` is checked at 550x400 showAll).
 
 **Delivering** (the assistant cannot push):
 1. Commit with the user's identity:
