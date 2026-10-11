@@ -34,22 +34,33 @@ using PolyList = std::vector<std::vector<std::pair<double, double>>>;
 // camera scale is always 1 -- scaleTimer is never started -- so the global
 // offset cancels in any pairwise overlap test).
 struct Rect { double x0, y0, x1, y1; };
-// Flash's rotation -> 16.16 display matrix and the resulting getBounds (docs/STATS_LOGGING.md 3.6/3.7).
+// Flash's rotation -> 16.16 display matrix and the resulting getBounds. All of the display-layer arithmetic below
+// is ported from Flash Player 11.4.402.287 itself (SAFlashPlayer.exe; addresses in docs/FLASH_PLAYER_RE.md).
 struct FlashMatrix { int32_t a, b; };  // c = -b, d = a (16.16)
 // rotationDeg = the value WRITTEN to DisplayObject.rotation (may lie outside (-180, 180]).
 FlashMatrix FlashRotationMatrix(double rotationDeg);
+// The player's fixed-point trig on 16.16 degrees (sin/cos 0x00542d70/0x00542df0, atan2 0x00542fb0).
+int32_t FlashSinFx(int32_t deg16);
+int32_t FlashCosFx(int32_t deg16);
+int32_t FlashAtan2Fx(int32_t y, int32_t x);
+// Float32 matrix arithmetic used by localToGlobal/globalToLocal/getBounds in SWF >= 8 movies.
+struct FlashFloatMatrix { float a, b, c, d; int64_t tx, ty; };  // translation in whole twips
+int64_t FlashXformX(double a, double c, int64_t x, int64_t y);  // rint(f32(a*f32(x) + c*f32(y)))
+int64_t FlashXformY(double b, double d, int64_t x, int64_t y);  // rint(f32(d*f32(y) + b*f32(x)))
+void FlashXform(const FlashFloatMatrix& m, int64_t x, int64_t y, int64_t& ox, int64_t& oy);
+FlashFloatMatrix FlashInvert(const FlashFloatMatrix& m);
 // Math.pow(2, -10/31) as Flash computes it (camera tween step; E8pow calibration)
 double FlashTweenConstant();
-// Flash-reported DisplayObject.rotation of rotated timeline clips (docs/STATS_LOGGING.md 3.9).
+// DisplayObject.rotation of a timeline-placed clip: atan2_fixed(b, a) / 65536 (player 0x004ae590). The measured
+// E9a values kept in kTimelineRotations are a cross-check (rbsim test); every one is reproduced.
+double TimelineClipRotation(int32_t matrixA, int32_t matrixB);
 bool LookupTimelineRotation(int32_t level, const char* name, double& out, bool* measured = nullptr);
-extern int32_t g_provisionalRotations;  // uses of provisional (unmeasured) timeline rotations
+extern int32_t g_provisionalRotations;  // kept for compatibility: always 0 now
 struct DisplayConfig {
-    bool inclusive = true;  // touching edges count as a hit (VERIFIED: E2 calibration, 5/5 touching cases hit)
+    bool inclusive = true;  // touching edges count as a hit (player 0x004491e0; E2 calibration)
 };
 DisplayConfig& GetDisplayConfig();
-// adj = -1/0/+1 on the matrix entries (in 1/65536 units): the fitted matrix is exact on 14,496 of
-// 14,500 logged matrices; the 4 misses are near-ties in the last rounding step. Hit tests are also made
-// with the matrix nudged by -1/+1 and disagreements are flagged in Sim::displayUncertain.
+// adj = -1/0/+1 on the matrix entries (in 1/65536 units), for calibration reports only.
 Rect BallBounds(double spriteXpx, double spriteYpx, double rotationDeg, int adj = 0);
 bool RectsHit(const Rect& a, const Rect& b);
 // Standardized spikes (Practice Hack CONFIG.MATHSPIKES = 1, the speedrun rule):
@@ -57,13 +68,10 @@ bool RectsHit(const Rect& a, const Rect& b);
 // (10.5 px radius, through the ball's display matrix). Each point, in Level space, must lie in the
 // Shipik's getBounds rectangle; then it is shifted by -dp (the camera step of this frame) and tested
 // strictly against the triangle (0,0) (3,-9.65) (6,0), with Flash's twip conversions reproduced exactly
-// (docs/STATS_LOGGING.md 3.8). Turned/scaled Shipiks (docs/STATS_LOGGING.md 3.11, E11 sweep): Flash's
-// globalToLocal works in screen twips (camera included): double inverse of the spike's matrix, inverse translation
-// rounded to a twip, local point rounded to a twip; 390,665 of 390,670 sweep rows agree, the other 5 lie within
-// 0.003 twip of a half-twip, so decisions within SPIKE_HALF_TWIP_MARGIN of one count in Sim::displayUncertain.
+// (docs/STATS_LOGGING.md 3.8). Turned/scaled Shipiks: Flash's float32 globalToLocal in stage twips (camera
+// included), ported from the player; the E11 sweeps agree on all 390,670 rows.
 // camXpx/camYpx = Level.x/y (px) at the time of the test (only turned/scaled spikes depend on it).
-constexpr double SPIKE_HALF_TWIP_MARGIN = 0.005;  // twips
-struct SpikeResult { bool hit; bool uncertain; };
+struct SpikeResult { bool hit; bool uncertain; };  // uncertain: always false (kept for callers)
 SpikeResult BallHitsSpike(double spriteXpx, double spriteYpx, double rotationDeg, double dpx, double dpy, const SpikeObj& s,
                           double camXpx = 0, double camYpx = 0);
 

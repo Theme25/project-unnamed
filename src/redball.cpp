@@ -64,38 +64,159 @@ DisplayConfig& GetDisplayConfig() {
     return cfg;
 }
 
-// Flash's internal sine: angle in 16.16 fixed-point degrees, 0.25-degree table (2^30 scale),
-// "linear interpolation" whose weight is the low 14 bits / 65536 (a quarter of the proper weight),
-// rounded to 16.16. cos(x) = sin(90 - |x|). Angles beyond 90 degrees are mirrored first.
-static int32_t FlashSinFx(int64_t x) {  // x >= 0, x <= 90 * 65536
-    const int64_t i = x >> 14, fr = x & 16383;
-    const int64_t v = kFlashSinTab[i] + (((kFlashSinTab[i + 1] - kFlashSinTab[i]) * fr) >> 16);
-    return (int32_t)((v + (1 << 13)) >> 14);
+// ---- Flash Player 11.4 fixed-point trigonometry, ported from the player (SAFlashPlayer.exe 11.4.402.287).
+// Angles are 16.16 fixed-point degrees. Sine core 0x00542cb0: 0.25-degree table of trunc(sin * 2^31); the
+// "interpolation" multiplies the table step by the low 14 bits and shifts by 16 (so it uses a quarter of the
+// proper weight), rounding half up; the result is rounded half up to 16.16.
+static int32_t FlashSinCore(uint32_t x) {  // 0 <= x <= 90 * 65536
+    const uint32_t idx = (x >> 14) & 0x1ff;
+    const int64_t fr = (int64_t)(x - (idx << 14));
+    const uint32_t t0 = kFlashSinTab[idx], t1 = kFlashSinTab[idx + 1];
+    uint32_t s;
+    if (t1 >= t0) {
+        const int64_t v = (int64_t)(t1 - t0) * fr;
+        s = t0 + (uint32_t)((v >> 16) + ((v >> 15) & 1));
+    } else {
+        const int64_t v = (int64_t)(t0 - t1) * fr;
+        s = t0 - (uint32_t)((v >> 16) + ((v >> 15) & 1));
+    }
+    return (int32_t)((s + (1u << 14)) >> 15);
+}
+static uint32_t FlashReduceDeg(int32_t x) {  // 0x00542d70 / 0x00542df0: reduce into [0, 360) (unsigned division)
+    const uint32_t P = 360u << 16;
+    if (x >= (int32_t)P) x = (int32_t)((uint32_t)x - ((uint32_t)x / P) * P);
+    if (x < 0) x += (int32_t)(((uint32_t)(-(int64_t)x) / P + 1) * P);
+    return (uint32_t)x;
+}
+int32_t FlashSinFx(int32_t deg16) {  // 0x00542d70
+    uint32_t x = FlashReduceDeg(deg16);
+    const uint32_t H = 180u << 16, Q = 90u << 16;
+    bool neg = false;
+    if (x >= H) neg = true, x -= H;
+    if (x > Q) x = H - x;
+    const int32_t r = FlashSinCore(x);
+    return neg ? -r : r;
+}
+int32_t FlashCosFx(int32_t deg16) {  // 0x00542df0
+    uint32_t x = FlashReduceDeg(deg16);
+    const uint32_t T = 270u << 16, H = 180u << 16, Q = 90u << 16;
+    bool neg = false;
+    if (x >= T) x -= T;
+    else if (x < Q) x = Q - x;
+    else {
+        x -= Q, neg = true;
+        if (x > Q) x = H - x;
+    }
+    const int32_t r = FlashSinCore(x);
+    return neg ? -r : r;
 }
 
-// The written value is converted to 16.16 fixed-point degrees by truncation and reduced into
-// [-180, 180] in integers (so a written 307.77 behaves like floor, not trunc, of -52.23): exact on
-// 12,216 in-game matrices and all 14,500 calibration matrices.
+// DisplayObject rotation setter (AS3 path 0x004b2600): the written value is kept as a double, the matrix is
+// built from trunc(rotation * 65536) (x87 multiply, cvttsd2si) with the fixed-point sine/cosine above, each
+// entry = round-half-up((scale16 * trig16) >> 16), which is the trig value itself at scale 1. A written 307.77
+// therefore behaves like -52.23 via the integer reduction.
 FlashMatrix FlashRotationMatrix(double rotDeg) {
-    const int64_t D90 = 90LL * 65536, D180 = 180LL * 65536;
-    int64_t xf = (int64_t)std::trunc(rotDeg * 65536);
-    while (xf > D180) xf -= 2 * D180;
-    while (xf < -D180) xf += 2 * D180;
-    const int64_t x = xf < 0 ? -xf : xf;
-    const int32_t sn = FlashSinFx(x > D90 ? D180 - x : x);
-    const int32_t cs = x <= D90 ? FlashSinFx(D90 - x) : -FlashSinFx(x - D90);
-    return FlashMatrix{cs, xf < 0 ? -sn : sn};
+    const int32_t xf = (int32_t)as3_toInt32(rotDeg * 65536);  // truncation toward zero
+    return FlashMatrix{FlashCosFx(xf), FlashSinFx(xf)};
 }
 
-// PlayerBox local box is (-210,-210)-(210,210) twips (children 20/21/22). Flash's getBounds of a
-// rotated object is the axis-aligned box of its transformed local box, each half-extent rounded to
-// the nearest twip (calibration 3.6: exact on E1, E5 and all E6 control shapes).
+// Fixed-point division 0x005c5e57: round-half-up(|a| * 2^bits / |b|) with the sign of a/b, saturating.
+static int32_t FlashFixDiv(int32_t a, int32_t b, int bits) {
+    bool neg = false;
+    uint32_t ua, ub;
+    if (a < 0) neg = !neg, ua = a == INT32_MIN ? 0x7fffffffu : (uint32_t)(-a);
+    else ua = (uint32_t)a;
+    if (b == 0) return neg ? INT32_MIN : INT32_MAX;
+    if (b < 0) neg = !neg, ub = b == INT32_MIN ? 0x7fffffffu : (uint32_t)(-b);
+    else ub = (uint32_t)b;
+    if (((ua / ub) >> (32 - bits - 1)) != 0) return neg ? INT32_MIN : INT32_MAX;
+    const uint64_t num = (uint64_t)ua << bits;
+    uint64_t q = num / ub;
+    const uint64_t r = num % ub;
+    if (2 * r >= ub) {
+        ++q;
+        if (q & 0x80000000u) return neg ? INT32_MIN : INT32_MAX;
+    }
+    return neg ? -(int32_t)q : (int32_t)q;
+}
+// atan(t) for 0 <= t <= 1 (16.16 in, 16.16 degrees out), 0x00542e90: Newton-form polynomial through
+// t = 0.9, 0.7, 0.5, 0.3, 0.1, 0.01, 0.001, 0.0005, 0.0001, 0 in 2^25 fixed point, each step rounded half up.
+static int32_t FlashAtanCore(int32_t t16) {
+    static const int32_t kNode[10] = {30198988, 23488102, 16777216, 10066329, 3355443, 335544, 33554, 16777, 3355, 0};
+    static const int32_t kCoef[10] = {-51671014, 172290461, -174281885, -104783335, 381432251,
+                                      4459892,   -640841711, -384492,   1922527331, 0};
+    const int32_t t = (int32_t)((uint32_t)t16 << 9);
+    int32_t acc = (int32_t)0xfe34e3a5u;
+    for (int i = 0; i < 10; ++i) {
+        const int64_t p = (int64_t)acc * (int64_t)(int32_t)((uint32_t)t - (uint32_t)kNode[i]);
+        acc = (int32_t)((uint32_t)(int32_t)((p >> 25) + ((p >> 24) & 1)) + (uint32_t)kCoef[i]);
+    }
+    return (int32_t)(((1 << 8) + (int64_t)acc) >> 9);
+}
+// Fixed-point atan2(y, x) in 16.16 degrees, 0x00542fb0 (with 0x00542f10 folding |t| > 1 onto 90 - atan(1/t)).
+int32_t FlashAtan2Fx(int32_t y, int32_t x) {
+    const int32_t D90 = 90 << 16, D180 = 180 << 16;
+    if (x == 0) return y >= 0 ? D90 : -D90;
+    int32_t t = FlashFixDiv(y, x, 16), r;
+    bool neg = false;
+    if (t < 0) t = t == INT32_MIN ? INT32_MAX : -t, neg = true;
+    if (t > 65536) r = D90 - FlashAtanCore(FlashFixDiv(65536, t, 16));
+    else r = FlashAtanCore(t);
+    if (neg) r = -r;
+    if (x >= 0) return r;
+    return y >= 0 ? r + D180 : r - D180;
+}
+
+// ---- Flash's float32 matrix arithmetic (SWF version >= 8 movies use float matrices; the player converts the
+// 16.16 entries to float exactly). Point transform 0x004c30d0:
+//   X = tx + rint(f32(a * f32(x) + c * f32(y))),  Y = ty + rint(f32(d * f32(y) + b * f32(x)))
+// with the x87 at 53-bit precision (products of a float and an integer are exact, the sum is rounded once to
+// double, then to float32) and fistp rounding half to even.
+static inline int64_t FlashRint(float v) { return (int64_t)std::nearbyint((double)v); }
+int64_t FlashXformX(double a, double c, int64_t x, int64_t y) {
+    return FlashRint((float)(a * (double)(float)x + c * (double)(float)y));
+}
+int64_t FlashXformY(double b, double d, int64_t x, int64_t y) {
+    return FlashRint((float)(d * (double)(float)y + b * (double)(float)x));
+}
+void FlashXform(const FlashFloatMatrix& m, int64_t x, int64_t y, int64_t& ox, int64_t& oy) {
+    ox = m.tx + FlashXformX(m.a, m.c, x, y);
+    oy = m.ty + FlashXformY(m.b, m.d, x, y);
+}
+// Matrix inverse 0x004c3ba0 (float branch). det = f32(d*a - c*b); entries f32(d/det), f32(-b/det), f32(-c/det),
+// f32(a/det); translation -rint(f32(ty*c' + a'*f32(tx))) and -rint(f32(ty*d' + b'*f32(tx))) (ty as an exact integer,
+// tx rounded to float32 first). A diagonal matrix takes a shortcut: 1/a, 1/d, -rint(f32(f32(t) * entry)).
+// (A zero determinant / zero diagonal would give the identity; spikes never have one.)
+FlashFloatMatrix FlashInvert(const FlashFloatMatrix& m) {
+    FlashFloatMatrix r{};
+    if (m.b == 0 && m.c == 0) {
+        r.a = (float)(1.0 / m.a);
+        r.d = (float)(1.0 / m.d);
+        r.tx = -FlashRint((float)((double)(float)m.tx * r.a));
+        r.ty = -FlashRint((float)((double)(float)m.ty * r.d));
+        return r;
+    }
+    const float det = (float)((double)m.d * m.a - (double)m.c * m.b);
+    r.a = (float)(m.d / (double)det);
+    r.b = (float)(-(double)m.b / det);
+    r.c = (float)(-(double)m.c / det);
+    r.d = (float)(m.a / (double)det);
+    const double txf = (float)m.tx;
+    r.tx = -FlashRint((float)((double)m.ty * r.c + (double)r.a * txf));
+    r.ty = -FlashRint((float)((double)m.ty * r.d + (double)r.b * txf));
+    return r;
+}
+
+// PlayerBox local box is (-210,-210)-(210,210) twips (children 20/21/22). getBounds / hitTestObject transform the
+// local box's 4 corners with the float32 point transform above and take min/max (0x004c33b0); for the
+// symmetric box that is a half-extent of rint(f32(210 * (|a| + |b|))) with |a|, |b| the 16.16 entries.
+// adj (+-1 on the matrix entries) is kept for calibration reports only.
 Rect BallBounds(double sx, double sy, double rotDeg, int adj) {
     const double x = std::llround(sx * 20), y = std::llround(sy * 20);  // sprite x/y are whole twips
     const FlashMatrix m = FlashRotationMatrix(rotDeg);
     const int64_t a = std::llabs((int64_t)m.a) + adj, b = std::llabs((int64_t)m.b) + adj;
     const int64_t h2 = (int64_t)PLAYER_SPRITE_WIDTH_TWIPS / 2;
-    const double n = (double)((h2 * (a + b) + 32768) >> 16);
+    const double n = (double)FlashXformX(a / 65536.0, b / 65536.0, h2, h2);
     return Rect{x - n, y - n, x + n, y + n};
 }
 
@@ -126,10 +247,11 @@ SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, doubl
     const double step = 2 * AS3_PI / 16;
     bool hit = false, uncertain = false;
     for (int k = 0; k < 16; ++k) {
-        // testPoints[k] = (r cos(step k), r sin(step k)); localToGlobal: to twips (truncate), matrix, round
+        // testPoints[k] = (r cos(step k), r sin(step k)); localToGlobal: to twips (truncate), float32 point transform
         const int64_t qx = (int64_t)std::trunc(r * as3_cos(step * k) * 20), qy = (int64_t)std::trunc(r * as3_sin(step * k) * 20);
-        const int64_t gx = X + ((fm.a * qx - fm.b * qy + 32768) >> 16);
-        const int64_t gy = Y + ((fm.b * qx + fm.a * qy + 32768) >> 16);
+        const double fa = fm.a / 65536.0, fb = fm.b / 65536.0;
+        const int64_t gx = X + FlashXformX(fa, -fb, qx, qy);
+        const int64_t gy = Y + FlashXformY(fb, fa, qx, qy);
         const double px = gx / 20.0, py = gy / 20.0;  // p.globalToLocal(point)
         if (!(px >= bx0 && px < bx0 + bw && py >= by0 && py < by0 + bh)) continue;  // getBounds(p).containsPoint
         const double qxs = px - coverX, qys = py - coverY;                           // point.subtract(cover)
@@ -140,22 +262,14 @@ SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, doubl
             ux = (double)((id * vx - ic * vy) * idet) / 20.0;  // inverse of a 0/+-1 matrix = adjugate * det
             uy = (double)((-ib * vx + ia * vy) * idet) / 20.0;
         } else {
-            // this.globalToLocal(global point): screen twips (Level.x/y added), inverse of the concatenated matrix in
-            // doubles, inverse translation rounded to a twip, result rounded to a twip (E11: 390,665 / 390,670).
-            const double cx = std::llround(camXpx * 20), cy = std::llround(camYpx * 20);
-            const double det = s.a * s.d - s.b * s.c;
-            const double ia = s.d / det, ib = -s.b / det, ic = -s.c / det, id = s.a / det;
-            const double TX = std::llround(s.tx * 20) + cx, TY = std::llround(s.ty * 20) + cy;
-            const double GX = (double)tx + cx, GY = (double)ty + cy;
-            const double itx = std::floor(-(ia * TX + ic * TY) + 0.5), ity = std::floor(-(ib * TX + id * TY) + 0.5);
-            const double lx = ia * GX + ic * GY + itx, ly = ib * GX + id * GY + ity;
-            ux = std::floor(lx + 0.5) / 20;
-            uy = std::floor(ly + 0.5) / 20;
-            // a local coordinate this close to a half twip could round the other way in Flash
-            const double m = SPIKE_HALF_TWIP_MARGIN;
-            for (const double ax : {std::floor(lx + 0.5 - m), std::floor(lx + 0.5 + m)})
-                for (const double ay : {std::floor(ly + 0.5 - m), std::floor(ly + 0.5 + m)})
-                    if (ShipikPointInTriangle(ax / 20, ay / 20) != ShipikPointInTriangle(ux, uy)) uncertain = true;
+            // this.globalToLocal(global point) in stage twips (the camera Level.x/y is part of the concatenated matrix):
+            // Flash's float32 inverse (0x004c3ba0) then the float32 point transform (E11: 390,670 / 390,670).
+            const int64_t cx = std::llround(camXpx * 20), cy = std::llround(camYpx * 20);
+            const FlashFloatMatrix inv = FlashInvert(FlashFloatMatrix{(float)s.a, (float)s.b, (float)s.c, (float)s.d, ox + cx, oy + cy});
+            int64_t lx, ly;
+            FlashXform(inv, tx + cx, ty + cy, lx, ly);
+            ux = lx / 20.0;
+            uy = ly / 20.0;
         }
         if (ShipikPointInTriangle(ux, uy)) hit = true;
     }
@@ -195,10 +309,10 @@ int32_t LevelTemplate::CheckpointCount() const {
 static double PlacementX(const RawPlacement& p) { return p.tx / 20.0; }
 static double PlacementY(const RawPlacement& p) { return p.ty / 20.0; }
 // DisplayObject.rotation of a timeline-placed clip. Unrotated (b == c == 0, a > 0): 0 whatever the
-// scale. Rotated: Flash does NOT return atan2 of the stored 16.16 matrix for timeline clips (Level 8
-// killSpusk2: matrix -65400/-566 gives atan2 = -179.50414982270968, Flash reports -179.50430297851562,
-// ~10 float32 ulps away, an internal approximation). Until that routine is known, the values Flash
-// reports (docs/STATS_LOGGING.md 3.9, E9a dump per level) are used verbatim.
+// scale. Rotated: Flash does NOT return atan2 of the stored 16.16 matrix (Level 8 killSpusk2: matrix
+// -65400/-566 gives atan2 = -179.50414982270968, Flash reports -179.50430297851562): the player derives it
+// with its fixed-point atan2 (TimelineClipRotation). The values measured in E9a dumps / tick-0 angles below are
+// no longer used by the sim; rbsim test checks that TimelineClipRotation reproduces every one of them.
 struct TimelineRotation { int32_t level; const char* name; uint64_t bits; bool measured; };
 static const TimelineRotation kTimelineRotations[] = {
     {8, "killSpusk2", 0xc066702340000000ULL, true},  // rb1_calib_l8.tsv E9a: -179.50430297851562
@@ -264,15 +378,11 @@ bool LookupTimelineRotation(int32_t level, const char* name, double& out, bool* 
     return false;
 }
 int32_t g_provisionalRotations = 0;
-static double PlacementRotation(int32_t level, const RawPlacement& p) {
+// Timeline placement -> DisplayObject fields (player 0x004ae590): rotation = atan2_fixed(b, a) * (1 / 65536).
+double TimelineClipRotation(int32_t a, int32_t b) { return (double)FlashAtan2Fx(b, a) / 65536.0; }
+static double PlacementRotation(int32_t /*level*/, const RawPlacement& p) {
     if (p.b == 0 && p.c == 0 && p.a > 0) return 0;
-    double v;
-    bool measured = false;
-    if (LookupTimelineRotation(level, p.name, v, &measured)) {
-        if (!measured) ++g_provisionalRotations;
-        return v;
-    }
-    fatal("rotated timeline placement without a measured rotation (log E9a for this level, docs/STATS_LOGGING.md 3.9)");
+    return TimelineClipRotation(p.a, p.b);
 }
 
 // ---------------------------------------------------------------- body helpers
@@ -1821,8 +1931,6 @@ bool Sim::BallHitsTarget(const DisplayObj& o) {
     const double sx = spriteX[playerBody], sy = spriteY[playerBody], rw = spriteRotW[playerBody];
     const double ox = playerAlive ? 0 : camX * 20, oy = playerAlive ? 0 : camY * 20;
     const Rect r{o.x0 + ox, o.y0 + oy, o.x1 + ox, o.y1 + oy};
-    const bool lo = RectsHit(BallBounds(sx, sy, rw, -1), r), hi = RectsHit(BallBounds(sx, sy, rw, +1), r);
-    if (lo != hi) ++displayUncertain;
     if (!o.exact) {  // rotated/scaled target: display_data.h holds an unrounded box (not calibrated, E10)
         const Rect in{r.x0 + 1, r.y0 + 1, r.x1 - 1, r.y1 - 1}, out{r.x0 - 1, r.y0 - 1, r.x1 + 1, r.y1 + 1};
         const Rect b = BallBounds(sx, sy, rw, 0);
@@ -1858,8 +1966,15 @@ static DisplayObj AimBox(const DisplayObj& base, int64_t tx, int64_t ty, const F
     for (const auto& r : kAimChildren) {
         const int64_t px[4] = {r[0], r[2], r[0], r[2]}, py[4] = {r[1], r[1], r[3], r[3]};
         for (int i = 0; i < 4; ++i) {
-            const double x = (double)(tx + AimRound((int64_t)m.a * px[i] - (int64_t)m.b * py[i], mode));
-            const double y = (double)(ty + AimRound((int64_t)m.b * px[i] + (int64_t)m.a * py[i], mode));
+            double x, y;
+            if (mode == 3) {  // Flash: float32 point transform of each child's corners (player 0x004c33b0 / 0x004c30d0)
+                const double fa = m.a / 65536.0, fb = m.b / 65536.0;
+                x = (double)(tx + FlashXformX(fa, -fb, px[i], py[i]));
+                y = (double)(ty + FlashXformY(fb, fa, px[i], py[i]));
+            } else {
+                x = (double)(tx + AimRound((int64_t)m.a * px[i] - (int64_t)m.b * py[i], mode));
+                y = (double)(ty + AimRound((int64_t)m.b * px[i] + (int64_t)m.a * py[i], mode));
+            }
             if (first) o.x0 = o.x1 = x, o.y0 = o.y1 = y, first = false;
             o.x0 = std::fmin(o.x0, x), o.x1 = std::fmax(o.x1, x), o.y0 = std::fmin(o.y0, y), o.y1 = std::fmax(o.y1, y);
         }
@@ -1875,7 +1990,7 @@ DisplayObj Sim::GoalTarget() {
         fatal("levelAim symbol bounds differ from kAimChildren");
     const int64_t tx = std::llround(spriteX[aimBody] * 20), ty = std::llround(spriteY[aimBody] * 20);
     const FlashMatrix m = FlashRotationMatrix(spriteRotW[aimBody]);
-    o = AimBox(o, tx, ty, m, 0);
+    o = AimBox(o, tx, ty, m, 3);
     return o;
 }
 

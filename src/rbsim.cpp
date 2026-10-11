@@ -837,6 +837,48 @@ static int CmdTest() {
             if (sp && BallHitsSpike(hx(r.x), hx(r.y), hx(r.rot), 0, 0, *sp, s->camX, s->camY).hit == r.hit) ++ok;
         }
         check(ok == n, "turned/scaled spikes: 15 boundary rows of the Flash E11 sweeps reproduced");
+        // The 5 rows the old double-precision fit got wrong (within 0.003 twip of a half twip): Flash rounds the
+        // inverse's sums to float32 before rounding to twips, which the ported float32 arithmetic reproduces.
+        const Row hard[] = {
+            {10, 1826.9, -288.4, "4042a66666666666", "409c9f0000000000", "c071c66666666666", true},
+            {10, 1842.5, -294.35, "4042a66666666666", "409cae0000000000", "c0726a6666666666", true},
+            {10, 1847.65, -300.15, "4042a66666666666", "409cf03333333333", "c0723d999999999a", false},
+            {10, 1027.45, -291.75, "4042a66666666666", "408fdf3333333333", "c072466666666666", false},
+            {11, 98.85, -245.7, "0000000000000000", "4058633333333333", "c06e280000000000", true},
+        };
+        ok = 0, n = 0;
+        for (const Row& r : hard) {
+            LevelTemplate t(r.level);
+            auto s = std::make_unique<Sim>();
+            s->Load(&t);
+            const SpikeObj* sp = nullptr;
+            for (int32_t i = 0; i < t.spikeCount; ++i)
+                if (std::fabs(t.spikes[i].tx - r.tx) < 1e-6 && std::fabs(t.spikes[i].ty - r.ty) < 1e-6) sp = &t.spikes[i];
+            ++n;
+            if (sp && BallHitsSpike(hx(r.x), hx(r.y), hx(r.rot), 0, 0, *sp, s->camX, s->camY).hit == r.hit) ++ok;
+        }
+        check(ok == n, "turned/scaled spikes: the 5 float32 near-tie rows of the E11 sweeps reproduced");
+    }
+    // 18d. Ported Flash Player trig: timeline rotations (fixed-point atan2) and the fixed-point sine/cosine.
+    {
+        int ok = 0, n = 0;
+        for (int32_t level = 1; level <= 17; ++level) {
+            LevelTemplate t(level);
+            for (int32_t i = 0; i < t.placements->count; ++i) {
+                const RawPlacement& p = t.placements->items[i];
+                double v;
+                if (!LookupTimelineRotation(level, p.name, v)) continue;
+                ++n;
+                if (TimelineClipRotation(p.a, p.b) == v) ++ok;
+            }
+        }
+        check(n == 46 && ok == n, "timeline rotations: the player's fixed-point atan2 reproduces all 46 measured values");
+        // Spot values of the player's own routines (checked against an emulation of SAFlashPlayer.exe 11.4.402.287):
+        // these angles are among the 1,622 in [-200, 200] degrees where the old fitted table was 1/65536 off.
+        const FlashMatrix m1 = FlashRotationMatrix(-13092501 / 65536.0), m2 = FlashRotationMatrix(-13082494 / 65536.0);
+        check(m1.a == -61606 && m1.b == 22153 && m2.a == -61693 && m2.b == 21910 && FlashSinFx(90 << 16) == 65536 &&
+                  FlashCosFx(180 << 16) == -65536 && FlashAtan2Fx(65536, 65536) == 45 << 16,
+              "fixed-point sine/cosine/atan2: spot values of the player's routines");
     }
     // 19. Compact snapshots (src/snapshot.h): byte-exact round trip, identical continuation, portable base
     {
