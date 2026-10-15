@@ -397,21 +397,38 @@ void Session::TruncateAt(int n) {
 
 void Session::Step(uint8_t keys) {
     if (!cur) return;
+    const bool wasOver = cur->isTimeStop;
     if (InPlayback()) {
         tl.Advance(*cur, pos);
         ++pos;
-        if (!InPlayback()) {  // "Playback Ended": the mod hands control back at speed 1
-            feedback = "Playback Ended";
-            speed = 1;
+        if (!InPlayback() && !cur->isTimeStop) {
+            // The mod hands control back here (and resets the game speed to 1x; rbview keeps the speed you chose).
             tickAcc = 0;
-            if (stopAtEnd) paused = true;
+            if (stopAtEnd) {
+                paused = true;
+                feedback = "Playback ended: paused at the end of the route";
+            } else {
+                feedback = "Playback ended: recording your keys from here";
+            }
         }
-        return;
+    } else if (!cur->isTimeStop) {  // after the flag the game stops recording (and counting)
+        tl.Append(keys & 7);
+        pos = tl.size();
+        *cur = tl.Tail();
     }
-    if (cur->isTimeStop) return;  // after the flag the game stops recording (and counting)
-    tl.Append(keys & 7);
-    pos = tl.size();
-    *cur = tl.Tail();
+    if (cur->isTimeStop && !wasOver) {
+        paused = true;  // nothing happens after the flag: stop the clock
+        feedback = "Flag on frame " + std::to_string(cur->winFrame) + ": the run is over";
+    }
+}
+
+void Session::RemoveWarps() {
+    Route r = route();
+    if (r.warps.empty()) return;
+    Backup();
+    r.warps.clear();
+    const int p = pos;
+    Load(r, p);
 }
 
 int Session::Run(double frames, uint8_t keys, int maxTicks) {
@@ -430,6 +447,7 @@ int Session::Run(double frames, uint8_t keys, int maxTicks) {
 
 void Session::FrameAdvance(uint8_t keys) {
     if (speed == 0 || paused) Step(keys);
+    else paused = true, tickAcc = 0;  // rbview: Space while running pauses first (the mod ignores it)
 }
 
 void Session::SpeedUp() {

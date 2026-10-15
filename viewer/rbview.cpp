@@ -63,7 +63,7 @@ enum : int {
     ID_TIMER = 1,
     ID_LEVEL = 100, ID_CHECKPOINT, ID_GLESS, ID_INVINCIBLE, ID_SPIKES, ID_WINDOW, ID_SCALE, ID_KEYS, ID_HELP,
     ID_INPUTS, ID_PASTE, ID_COPY, ID_OPEN, ID_SAVE, ID_LOAD,
-    ID_FIRST, ID_BACK, ID_PLAY, ID_FWD, ID_LAST, ID_SPEED, ID_REALTIME, ID_STOPEND, ID_FOLLOW, ID_TRAIL, ID_HUD, ID_SLIDER,
+    ID_FIRST, ID_BACK, ID_PLAY, ID_FWD, ID_LAST, ID_SPEED, ID_REALTIME, ID_FOLLOW, ID_TRAIL, ID_HUD, ID_SLIDER,
     IDC_CMD, IDC_CMDRUN, ID_FEEDBACK, ID_MODE,
     ID_CANVAS, ID_STATUS, ID_TABS,
     ID_EVENTS,
@@ -73,13 +73,14 @@ enum : int {
     ID_GCUR, ID_GPASTE, ID_GOPEN, ID_GCLEAR, ID_GINFO,
     ID_SMODE, ID_STIME, ID_STHREADS, ID_SMEM, ID_SMAXF, ID_SSTART, ID_SSTOP, ID_SLOAD, ID_SLOG, ID_SSTATUS,
     ID_BINFO, ID_BLIST, ID_BUP, ID_BDOWN, ID_BNEXT, ID_BAPPLY, ID_BLEAVE,
+    ID_OFAST, ID_OPAUSEEND, ID_OKEEPEND, ID_OMARKS, ID_OPOLYS, ID_ODEC, ID_OKEYS, ID_WFILL, ID_WAPPLY, ID_WCLEAR,
 };
 enum : UINT { WM_SEARCH_LINE = WM_APP + 1, WM_SEARCH_DONE };
 
 static HWND g_wnd, g_canvas, g_status, g_tabs;
 static HWND g_lblLevel, g_level, g_lblCp, g_cp, g_gless, g_invincible, g_lblSpikes, g_spikes, g_lblWindow, g_window, g_scale, g_keys, g_help;
 static HWND g_lblInputs, g_inputs, g_paste, g_copy, g_open, g_save, g_load;
-static HWND g_first, g_back, g_play, g_fwd, g_last, g_lblSpeed, g_speed, g_realtime, g_stopEnd, g_follow, g_trail, g_hudBox, g_slider;
+static HWND g_first, g_back, g_play, g_fwd, g_last, g_lblSpeed, g_speed, g_realtime, g_follow, g_trail, g_hudBox, g_slider;
 static HWND g_cmd, g_cmdRun, g_feedback, g_mode;
 static HWND g_events;
 static HWND g_lblSlots, g_slots, g_slotSave, g_slotLoad, g_slotImport, g_slotExport, g_lblNamed, g_named, g_nSave, g_nLoad, g_nRename, g_nDelete,
@@ -87,7 +88,10 @@ static HWND g_lblSlots, g_slots, g_slotSave, g_slotLoad, g_slotImport, g_slotExp
 static HWND g_gInfo, g_gCur, g_gPaste, g_gOpen, g_gClear;
 static HWND g_sMode, g_lblSTime, g_sTime, g_lblSThreads, g_sThreads, g_lblSMem, g_sMem, g_lblSMaxF, g_sMaxF, g_sStart, g_sStop, g_sLoad, g_sStatus, g_sLog;
 static HWND g_bInfo, g_bList, g_bUp, g_bDown, g_bNext, g_bApply, g_bLeave;
-static std::vector<HWND> g_pages[5];
+static HWND g_speedLbl, g_grpPlay, g_fast, g_lblEnd, g_pauseEnd, g_keepEnd, g_lblFlag, g_grpView, g_marksBox, g_polysBox, g_lblDec, g_dec,
+    g_grpWarp, g_lblWarp, g_wLbl[5], g_wEdit[5], g_wFill, g_wApply, g_wClear, g_grpKeys, g_lblKeys, g_oKeys;
+static const int NPAGES = 6;
+static std::vector<HWND> g_pages[NPAGES];
 static HFONT g_font;
 static double g_dpi = 1.0;
 
@@ -549,7 +553,7 @@ static bool InputBox(const wchar_t* title, const wchar_t* prompt, std::wstring& 
 static const wchar_t* kKeyHelp =
     L"Practice Hack keys (rbview uses the same ones):\r\n"
     L"A/Left  W/Up  D/Right   move (a key tapped between two frames counts too)\r\n"
-    L"T or P   pause / run          Space   one frame (while paused or at speed 0)\r\n"
+    L"T or P   pause / run          Space   one frame (while running: pause)\r\n"
     L", and .   game speed down / up (0, 1/32 ... 64)\r\n"
     L"0-9   save state          Shift+0-9   load state\r\n"
     L"I then 0-9   import the clipboard into a state (Shift+0-9: and play it)\r\n"
@@ -995,11 +999,28 @@ static void RefreshMode() {
         SetWindowTextW(g_mode, m.c_str());
         InvalidateRect(g_mode, nullptr, TRUE);
     }
-    SetText(g_play, g_s.paused ? L"Run (T)" : L"Pause (T)");
+    SetText(g_play, g_s.paused ? L"Play (T)" : L"Pause (T)");
     static const double speeds[] = {0, 1.0 / 32, 1.0 / 16, 1.0 / 8, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64};
+    static const wchar_t* names[] = {L"0x", L"1/32x", L"1/16x", L"1/8x", L"1/4x", L"1/2x", L"1x", L"2x", L"4x", L"8x", L"16x", L"32x", L"64x"};
     for (int i = 0; i < 13; ++i)
-        if (speeds[i] == g_s.speed && SendMessageW(g_speed, CB_GETCURSEL, 0, 0) != i) SendMessageW(g_speed, CB_SETCURSEL, (WPARAM)i, 0);
+        if (speeds[i] == g_s.speed) {
+            // never move the slider under the mouse or the keyboard focus
+            if (GetCapture() != g_speed && GetFocus() != g_speed && SendMessageW(g_speed, TBM_GETPOS, 0, 0) != i)
+                SendMessageW(g_speed, TBM_SETPOS, TRUE, i);
+            SetText(g_speedLbl, names[i]);
+        }
+    // the Options tab mirrors the keys (U, Shift+U, H, Shift+H, J, ...)
     SetCheck(g_realtime, g_s.realtimeLoad);
+    SetCheck(g_fast, g_s.fastPlayback);
+    SetCheck(g_pauseEnd, g_s.stopAtEnd);
+    SetCheck(g_keepEnd, !g_s.stopAtEnd);
+    SetCheck(g_hudBox, g_hud);
+    SetCheck(g_marksBox, g_marks);
+    SetCheck(g_polysBox, g_polys);
+    SetCheck(g_trail, g_trail_on);
+    SetCheck(g_follow, g_follow_on);
+    if (GetCapture() != g_dec && SendMessageW(g_dec, TBM_GETPOS, 0, 0) != g_decimals) SendMessageW(g_dec, TBM_SETPOS, TRUE, g_decimals);
+    SetText(g_lblDec, L"HUD decimals: " + std::to_wstring(g_decimals));
 }
 
 static void RefreshStatus() {
@@ -1345,12 +1366,10 @@ static bool TasKey(UINT msg, WPARAM wp, LPARAM lp) {
             return true;
         case VK_OEM_PERIOD: s.SpeedUp(); RefreshStatus(); return true;
         case VK_OEM_COMMA: s.SpeedDown(); RefreshStatus(); return true;
-        case VK_SPACE:
-            if (s.speed == 0 || s.paused) {
-                if (shift) s.UndoFrame();
-                else s.FrameAdvance(HeldCode()), ClearTaps();
-                redraw();
-            }
+        case VK_SPACE:  // one frame; while running the first press pauses
+            if (shift && (s.speed == 0 || s.paused)) s.UndoFrame();
+            else if (!shift) s.FrameAdvance(HeldCode()), ClearTaps();
+            redraw();
             return true;
         case VK_ESCAPE:
             if (g_ioWait) g_ioWait = 0, s.feedback.clear();
@@ -1434,7 +1453,7 @@ static bool TasKey(UINT msg, WPARAM wp, LPARAM lp) {
 // ------------------------------------------------------------------ layout
 static void ShowTab(int t) {
     TabCtrl_SetCurSel(g_tabs, t);
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < NPAGES; ++i)
         for (HWND h : g_pages[i]) ShowWindow(h, i == t ? SW_SHOW : SW_HIDE);
 }
 
@@ -1469,19 +1488,16 @@ static void Layout() {
     put(g_paste, btnW), put(g_copy, btnW), put(g_open, btnW), put(g_save, btnW), put(g_load, btnW);
     // row 3: transport
     y += rowH + S(6), x = pad;
-    put(g_first, S(34)), put(g_back, S(34)), put(g_play, S(84)), put(g_fwd, S(34)), put(g_last, S(34));
+    put(g_first, S(34)), put(g_back, S(34)), put(g_play, S(90)), put(g_fwd, S(34)), put(g_last, S(34));
     put(g_lblSpeed, S(40), S(5));
-    put(g_speed, S(72), 0, S(400));
-    put(g_realtime, S(140), S(3), S(22));
-    put(g_stopEnd, S(92), S(3), S(22));
+    put(g_speed, S(200), 0, S(30));
+    put(g_speedLbl, S(44), S(5));
     put(g_follow, S(108), S(3), S(22));
-    put(g_trail, S(84), S(3), S(22));
-    put(g_hudBox, S(52), S(3), S(22));
     put(g_slider, std::max(S(80), W - x - pad));
     // row 4: command line and messages
     y += rowH + S(6), x = pad;
     put(g_cmd, S(360));
-    put(g_cmdRun, S(44));
+    put(g_cmdRun, S(96));
     put(g_mode, S(170), S(5));
     put(g_feedback, std::max(S(80), W - x - pad), S(5));
     // main area: level view, side panel
@@ -1553,6 +1569,45 @@ static void Layout() {
         for (int i = 0; i < 5; ++i) MoveWindow(bs[i], px + i * (bw + S(4)), yy, bw, rowH, TRUE);
         yy += rowH + S(4);
         MoveWindow(g_bList, px, yy, pw, py + ph - yy, TRUE);
+    }
+    {  // Options: each group box is sized from what it holds
+        int yy = py;
+        const int gx = px, gw = pw, ix = px + S(10), iw = pw - S(20), lh = S(22);
+        int top = 0;
+        auto begin = [&]() { top = yy, yy += S(20); };
+        auto end = [&](HWND g) {
+            MoveWindow(g, gx, top, gw, yy - top + S(8), TRUE);
+            yy += S(16);
+        };
+        begin();
+        for (HWND c : {g_realtime, g_fast, g_lblEnd}) MoveWindow(c, ix, yy, iw, lh, TRUE), yy += lh;
+        MoveWindow(g_pauseEnd, ix + S(14), yy, iw - S(14), lh, TRUE), yy += lh;
+        MoveWindow(g_keepEnd, ix + S(14), yy, iw - S(14), lh, TRUE), yy += lh;
+        MoveWindow(g_lblFlag, ix, yy, iw, lh, TRUE), yy += lh;
+        end(g_grpPlay);
+        begin();
+        for (HWND c : {g_hudBox, g_marksBox, g_polysBox, g_trail}) MoveWindow(c, ix, yy, iw, lh, TRUE), yy += lh;
+        MoveWindow(g_lblDec, ix, yy + S(6), S(120), lh, TRUE);
+        MoveWindow(g_dec, ix + S(124), yy, iw - S(124), S(30), TRUE), yy += S(32);
+        end(g_grpView);
+        begin();
+        MoveWindow(g_lblWarp, ix, yy, iw, S(32), TRUE), yy += S(34);
+        const int cw = (iw - 4 * S(4)) / 5;
+        for (int i = 0; i < 5; ++i) {
+            MoveWindow(g_wLbl[i], ix + i * (cw + S(4)), yy, cw, S(18), TRUE);
+            MoveWindow(g_wEdit[i], ix + i * (cw + S(4)), yy + S(18), cw, rowH - S(2), TRUE);
+        }
+        yy += S(18) + rowH + S(4);
+        const int bw3 = (iw - 2 * S(4)) / 3;
+        MoveWindow(g_wFill, ix, yy, bw3, rowH, TRUE);
+        MoveWindow(g_wApply, ix + bw3 + S(4), yy, bw3, rowH, TRUE);
+        MoveWindow(g_wClear, ix + 2 * (bw3 + S(4)), yy, bw3, rowH, TRUE);
+        yy += rowH;
+        end(g_grpWarp);
+        begin();
+        MoveWindow(g_lblKeys, ix, yy, iw, lh, TRUE), yy += lh;
+        MoveWindow(g_oKeys, ix, yy, S(180), rowH, TRUE), yy += rowH;
+        end(g_grpKeys);
     }
     MoveWindow(g_status, 0, H - statusH, W, statusH, TRUE);
 }
@@ -1628,8 +1683,19 @@ static void SetGhost(const tas::Route& r, const std::wstring& name) {
     InvalidateRect(g_canvas, nullptr, FALSE);
 }
 
+static void FillWarpFields() {
+    if (!g_s.cur) return;
+    const Body& b = g_s.cur->world.bodies[g_s.cur->playerBody];
+    const double v[5] = {b.linearVelocity.x, b.linearVelocity.y, b.angularVelocity * 0.35, b.xf.position.x, b.xf.position.y};
+    for (int i = 0; i < 5; ++i) {
+        wchar_t t[64];
+        std::swprintf(t, 64, L"%.6g", v[i]);
+        SetWindowTextW(g_wEdit[i], t);
+    }
+}
+
 static void OnCommand(int id, int code, HWND ctl) {
-    const bool isCombo = id == ID_LEVEL || id == ID_CHECKPOINT || id == ID_SPEED || id == ID_SPIKES || id == ID_SCALE || id == ID_SMODE;
+    const bool isCombo = id == ID_LEVEL || id == ID_CHECKPOINT || id == ID_SPIKES || id == ID_SCALE || id == ID_SMODE;
     if (id == ID_WINDOW) {
         if (code == CBN_SELCHANGE) {
             const int sel = (int)SendMessageW(g_window, CB_GETCURSEL, 0, 0);
@@ -1689,14 +1755,30 @@ static void OnCommand(int id, int code, HWND ctl) {
             break;
         case ID_LAST: s.paused = true, s.Seek(s.tl.size()); break;
         case ID_PLAY: s.TogglePause(); break;
-        case ID_SPEED: {
-            static const double speeds[] = {0, 1.0 / 32, 1.0 / 16, 1.0 / 8, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64};
-            const int i = (int)SendMessageW(g_speed, CB_GETCURSEL, 0, 0);
-            if (i >= 0 && i < 13) s.speed = speeds[i], s.tickAcc = 0;
+        case ID_REALTIME: s.realtimeLoad = Checked(g_realtime); break;
+        case ID_OFAST: s.fastPlayback = Checked(g_fast); break;
+        case ID_OPAUSEEND: s.stopAtEnd = true; break;
+        case ID_OKEEPEND: s.stopAtEnd = false; break;
+        case ID_OMARKS: g_marks = Checked(g_marksBox); break;
+        case ID_OPOLYS: g_polys = Checked(g_polysBox); break;
+        case ID_OKEYS: KeysDialog(); break;
+        case ID_WFILL: FillWarpFields(); break;
+        case ID_WAPPLY: {
+            double v[5];
+            for (int i = 0; i < 5; ++i) {
+                const std::string t = Narrow(GetText(g_wEdit[i]));
+                char* end = nullptr;
+                v[i] = std::strtod(t.c_str(), &end);
+                if (t.empty() || (end && *end && !std::isspace((unsigned char)*end))) {
+                    MessageBoxW(g_wnd, L"The warp fields must be numbers (use . for decimals).", L"Warp", MB_ICONWARNING);
+                    return;
+                }
+            }
+            s.AddWarp({v[0], v[1], v[2], v[3], v[4]});
+            s.feedback = "Warped at frame " + std::to_string(s.pos);
             break;
         }
-        case ID_REALTIME: s.realtimeLoad = Checked(g_realtime); break;
-        case ID_STOPEND: s.stopAtEnd = Checked(g_stopEnd); break;
+        case ID_WCLEAR: s.RemoveWarps(); s.feedback = "Warps removed"; break;
         case ID_FOLLOW: g_follow_on = Checked(g_follow); break;
         case ID_TRAIL: g_trail_on = Checked(g_trail); break;
         case ID_HUD: g_hud = Checked(g_hudBox); break;
@@ -1898,32 +1980,60 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             // row 3
             g_first = MakeCtl(L"BUTTON", L"|<", BS_PUSHBUTTON, ID_FIRST);
             g_back = MakeCtl(L"BUTTON", L"<", BS_PUSHBUTTON, ID_BACK);
-            g_play = MakeCtl(L"BUTTON", L"Run (T)", BS_PUSHBUTTON, ID_PLAY);
+            g_play = MakeCtl(L"BUTTON", L"Play (T)", BS_PUSHBUTTON, ID_PLAY);
             g_fwd = MakeCtl(L"BUTTON", L">", BS_PUSHBUTTON, ID_FWD);
             g_last = MakeCtl(L"BUTTON", L">|", BS_PUSHBUTTON, ID_LAST);
             g_lblSpeed = MakeCtl(L"STATIC", L"Speed", 0, 0);
-            g_speed = MakeCtl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, ID_SPEED);
-            for (const wchar_t* sp : {L"0x", L"1/32x", L"1/16x", L"1/8x", L"1/4x", L"1/2x", L"1x", L"2x", L"4x", L"8x", L"16x", L"32x", L"64x"})
-                SendMessageW(g_speed, CB_ADDSTRING, 0, (LPARAM)sp);
-            SendMessageW(g_speed, CB_SETCURSEL, 6, 0);
-            g_realtime = MakeCtl(L"BUTTON", L"Real-time loads (U)", BS_AUTOCHECKBOX, ID_REALTIME);
-            g_stopEnd = MakeCtl(L"BUTTON", L"Stop at end", BS_AUTOCHECKBOX, ID_STOPEND);
+            g_speed = MakeCtl(TRACKBAR_CLASSW, L"", TBS_HORZ | TBS_AUTOTICKS | TBS_BOTTOM, ID_SPEED);
+            SendMessageW(g_speed, TBM_SETRANGE, TRUE, MAKELPARAM(0, 12));
+            SendMessageW(g_speed, TBM_SETPAGESIZE, 0, 1);
+            SendMessageW(g_speed, TBM_SETPOS, TRUE, 6);
+            g_speedLbl = MakeCtl(L"STATIC", L"1x", 0, 0);
             g_follow = MakeCtl(L"BUTTON", L"Follow camera", BS_AUTOCHECKBOX, ID_FOLLOW);
-            g_trail = MakeCtl(L"BUTTON", L"Show path", BS_AUTOCHECKBOX, ID_TRAIL);
-            g_hudBox = MakeCtl(L"BUTTON", L"HUD", BS_AUTOCHECKBOX, ID_HUD);
+            // Options tab: everything the mod does with keys or commands, as controls
+            g_grpPlay = MakeCtl(L"BUTTON", L"Playback", BS_GROUPBOX, 0, 0, 5);
+            g_realtime = MakeCtl(L"BUTTON", L"Loading a state plays it back in real time (U)", BS_AUTOCHECKBOX, ID_REALTIME, 0, 5);
+            g_fast = MakeCtl(L"BUTTON", L"Fast playback, 64 frames per frame (Shift+U)", BS_AUTOCHECKBOX, ID_OFAST, 0, 5);
+            g_lblEnd = MakeCtl(L"STATIC", L"When a playback reaches the end of the route:", 0, 0, 0, 5);
+            g_pauseEnd = MakeCtl(L"BUTTON", L"pause there", BS_AUTORADIOBUTTON | WS_GROUP, ID_OPAUSEEND, 0, 5);
+            g_keepEnd = MakeCtl(L"BUTTON", L"keep running and record my keys (like the mod)", BS_AUTORADIOBUTTON, ID_OKEEPEND, 0, 5);
+            g_lblFlag = MakeCtl(L"STATIC", L"(After the flag the run is over: the clock always stops there.)", 0, 0, 0, 5);
+            g_grpView = MakeCtl(L"BUTTON", L"Display", BS_GROUPBOX, 0, 0, 5);
+            g_hudBox = MakeCtl(L"BUTTON", L"HUD: the mod's numbers and keys (H)", BS_AUTOCHECKBOX, ID_HUD, 0, 5);
+            g_marksBox = MakeCtl(L"BUTTON", L"Spike glitch marks: where each spike kills this frame (Shift+H)", BS_AUTOCHECKBOX, ID_OMARKS, 0, 5);
+            g_polysBox = MakeCtl(L"BUTTON", L"Physics outlines and the ball's 16 control points (J)", BS_AUTOCHECKBOX, ID_OPOLYS, 0, 5);
+            g_trail = MakeCtl(L"BUTTON", L"Show the path", BS_AUTOCHECKBOX, ID_TRAIL, 0, 5);
+            g_lblDec = MakeCtl(L"STATIC", L"HUD decimals: 4", 0, 0, 0, 5);
+            g_dec = MakeCtl(TRACKBAR_CLASSW, L"", TBS_HORZ | TBS_AUTOTICKS, ID_ODEC, 0, 5);
+            SendMessageW(g_dec, TBM_SETRANGE, TRUE, MAKELPARAM(0, 10));
+            g_grpWarp = MakeCtl(L"BUTTON", L"Warp the ball (the mod's /set)", BS_GROUPBOX, 0, 0, 5);
+            g_lblWarp = MakeCtl(L"STATIC", L"Replaces the ball at the shown frame. The warp stays in the route (rbview replays it, the game cannot).", 0, 0, 0, 5);
+            {
+                const wchar_t* wl[5] = {L"vx (m/s)", L"vy (m/s)", L"vrot (HUD)", L"x (m)", L"y (m)"};
+                for (int i = 0; i < 5; ++i) {
+                    g_wLbl[i] = MakeCtl(L"STATIC", wl[i], 0, 0, 0, 5);
+                    g_wEdit[i] = MakeCtl(L"EDIT", L"0", ES_AUTOHSCROLL, 0, WS_EX_CLIENTEDGE, 5);
+                }
+            }
+            g_wFill = MakeCtl(L"BUTTON", L"Take the ball's values", BS_PUSHBUTTON, ID_WFILL, 0, 5);
+            g_wApply = MakeCtl(L"BUTTON", L"Warp at this frame", BS_PUSHBUTTON, ID_WAPPLY, 0, 5);
+            g_wClear = MakeCtl(L"BUTTON", L"Remove all warps", BS_PUSHBUTTON, ID_WCLEAR, 0, 5);
+            g_grpKeys = MakeCtl(L"BUTTON", L"Keys", BS_GROUPBOX, 0, 0, 5);
+            g_lblKeys = MakeCtl(L"STATIC", L"Every key of the mod, and remapping (the mod's /remap):", 0, 0, 0, 5);
+            g_oKeys = MakeCtl(L"BUTTON", L"Keys and remapping...", BS_PUSHBUTTON, ID_OKEYS, 0, 5);
             g_slider = MakeCtl(TRACKBAR_CLASSW, L"", TBS_HORZ | TBS_NOTICKS, ID_SLIDER);
             // row 4
             g_cmd = MakeCtl(L"EDIT", L"", ES_AUTOHSCROLL | WS_TABSTOP, IDC_CMD, WS_EX_CLIENTEDGE);
             SendMessageW(g_cmd, EM_SETCUEBANNER, TRUE, (LPARAM)L"press /  for a command: /config mathspikes 0, /set -vx 5, /remap a left");
-            g_cmdRun = MakeCtl(L"BUTTON", L"Run", BS_PUSHBUTTON, IDC_CMDRUN);
+            g_cmdRun = MakeCtl(L"BUTTON", L"Run command", BS_PUSHBUTTON, IDC_CMDRUN);
             g_mode = MakeCtl(L"STATIC", L"", SS_LEFTNOWORDWRAP, ID_MODE);
             g_feedback = MakeCtl(L"STATIC", L"", SS_LEFTNOWORDWRAP, ID_FEEDBACK);
             // main
             g_canvas = CreateWindowExW(WS_EX_CLIENTEDGE, L"RbCanvas", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 10, 10, h, (HMENU)ID_CANVAS,
                                        GetModuleHandleW(nullptr), nullptr);
             g_tabs = MakeCtl(WC_TABCONTROLW, L"", WS_CLIPSIBLINGS, ID_TABS);
-            const wchar_t* tabNames[5] = {L"Events", L"States", L"Ghost", L"Search", L"Brute force"};
-            for (int i = 0; i < 5; ++i) {
+            const wchar_t* tabNames[NPAGES] = {L"Events", L"States", L"Ghost", L"Search", L"Brute force", L"Options"};
+            for (int i = 0; i < NPAGES; ++i) {
                 TCITEMW ti = {};
                 ti.mask = TCIF_TEXT;
                 ti.pszText = (LPWSTR)tabNames[i];
@@ -1982,7 +2092,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             g_bLeave = MakeCtl(L"BUTTON", L"Leave (Esc)", BS_PUSHBUTTON, ID_BLEAVE, 0, 4);
             g_bList = MakeCtl(L"LISTBOX", L"", WS_VSCROLL | WS_HSCROLL | LBS_NOINTEGRALHEIGHT | LBS_NOTIFY, ID_BLIST, WS_EX_CLIENTEDGE, 4);
             SendMessageW(g_bList, LB_SETHORIZONTALEXTENT, (WPARAM)S(1600), 0);
-            for (int p = 0; p < 5; ++p)
+            for (int p = 0; p < NPAGES; ++p)
                 for (HWND c : g_pages[p]) SetWindowPos(c, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
             // settings next to the exe (portable)
             wchar_t exe[MAX_PATH];
@@ -2022,8 +2132,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                     p += n;
                 }
             }
-            SetCheck(g_follow, g_follow_on), SetCheck(g_trail, g_trail_on), SetCheck(g_hudBox, g_hud);
-            SetCheck(g_realtime, g_s.realtimeLoad), SetCheck(g_stopEnd, g_s.stopAtEnd);
+            SetCheck(g_follow, g_follow_on);
             g_s.LoadStatesFile(Narrow(g_statesPath));
             tas::Route r;
             {
@@ -2109,6 +2218,21 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_HSCROLL:
+            if ((HWND)lp == g_speed) {
+                static const double speeds[] = {0, 1.0 / 32, 1.0 / 16, 1.0 / 8, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64};
+                const int i = (int)SendMessageW(g_speed, TBM_GETPOS, 0, 0);
+                if (i >= 0 && i < 13 && g_s.speed != speeds[i]) g_s.speed = speeds[i], g_s.tickAcc = 0;
+                RefreshStatus();
+                if (LOWORD(wp) == TB_ENDTRACK) FocusCanvas();
+                return 0;
+            }
+            if ((HWND)lp == g_dec) {
+                g_decimals = (int)SendMessageW(g_dec, TBM_GETPOS, 0, 0);
+                RefreshStatus();
+                InvalidateRect(g_canvas, nullptr, FALSE);
+                if (LOWORD(wp) == TB_ENDTRACK) FocusCanvas();
+                return 0;
+            }
             if ((HWND)lp == g_slider) {
                 g_s.paused = true;
                 g_s.Seek((int)SendMessageW(g_slider, TBM_GETPOS, 0, 0));
@@ -2121,6 +2245,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             if (nm->hwndFrom == g_tabs && nm->code == TCN_SELCHANGE) {
                 ShowTab(TabCtrl_GetCurSel(g_tabs));
                 RefreshStates();
+                if (TabCtrl_GetCurSel(g_tabs) == 5) FillWarpFields();
             }
             return 0;
         }

@@ -144,7 +144,7 @@ class Session {
     double speed = 1;          // gameSpeed: 0, 1/32 .. 64 (, and .)
     bool realtimeLoad = false; // isRealTime (U): a loaded state plays back in real time instead of at once
     bool fastPlayback = false; // RTGS (Shift+U): playback runs 64 frames per frame
-    bool stopAtEnd = false;    // rbview: pause when a playback reaches the end of the route (the mod keeps running)
+    bool stopAtEnd = false;    // rbview: pause when a playback reaches the end of the route (the mod keeps running and records)
     double tickAcc = 0;        // gameTick
 
     Route slots[10];
@@ -178,6 +178,7 @@ class Session {
     void LoadRoute(const Route& r);  // a named state, a slot, a pasted string: instant, or real time with realtimeLoad
     void SetFlags(bool gless, bool invincible);
     void AddWarp(const WarpParams& w);  // "/set" at the current position
+    void RemoveWarps();
     void Backup();                      // keep the current route in the backups (before it is changed)
 
     // B / Shift+B / env keys

@@ -17,7 +17,7 @@ and play with A/W/D (or the arrows). Everything you play is recorded into the ro
 |---|---|
 | A / W / D (or Left / Up / Right) | move. A key tapped between two frames still counts for the next frame |
 | T (or P) | pause / run |
-| Space | one frame (while paused or at speed 0). Shift+Space: remove the last frame |
+| Space | one frame (if the game is running, the first press pauses it). Shift+Space: remove the last frame |
 | , and . | game speed down / up: 0, 1/32 ... 1 ... 64 |
 | 0-9 | save the route up to the shown frame into state 0-9. Shift+0-9: load it |
 | I, then 0-9 | import the clipboard (a route string) into a state. Shift+0-9: import and play it |
@@ -49,10 +49,10 @@ digits typed into the route do not save states. Click the level view to play aga
   to load it at frame 0. **Paste / Copy** use the clipboard. **Open...** (or drag a file onto the window) reads a
   route file or a stats log (`.tsv`) from the logging mod: level, checkpoint, glitchless and the spike rule, window
   and scale (its `#ENV` line) come from the log. **Save...** writes the route with its settings.
-- **Transport:** |< < Run > >|, the game speed, *Real-time loads* (U), *Stop at end* (pause when a playback reaches
-  the end of the route; the mod keeps running and records from there), *Follow camera*, *Show path*, *HUD*, and the
-  slider to look at any frame.
-- **Command line** and the mod's messages; the mode (RECORDING, PLAYBACK, PAUSED, BRUTE FORCE).
+- **Transport:** |< < Play > >|, the **Speed** slider (0x, 1/32x ... 1x ... 64x; also , and .), *Follow camera*, and
+  the slider to look at any frame.
+- **Command line** (**Run command**) for the mod's commands. Everything it can do is also in the Options tab. Next
+  to it: the mode (RECORDING, PLAYBACK, PAUSED, BRUTE FORCE) and the mod's messages.
 - **Level view:** the level, moving parts, spikes, checkpoints, switches, the flag and the ball with the game's camera.
   The played path is red, the rest of the route (still to play back) is faint. The HUD shows the mod's numbers
   (time, speed, velocities, rotation, position, contacts) and the keys of the frame. After a death a dashed purple
@@ -67,6 +67,14 @@ digits typed into the route do not save states. Click the level view to play aga
   - **Search:** rbsim's searches inside the program. *Optimize* improves the whole route for the chosen time;
     *Beam* searches on from the shown frame. Stop ends early. **Load result** puts the best route found in the
     editor (the old one goes to the backups).
+  - **Options:** every setting the mod has as a key or a command, as checkboxes and sliders.
+    - *Playback:* real-time state loads (U), fast playback (Shift+U), and what happens when a playback reaches the
+      end of the route: pause there, or keep running and record your keys (the mod's behaviour). After the flag the
+      run is over, so the clock always stops there.
+    - *Display:* HUD (H), spike glitch marks (Shift+H), physics outlines (J), path, HUD decimals.
+    - *Warp:* the ball's velocity, rotation and position (filled in from the ball), *Warp at this frame* (the mod's
+      `/set`), *Remove all warps*.
+    - *Keys and remapping* (the mod's `/remap`).
   - **Brute force:** the mod's jump brute-forcer. Every way it finds is also simulated, so the list shows the real
     end height and speed next to the mod's estimate.
 
@@ -78,6 +86,8 @@ digits typed into the route do not save states. Click the level view to play aga
   the moment you press the key.
 - `/set` warps are stored in the route, so states with a warp replay correctly in rbview. The game cannot replay
   them. Routes with warps or invincibility are marked (`[tool]`, and on the HUD) and the search refuses them.
+- Space while the game runs pauses it (the mod ignores it). The end of a playback keeps your game speed (the mod
+  resets it to 1x), and you can choose to pause there.
 - R, F, I, O, Backspace and B also work while paused in the middle of a playback. They act at the shown frame;
   the rest of the route goes to the backups.
 

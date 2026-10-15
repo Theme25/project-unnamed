@@ -102,7 +102,7 @@ int main() {
         s.Run(10, IN_L);
         check(s.pos == 10 && s.route().in == r.in, "keys are ignored during playback");
         for (int i = 0; i < 25; ++i) s.Run(1, IN_L);  // one display frame at a time, as the UI does
-        check(s.route().in.size() == 35 && s.route().in[30] == IN_L && s.feedback == "Playback Ended", "after the playback the keys are recorded");
+        check(s.route().in.size() == 35 && s.route().in[30] == IN_L && s.feedback == "Playback ended: recording your keys from here", "after the playback the keys are recorded");
         s.SaveSlot(3);
         s.paused = true;
         s.Seek(12);
@@ -121,6 +121,37 @@ int main() {
         check(s.speed == 0, "speed reaches 0");
         s.SpeedUp();
         check(s.speed == 1.0 / 32, "and comes back as 1/32");
+    }
+    // 3b. speed kept at the end of a playback, Stop at end, Space while running, the flag stops the clock
+    {
+        Session s;
+        Route r;
+        r.level = 2;
+        r.in = DecodeInputs("d30");
+        s.Load(r, 0);
+        s.paused = false;
+        s.speed = 0.25;
+        for (int i = 0; i < 200 && s.pos < 31; ++i) s.Run(1, IN_NONE);
+        check(s.speed == 0.25 && s.pos >= 31, "the chosen speed survives the end of a playback");
+        s.stopAtEnd = true;
+        s.Seek(0);
+        s.paused = false;
+        s.speed = 1;
+        for (int i = 0; i < 60; ++i) s.Run(1, IN_R);
+        check(s.paused && s.pos == 31, "Stop at end: paused at the last frame of the route");
+        s.paused = false;
+        s.FrameAdvance(IN_R);
+        check(s.paused && s.pos == 31, "Space while running pauses (no frame)");
+        s.FrameAdvance(IN_R);
+        check(s.pos == 32, "Space while paused: one frame");
+        Session w;
+        Route tas;
+        tas.level = 2;
+        tas.in = DecodeInputs("d18e1w1n1w5n26a2e1w4n10w1n46a2n4d1n19w6n2w8n28");
+        w.Load(tas, 0);
+        w.paused = false;
+        for (int i = 0; i < 400; ++i) w.Run(1, IN_NONE);
+        check(w.paused && w.cur->isTimeStop && w.feedback.find("run is over") != std::string::npos, "the flag pauses the clock");
     }
     // 4. text formats and the states file
     {
