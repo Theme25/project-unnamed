@@ -7,6 +7,7 @@
 #include "display_data.h"
 #include "flash_sintab.h"
 #include <map>
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -189,6 +190,7 @@ struct Sim {
     int32_t deathFrame = -1;           // frameCount when PlayerDie ran (-1: alive)
     int32_t winFrame = -1;             // frameCount of the Update that called PlayerWin
     double winMargin = 0;              // overlap depth (twips, min of x/y overlap) of ball and flag at the win
+    bool invincible = false;            // Game.isInvincible (Practice Hack G): spikes and kill zones do nothing
     bool gless = false;                 // Game.isGless: camera steps at the end of Update, dp = 0
     int32_t cpFrame[5] = {1, 1, 1, 1, 1};  // checkPointN.currentFrame (1 = armed, 5 = already collected)
     int32_t frameCount = 0;
@@ -221,6 +223,10 @@ struct Sim {
     int32_t CreateCircleBody(const char* name, double density, double friction, double restitution, double size);
     void PlayerDie();
     void PlayerWin();
+    void CreatePlayer(double px, double py);  // PlayerBox(x, y): ball body + sprite, camera centred on it
+    // Practice Hack "/set" (Commands.acceptWarpData): replace the ball between frames. Velocities in m/s, vr in the
+    // HUD's units (0.35 * angular velocity), position in metres.
+    void Warp(double vx, double vy, double vr, double px, double py);
     // flags column of the v2 log block: bit0 Level_7.redCheckLevel, bit1 Level_13.greenCheckLevel,
     // bit2 Level_16.isStrelka; bit8 blueCheck, bit9 greenCheck, bit10 redCheck taken (currentFrame != 1)
     int32_t LoggedFlags() const;
@@ -242,6 +248,19 @@ struct Sim {
 };
 
 // Game.as DecodeInRLE / EncodeOutRLE (TAS string format)
+// Text output of the search commands (optimize, beam). Without a sink: stdout / stderr. The viewer installs a sink to
+// show the lines in its Search tab; the sink may be called from worker threads.
+extern void (*g_outSink)(const char* text, bool isError);
+#ifdef __MINGW32__
+#define RB_PRINTF_FMT gnu_printf
+#else
+#define RB_PRINTF_FMT printf
+#endif
+void Out(const char* fmt, ...) __attribute__((format(RB_PRINTF_FMT, 1, 2)));
+void Err(const char* fmt, ...) __attribute__((format(RB_PRINTF_FMT, 1, 2)));
+// Set to stop a running optimize / beam early (they then report the best route found so far).
+extern std::atomic<bool> g_searchCancel;
+
 std::vector<uint8_t> DecodeInputs(const std::string& s);
 std::string EncodeInputsRLE(const std::vector<uint8_t>& in);
 

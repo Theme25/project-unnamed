@@ -247,12 +247,12 @@ int CmdBeam(int argc, char** argv) {
         }
         else if (!std::strcmp(argv[i], "--gless")) gless = true;
         else {
-            std::fprintf(stderr, "unknown option %s\n", argv[i]);
+            Err( "unknown option %s\n", argv[i]);
             return 2;
         }
     }
     if (!level) {
-        std::fprintf(stderr,
+        Err(
                      "usage: rbsim beam --level N [--checkpoint C] [--prefix RLE] [--memory 10G | --width W]\n"
                      "                  [--threads N] [--max-frames F] [--diversity K] [--lookahead T] [--dir DIR]\n"
                      "                  [--save-every MIN] [--resume] [--gless] [--select mixed|score|coverage]\n"
@@ -270,7 +270,7 @@ int CmdBeam(int argc, char** argv) {
     const std::vector<uint8_t> prefix = DecodeInputs(prefixStr);
     for (uint8_t c : prefix)
         if (c > 7) {
-            std::fprintf(stderr, "--prefix must not contain R\n");
+            Err( "--prefix must not contain R\n");
             return 2;
         }
 
@@ -290,7 +290,7 @@ int CmdBeam(int argc, char** argv) {
         in.read(&pre[0], plen);
         in.read((char*)&k, 4).read((char*)&best, sizeof best).read((char*)&n, 4);
         if (!in || magic != MAGIC || lv != level || cp != checkpoint || (gl != 0) != gless || pre != prefixStr) {
-            std::fprintf(stderr, "cannot resume: %s missing or made with different --level/--checkpoint/--prefix/--gless\n",
+            Err( "cannot resume: %s missing or made with different --level/--checkpoint/--prefix/--gless\n",
                          stateFile.string().c_str());
             return 1;
         }
@@ -302,16 +302,16 @@ int CmdBeam(int argc, char** argv) {
             in.read((char*)e.data(), len);
         }
         if (!in) {
-            std::fprintf(stderr, "cannot resume: %s is truncated\n", stateFile.string().c_str());
+            Err( "cannot resume: %s is truncated\n", stateFile.string().c_str());
             return 1;
         }
-        std::printf("resumed %s at frame %d of the search (%zu states)\n", dir.c_str(), k, layer.size());
+        Out("resumed %s at frame %d of the search (%zu states)\n", dir.c_str(), k, layer.size());
     } else {
         auto s = std::make_unique<Sim>(*base);
         for (uint8_t c : prefix) {
             s->Tick(c);
             if (!s->playerAlive || s->isTimeStop) {
-                std::fprintf(stderr, "the prefix already ends the attempt (death or flag)\n");
+                Err( "the prefix already ends the attempt (death or flag)\n");
                 return 1;
             }
         }
@@ -326,7 +326,7 @@ int CmdBeam(int argc, char** argv) {
     auto startState = std::make_unique<Sim>(*base);
     for (uint8_t c : prefix) startState->Tick(c);
     nav.Build(*startState);
-    std::printf("level %d%s, start frame %d, nav grid %dx%d (%.0f px cells), %d threads, %s\n", level,
+    Out("level %d%s, start frame %d, nav grid %dx%d (%.0f px cells), %d threads, %s\n", level,
                 checkpoint ? (" checkpoint " + std::to_string(checkpoint)).c_str() : "", startFrame, nav.nx, nav.ny, nav.cell, threads,
                 fixedWidth ? ("width " + std::to_string(fixedWidth)).c_str()
                            : ("memory " + std::to_string(memory >> 20) + " MB").c_str());
@@ -339,13 +339,13 @@ int CmdBeam(int argc, char** argv) {
         for (size_t f = 0; f < r.size(); ++f) {
             s->Tick(r[f]);
             if (s->isTimeStop || !s->playerAlive) {
-                std::printf("frame %5d  %s\n", s->frameCount, s->isTimeStop ? "flag" : "death");
+                Out("frame %5d  %s\n", s->frameCount, s->isTimeStop ? "flag" : "death");
                 break;
             }
             const Body& pb = s->world.bodies[s->playerBody];
             const double sc = nav.Query(s->spriteX[s->playerBody] + pb.linearVelocity.x * lookahead,
                                         s->spriteY[s->playerBody] + pb.linearVelocity.y * lookahead);
-            if ((f + 1) % 10 == 0) std::printf("frame %5d  score %7.1f px\n", s->frameCount, sc);
+            if ((f + 1) % 10 == 0) Out("frame %5d  score %7.1f px\n", s->frameCount, sc);
         }
         return 0;
     }
@@ -358,7 +358,7 @@ int CmdBeam(int argc, char** argv) {
     int64_t seedIdx = -1;
     if (!seed.empty()) {
         if (seed.size() < prefix.size() || !std::equal(prefix.begin(), prefix.end(), seed.begin())) {
-            std::fprintf(stderr, "--seed-route must begin with the --prefix inputs\n");
+            Err( "--seed-route must begin with the --prefix inputs\n");
             return 2;
         }
         auto s = std::make_unique<Sim>(*base);
@@ -382,7 +382,7 @@ int CmdBeam(int argc, char** argv) {
         else
             for (size_t i = 0; i < layer.size() && (size_t)k < seedHash.size(); ++i)
                 if (Hash64(layer[i].data(), layer[i].size()) == seedHash[(size_t)k]) seedIdx = (int64_t)i;
-        std::printf("seed route: %zu frames kept in the beam\n", seedHash.size() - 1);
+        Out("seed route: %zu frames kept in the beam\n", seedHash.size() - 1);
     }
 
     auto save = [&]() {
@@ -431,10 +431,14 @@ int CmdBeam(int argc, char** argv) {
     for (;; ++k) {
         const int frame = startFrame + k;  // frameCount of the current layer
         if (layer.empty()) {
-            std::printf("beam empty at frame %d\n", frame);
+            Out("beam empty at frame %d\n", frame);
             break;
         }
         if (frame + 1 >= best.win || frame + 1 > maxFrames) break;
+        if (g_searchCancel.load()) {
+            Out("stopped at frame %d\n", frame);
+            break;
+        }
         // width for the next layer from the memory budget and the current state sizes
         size_t avg = 0;
         for (size_t i = 0; i < layer.size(); i += std::max<size_t>(1, layer.size() / 256)) avg = std::max(avg, layer[i].size());
@@ -577,7 +581,7 @@ int CmdBeam(int argc, char** argv) {
         lastPrint = el;
         size_t bytes = 0;
         for (const auto& e : layer) bytes += e.size() + 32;
-        std::printf("frame %5d  width %8zu  best distance %7.1f px  %s  %.0f children/s  states %.0f MB\n", frame + 1, layer.size(),
+        Out("frame %5d  width %8zu  best distance %7.1f px  %s  %.0f children/s  states %.0f MB\n", frame + 1, layer.size(),
                     keep.empty() ? 0.0 : keep.front().score,
                     best.win < (1 << 30) ? ("flag on frame " + std::to_string(best.win)).c_str() : "no flag yet",
                     totalChildren / std::max(el, 1e-9), bytes / 1048576.0);
@@ -592,7 +596,7 @@ int CmdBeam(int argc, char** argv) {
     save();
 
     if (best.win >= (1 << 30)) {
-        std::printf("no route to the flag found (try a wider beam, --max-frames, or a different start)\n");
+        Out("no route to the flag found (try a wider beam, --max-frames, or a different start)\n");
         return 1;
     }
     const std::vector<uint8_t> route = routeOf(best);
@@ -603,12 +607,12 @@ int CmdBeam(int argc, char** argv) {
         if (chk->isTimeStop) break;
     }
     const bool ok = chk->isTimeStop && chk->winFrame == best.win && DeathWarpFinishValid(chk->deathFrame, chk->winFrame);
-    std::printf("best: flag on frame %d (%.3f s)%s, flag overlap %.0f twips%s\n", best.win, best.win / 31.0,
+    Out("best: flag on frame %d (%.3f s)%s, flag overlap %.0f twips%s\n", best.win, best.win / 31.0,
                 best.death >= 0 ? " via death warp" : "", best.margin, ok ? "" : "  ** REPLAY MISMATCH **");
     if (best.death >= 0)
-        std::printf("death warp: death on frame %d, flag on frame %d; pause by frame %d, unpause on frame %d\n", best.death, best.win,
+        Out("death warp: death on frame %d, flag on frame %d; pause by frame %d, unpause on frame %d\n", best.death, best.win,
                     best.death + RESPAWN_LAST_PAUSE_FRAMES, best.win + WIN_TIMER_FRAMES);
-    if (chk->displayUncertain) std::printf("note: a hit test on this route was within one matrix unit of flipping: check it in Flash\n");
-    std::printf("%s\n", EncodeInputsRLE(route).c_str());
+    if (chk->displayUncertain) Out("note: a hit test on this route was within one matrix unit of flipping: check it in Flash\n");
+    Out("%s\n", EncodeInputsRLE(route).c_str());
     return ok ? 0 : 1;
 }

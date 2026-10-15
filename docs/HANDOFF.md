@@ -49,7 +49,7 @@ recorded in README.md ("Verification status") and below.
 | `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
 | `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
 
-Self-tests: `./rbsim test` → 93 tests, `ALL PASSED` (also under Wine).
+Self-tests: `./rbsim test` → 95 tests, `ALL PASSED` (also under Wine).
 
 ## 3. Repository layout (`Theme25/project-unnamed`)
 
@@ -206,7 +206,19 @@ search grows ~2x per frame even with merging (prototype: last 16 frames of L8 ~2
 The bruteforcer (beam/optimize work in section 7) is someone else's task. **The simulator is finished: all 17
 levels are bit-exact against Flash logs.** What follows records how the last seven got there.
 
-**Window resolution (latest chat).** The team's projector was decompiled (`docs/FLASH_PLAYER_RE.md`) and the real
+**Red Ball TAS (latest chat).** `rbview.exe` is now the Practice Hack's TAS mode on the simulator: the mod's keys
+and behaviour (Game.as KeyDownHandler, ported key by key into `viewer/tas.cpp`), plus:
+- unlimited named states and backups (`rbview_states.txt`);
+- a ghost route;
+- optimize/beam inside the program (the search code prints through `rb::Out`; `rb::g_searchCancel` stops it);
+- the BruteForcer.as jump tool, with every candidate simulated;
+- `/remap`, `/set` warps (`Sim::Warp`) and invincibility (`Sim::invincible`).
+
+`make tastest` checks the TAS core natively. Known Wine-only quirks (no window manager): closing a dialog can take a
+few seconds, and Enter right after typed text may need a second press. Neither happens on Windows itself, but this
+has not been confirmed on Windows yet.
+
+**Window resolution (chat before).** The team's projector was decompiled (`docs/FLASH_PLAYER_RE.md`) and the real
 game's `hitTestPoint` spike test ported (`src/flashpix.*`). Two things were found only by recording real-time
 playbacks under Wine with a frame-scan mod (`docs/resolution/`):
 - `hitTestPoint` uses each spike's edge list **from the last redraw** (one camera step behind), cut to the

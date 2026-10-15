@@ -1,6 +1,8 @@
 // redball.cpp - game-side logic (Level.as / Level_N.as / PlayerBox.as /
 // Game.UpdateHandler) driving the Box2D port.
 #include "redball.h"
+
+#include <cstdarg>
 #include "level_polys.h"
 #include "flashpix.h"
 #include <cmath>
@@ -579,11 +581,77 @@ int32_t Sim::CreateCircleBody(const char* name, double density, double friction,
     return b;
 }
 
+void (*g_outSink)(const char*, bool) = nullptr;
+std::atomic<bool> g_searchCancel{false};
+static void OutV(bool err, const char* fmt, va_list ap) {
+    if (!g_outSink) {
+        std::vfprintf(err ? stderr : stdout, fmt, ap);
+        return;
+    }
+    char buf[8192];
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    g_outSink(buf, err);
+}
+void Out(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    OutV(false, fmt, ap);
+    va_end(ap);
+}
+void Err(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    OutV(true, fmt, ap);
+    va_end(ap);
+}
 void (*g_playerDieHook)(const Sim&) = nullptr;
+// PlayerBox(x, y, world, sprite): the ball at sprite position (x, y) px, and the camera centred on it.
+void Sim::CreatePlayer(double px, double py) {
+    BodyDef bd;
+    bd.position.Set(px / PHYS_SCALE, py / PHYS_SCALE);
+    bd.userTag = 0;
+    playerBody = world.CreateBody(bd);
+    world.bodies[playerBody].flags |= BF_BULLET;  // SetBullet(true)
+    ShapeDef sd;
+    sd.type = e_circleShape;
+    sd.density = 1;
+    sd.friction = 0.4;
+    sd.restitution = 0.2;
+    world.CreateShape(playerBody, tpl->playerGeom, sd);
+    world.SetMassFromShapes(playerBody);
+    world.listener.playerBody = playerBody;
+    hasSprite[playerBody] = true;
+    spriteX[playerBody] = SpriteCoord(px);
+    spriteY[playerBody] = SpriteCoord(py);
+    spriteRot[playerBody] = spriteRotW[playerBody] = 0;
+    // PlayerBox(): m_spriteIn.x = -this.x + Game.stageWidth / 2 (camera centred on the ball)
+    camX = SpriteCoord(-spriteX[playerBody] + 550.0 / 2);
+    camY = SpriteCoord(-spriteY[playerBody] + 400.0 / 2);
+}
+
+// The Practice Hack's "/set -vx -vy -vr -px -py" (Commands.acceptWarpData), between two frames: a new PlayerBox at
+// (px, py) * 30, angular velocity vr * 20 / 7, linear velocity (vx, vy); all tweens removed; the Level snapped to
+// centre the new ball; the old ball killed. Not checked against Flash logs. A dead ball is revived (in the game the
+// level would stay out of control).
+void Sim::Warp(double vx, double vy, double vr, double px, double py) {
+    const int32_t old = playerBody;
+    const bool oldAlive = playerAlive;
+    CreatePlayer(px * 30, py * 30);
+    Body& b = world.bodies[playerBody];
+    b.angularVelocity = vr * 20 / 7;
+    b.linearVelocity.Set(vx, vy);
+    camTween = false;  // Tweener.removeAllTweens()
+    if (oldAlive) world.DestroyBody(old);  // getplayerBox().Kill()
+    hasSprite[old] = false;
+    playerAlive = true;
+    deathFrame = -1;
+}
+
 void Sim::PlayerDie() {
     // Level.PlayerDie: OutControl(); 8 debris bodies (playerDiePart0-7, positions from Math.random(): NOT simulated);
     // playerBox.Kill() -> m_world.DestroyBody(ball) and the ball leaves the display list (its sprite stays frozen).
     // The level keeps running its full Update afterwards (world step, moving parts, Level_N.Update), see Sim::Tick.
+    if (invincible) return;  // Game.isInvincible (Practice Hack G): Level.PlayerDie returns at once
     if (!playerAlive) return;
     deathFrame = frameCount + 1;  // this Update's frame
     if (g_playerDieHook) g_playerDieHook(*this);
@@ -1883,27 +1951,7 @@ void Sim::Restart() {
     const RawPlacement& cp = tpl->Place(cpName);
     double px = PlacementX(cp), py = PlacementY(cp);
 
-    // PlayerBox(x, y, world, sprite)
-    BodyDef bd;
-    bd.position.Set(px / PHYS_SCALE, py / PHYS_SCALE);
-    bd.userTag = 0;
-    playerBody = world.CreateBody(bd);
-    world.bodies[playerBody].flags |= BF_BULLET;  // SetBullet(true)
-    ShapeDef sd;
-    sd.type = e_circleShape;
-    sd.density = 1;
-    sd.friction = 0.4;
-    sd.restitution = 0.2;
-    world.CreateShape(playerBody, tpl->playerGeom, sd);
-    world.SetMassFromShapes(playerBody);
-    world.listener.playerBody = playerBody;
-    hasSprite[playerBody] = true;
-    spriteX[playerBody] = SpriteCoord(px);
-    spriteY[playerBody] = SpriteCoord(py);
-    spriteRot[playerBody] = spriteRotW[playerBody] = 0;
-    // PlayerBox(): m_spriteIn.x = -this.x + Game.stageWidth / 2 (camera centred on the ball)
-    camX = SpriteCoord(-spriteX[playerBody] + 550.0 / 2);
-    camY = SpriteCoord(-spriteY[playerBody] + 400.0 / 2);
+    CreatePlayer(px, py);
     camTween = false;
     dpX = dpY = 0;
     deadTicks = 0;

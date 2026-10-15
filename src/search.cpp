@@ -158,7 +158,7 @@ void WorkerLoop(Shared& sh, Worker w, uint64_t seed, double sidewaysP, std::chro
     std::vector<int> bounds;
     std::vector<uint8_t> cand;
     Sim sim;
-    while (std::chrono::steady_clock::now() < deadline && (!maxEvals || sh.evals.load() < maxEvals)) {
+    while (std::chrono::steady_clock::now() < deadline && (!maxEvals || sh.evals.load() < maxEvals) && !g_searchCancel.load()) {
         {
             std::lock_guard<std::mutex> lk(sh.m);
             if (w.version != sh.version) {
@@ -194,7 +194,7 @@ void WorkerLoop(Shared& sh, Worker w, uint64_t seed, double sidewaysP, std::chro
             if (better) {
                 sh.improvements.fetch_add(1);
                 if (verbose)
-                    std::printf("  frame %d, margin %.0f twips%s  %s\n", r.win, r.margin, r.death >= 0 ? " (death warp)" : "",
+                    Out("  frame %d, margin %.0f twips%s  %s\n", r.win, r.margin, r.death >= 0 ? " (death warp)" : "",
                                 EncodeInputsRLE(cand).c_str());
                 std::fflush(stdout);
             } else {
@@ -229,12 +229,12 @@ int CmdOptimize(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--gless")) gless = true;
         else if (!std::strcmp(argv[i], "--quiet")) quiet = true;
         else {
-            std::fprintf(stderr, "unknown option %s\n", argv[i]);
+            Err( "unknown option %s\n", argv[i]);
             return 2;
         }
     }
     if (!level || inputs.empty()) {
-        std::fprintf(stderr,
+        Err(
                      "usage: rbsim optimize --level N --inputs RLE [--checkpoint C] [--time SEC] [--threads N]\n"
                      "                      [--seed S] [--sideways P] [--evals N] [--gless] [--quiet]\n"
                      "  --evals N stops after N candidates (with --threads 1: identical results on any machine)\n");
@@ -243,7 +243,7 @@ int CmdOptimize(int argc, char** argv) {
     std::vector<uint8_t> route = DecodeInputs(inputs);
     for (uint8_t c : route)
         if (c > 7) {
-            std::fprintf(stderr, "optimize works on one attempt: remove R from the input string\n");
+            Err( "optimize works on one attempt: remove R from the input string\n");
             return 2;
         }
     LevelTemplate tpl(level);
@@ -256,17 +256,17 @@ int CmdOptimize(int argc, char** argv) {
         sh.bestRes = Finish(*s, route, 0, (int)route.size() + 200);
     }
     if (sh.bestRes.win == NO_WIN) {
-        std::fprintf(stderr, "the given inputs do not collect the flag (or only via an unusable death warp)\n");
+        Err( "the given inputs do not collect the flag (or only via an unusable death warp)\n");
         return 1;
     }
     route.resize((size_t)std::min((int)route.size(), sh.bestRes.win));
     sh.best = route;
     const int startWin = sh.bestRes.win;
     if (maxEvals)
-        std::printf("level %d, start: frame %d%s (%.3f s), flag overlap %.0f twips, %d threads, %llu candidates\n", level, startWin,
+        Out("level %d, start: frame %d%s (%.3f s), flag overlap %.0f twips, %d threads, %llu candidates\n", level, startWin,
                     sh.bestRes.death >= 0 ? " (death warp)" : "", startWin / 31.0, sh.bestRes.margin, threads, (unsigned long long)maxEvals);
     else
-        std::printf("level %d, start: frame %d%s (%.3f s), flag overlap %.0f twips, %d threads, %.0f s\n", level, startWin,
+        Out("level %d, start: frame %d%s (%.3f s), flag overlap %.0f twips, %d threads, %.0f s\n", level, startWin,
                     sh.bestRes.death >= 0 ? " (death warp)" : "", startWin / 31.0, sh.bestRes.margin, threads, seconds);
     const auto t0 = std::chrono::steady_clock::now();
     const auto deadline = t0 + std::chrono::milliseconds((long long)std::min(seconds * 1000, 1e15));
@@ -277,17 +277,17 @@ int CmdOptimize(int argc, char** argv) {
     }
     for (auto& t : pool) t.join();
     const Result& b = sh.bestRes;
-    std::printf("evaluated %llu candidates (%llu improvements, %llu sideways moves), %.0f frames simulated per second, %.0f per candidate\n",
+    Out("evaluated %llu candidates (%llu improvements, %llu sideways moves), %.0f frames simulated per second, %.0f per candidate\n",
                 (unsigned long long)sh.evals.load(), (unsigned long long)sh.improvements.load(), (unsigned long long)sh.sideways.load(),
                 g_ticks.load() / std::max(1e-9, std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count()), sh.evals.load() ? (double)g_ticks.load() / (double)sh.evals.load() : 0.0);
-    std::printf("best: frame %d%s (%.3f s), %d frame%s saved, flag overlap %.0f twips\n", b.win, b.death >= 0 ? " (death warp)" : "",
+    Out("best: frame %d%s (%.3f s), %d frame%s saved, flag overlap %.0f twips\n", b.win, b.death >= 0 ? " (death warp)" : "",
                 b.win / 31.0, startWin - b.win, startWin - b.win == 1 ? "" : "s", b.margin);
     if (b.death >= 0)
-        std::printf("death warp: death on frame %d, flag on frame %d; pause by frame %d, unpause on frame %d\n", b.death, b.win,
+        Out("death warp: death on frame %d, flag on frame %d; pause by frame %d, unpause on frame %d\n", b.death, b.win,
                     b.death + RESPAWN_LAST_PAUSE_FRAMES, b.win + WIN_TIMER_FRAMES);
     if (b.uncertain)
-        std::printf("note: %d display test%s within one matrix unit of flipping: check this route in Flash\n", b.uncertain,
+        Out("note: %d display test%s within one matrix unit of flipping: check this route in Flash\n", b.uncertain,
                     b.uncertain == 1 ? "" : "s");
-    std::printf("%s\n", EncodeInputsRLE(sh.best).c_str());
+    Out("%s\n", EncodeInputsRLE(sh.best).c_str());
     return 0;
 }

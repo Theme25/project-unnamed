@@ -17,29 +17,35 @@ frame matches that Flash Player to the last bit.
 | display layer | ported from Flash Player 11.4 itself (decompiled, `docs/FLASH_PLAYER_RE.md`) and checked against every dump: rotation matrices, hit-test boxes, camera, plain spikes (E8c 30,000/30,000), turned/scaled spikes (E11 390,670/390,670), the turned Level 11 flag (E12 148,074/148,074) |
 | real-game spikes | the original game's / Tournament Edition's pixel spike test (`--mathspikes 0`) at any window size and scale mode, including the moving-camera spike glitch: 28 real-time Flash playbacks bit-exact to the death frame (`docs/RESOLUTION.md`) |
 | death | death warps (onto checkpoints, flags, a moving flag, the Level 16 wrong-way trigger) and real-game pause timing |
-| platforms | Linux and Windows (x86-64), identical results; `rbview.exe`: a double-click route viewer for Windows |
+| platforms | Linux and Windows (x86-64), identical results; `rbview.exe`: the Practice Hack's TAS mode for Windows (same keys) with savestates, ghost, search and route viewer |
 | search | `rbsim beam` (finds routes from any start, resumable), `rbsim optimize` (improves a known route) |
-| tests | `rbsim test`: 93 self-tests |
+| tests | `rbsim test`: 95 self-tests; `make tastest`: the TAS core of the viewer |
 
-## Route viewer (Windows, no command line)
+## Red Ball TAS / route viewer (Windows, no command line)
 
 **[⬇ Download rbview.exe](https://github.com/Theme25/project-unnamed/releases/latest/download/rbview.exe)**
 (latest release; one file, no installer). Windows may show "Windows protected your PC" the first time
 because the exe is not signed: click **More info**, then **Run anyway**.
 
-`rbview.exe` is a single double-click program: pick a level, paste a route (or open/drag a route file
-or a stats log), press Play. It draws the level, moving parts, spikes, checkpoints, switches, the flag
-and the ball with the game's camera, lists deaths/checkpoints/switches/the flag frame, steps and seeks
-frame by frame, and shows a "warp ghost" after a death so death warps are visible. The **Spikes**,
-**Window** and **Scale** boxes switch to the original game's / Tournament Edition's spike test at a given
-window size (a stats log sets them from its `#ENV` line). Everything is computed by the same bit-exact
-simulator. Guide: [`docs/WINDOWS.md`](docs/WINDOWS.md).
-Build: `make viewer` (MinGW-w64 cross build; Win32 + GDI+, static, ~1.6 MB; source in `viewer/`).
+`rbview.exe` is the Practice Hack's TAS mode on the bit-exact simulator: **the same keys and behaviour as the
+mod** (A/W/D to play, T pause, Space frame advance, `,` `.` speed, 0-9 / Shift+0-9 states, I/O import/export,
+Backspace rewind, R/F restarts, G invincibility, Shift+G glitchless, H/J overlays, B/Shift+B jump brute-forcer,
+`/config`, `/set` warps, `/remap`), with a proper UI around it:
+- savestates without a limit, with names, kept in a file, plus backups of every route a restart, rewind or load
+  replaced;
+- a ghost route to race against;
+- rbsim's optimize/beam searches inside the program;
+- the jump brute-forcer's candidates actually simulated;
+- remappable keys that stay out of the way while you type;
+- the route viewer: seek any frame, events list, death-warp ghost, path, HUD, Flash's spike test at any window size.
+Guide and full key list: [`docs/WINDOWS.md`](docs/WINDOWS.md).
+Build: `make viewer` (MinGW-w64 cross build; Win32 + GDI+, static; source in `viewer/`: `tas.cpp` is the TAS logic
+without Windows code, checked natively by `make tastest && viewer/tas_test`).
 To publish a new version: create a GitHub release (new tag, e.g. `v1.1`) and attach the exe named
 exactly `rbview.exe`, so the download link above keeps pointing at the newest one
 (`gh release create v1.1 rbview.exe --title "..." --notes "..."` does the same from the command line).
 
-![rbview: the Level 11 death warp, the warp ghost touching the falling flag](docs/rbview.png)
+![rbview: Level 2, an optimized route against a slower ghost, with the HUD and the path](docs/rbview.png)
 
 ## Build & run
 
@@ -48,7 +54,7 @@ exactly `rbview.exe`, so the download link above keeps pointing at the newest on
 
 ```
 make                 # see "Build flags" below; do not change them
-./rbsim test         # 93 self-tests (physics, display layer, spikes, death warps, all 17 levels, snapshots, ...)
+./rbsim test         # 95 self-tests (physics, display layer, spikes, death warps, all 17 levels, snapshots, ...)
 ./rbsim run --level 2 --inputs "n20w1d25n40" [--hex] [--every N] [--checkpoint K]
 ./rbsim log --level 2 --inputs "..."      # simulator log in the Flash mod's TSV format
 ./rbsim bench [--frames N]                # throughput
@@ -198,7 +204,8 @@ loaded level; byte-identical round trip, portable between processes).
 | `tools/deathcause.cpp` | replays inputs and prints each death's cause (contacts or spike row) and the win |
 | `docs/mod_sweeps.as` | AS3 for the logging mod's E11/E12 calibration sweeps |
 | `docs/FLASH_PLAYER_RE.md` | what the decompiled Flash Player 11.4 does (addresses, formulas, the shape hit test) |
-| `viewer/rbview.cpp` (+ `.rc`, `.ico`, `.manifest`) | the Windows route viewer (`make viewer`) |
+| `viewer/rbview.cpp` (+ `.rc`, `.ico`, `.manifest`) | Red Ball TAS, the Windows program (`make viewer`) |
+| `viewer/tas.cpp`, `tas.h`, `tas_test.cpp` | its TAS core (the mod's keys as operations on a route), tests (`make tastest`) |
 
 All mutable state lives in fixed arrays linked by `int` indices, so `Sim copy = sim;` is a complete,
 bit-exact snapshot (152 KB). Immutable geometry is shared; scratch buffers are thread-local, so one
@@ -327,8 +334,8 @@ section/symbol directives adapted; ARM (incl. Apple Silicon) cannot run the Inte
 1. **Search:** a better beam score (moving platforms and timing; calibrate against the known TASes
    with `--explain`); resumable, splittable window proofs; endgame proofs; physics profiling for
    contact-heavy levels.
-2. **Viewer:** `rbview.exe` is done (route playback); a TAS editor (record inputs with the keyboard,
-   rewind, export) could build on it.
+2. **Viewer:** `rbview.exe` is the TAS tool (the mod's keys) plus viewer, states, ghost, search. Possible next:
+   an input piano roll (edit frames by clicking), a real-Windows check of the keyboard timing.
 3. **Simulator:** complete; the display layer is the player's own arithmetic, including the real game's
    shape spike test at any window size (`MATHSPIKES 0`, `docs/RESOLUTION.md`). Open: confirm it with one stats
    log recorded on real Windows; the Tournament Edition's Level 15 money tween (0.3 s of real time).

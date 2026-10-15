@@ -1061,6 +1061,27 @@ static int CmdTest() {
         check(ok == n, "Flash shape test in motion: death frames of real-time Flash playbacks at 7 window setups reproduced");
         std::printf("       recorded runs: %d / %d%s\n", ok, n, bad.c_str());
     }
+    // 23. Practice Hack tools used by the viewer: invincibility (G) and "/set" warps.
+    {
+        LevelTemplate t3(3);
+        auto a = std::make_unique<Sim>(), b = std::make_unique<Sim>();
+        a->Load(&t3);
+        b->Load(&t3);
+        b->invincible = true;
+        for (uint8_t in : DecodeInputs("d18e1d58n40")) a->Tick(in), b->Tick(in);
+        check(!a->playerAlive && b->playerAlive && b->deathFrame < 0, "invincibility: a route that dies on Level 3 survives with G on");
+        auto w = std::make_unique<Sim>();
+        w->Load(&t3);
+        for (int i = 0; i < 20; ++i) w->Tick(IN_R);
+        const int32_t oldBall = w->playerBody;
+        w->Warp(3, -2, 1.75, 12.5, 10);
+        const Body& nb = w->world.bodies[w->playerBody];
+        const bool placed = w->playerBody != oldBall && !w->world.bodies[oldBall].inWorld && nb.xf.position.x == 12.5 * 30 / 30 &&
+                            nb.linearVelocity.x == 3 && nb.linearVelocity.y == -2 && nb.angularVelocity == 1.75 * 20 / 7 &&
+                            w->spriteX[w->playerBody] == 375 && w->camX == -100;
+        w->Tick(IN_NONE);
+        check(placed && w->world.bodies[w->playerBody].xf.position.x > 12.5, "warp (/set): new ball at the given position and velocity, camera snapped");
+    }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }

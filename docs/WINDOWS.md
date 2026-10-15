@@ -1,39 +1,91 @@
 # Running rbsim on Windows
 
-## Route viewer: `rbview.exe` (no command line)
+## Red Ball TAS: `rbview.exe` (no command line)
 
 **[Download `rbview.exe`](https://github.com/Theme25/project-unnamed/releases/latest/download/rbview.exe)
 and double-click it.** It is one file: no installer, nothing else to install, no command prompt.
 If Windows says "Windows protected your PC" (the exe is not signed), click **More info**, then
-**Run anyway**. It plays a route through the bit-exact simulator and draws the level,
-the moving parts, spikes, checkpoints, switches, the flag and the ball, with the game's camera.
+**Run anyway**.
 
-1. **Level** and **Start from** (the start or a checkpoint), **Glitchless** if the route is
-   meant for the spike glitch off. **Spikes:** the spike rule. Keep *Standardized (mathspikes 1)* for the
-   speedrun rules. *Flash shape test (mathspikes 0, TE)* is the original game and the Tournament Edition. There,
-   deaths depend on the Flash area's size (**Window**: the projector window without its menu bar, a preset or a
-   typed size such as `935x925`) and on **Scale** (*Show all* = the projector's View > Show All).
-2. **Route:** paste the input string (`d12e1w3n5...`, the TAS hack's format) and press **Load**
-   (or Enter). **Open...** (or drag a file onto the window, or onto `rbview.exe`) loads a `.txt`
-   with the route or a stats log (`.tsv`) from the logging mod: level, checkpoint, glitchless
-   mode and the spike rule, window and scale (its `#ENV` line) are then taken from the log.
-3. **Play** (Space). **<** and **>** (Left/Right arrow) step one frame; **|<** / **>|** (Home/End)
-   jump to the start/end; the slider seeks anywhere; **Speed** from 0.1x to 8x (1x = the game's
-   31 frames per second).
-4. The list on the right shows what happens and when: deaths, checkpoints, switches, restarts,
-   the flag frame (and whether a death-warp finish is still valid in a real run). Click a line
-   to jump there.
-5. Mouse wheel zooms; dragging pans (this turns off **Follow camera**; tick it again to follow
-   the game's camera). **Show path** draws the ball's path.
+`rbview.exe` is the Practice Hack's TAS mode on the bit-exact simulator: **the same keys and the same
+behaviour as the mod**, with a proper UI around it, and a route viewer. Click the level view, press **T** to run,
+and play with A/W/D (or the arrows). Everything you play is recorded into the route string at the top.
 
-After a death, a dashed purple **warp ghost** shows where the game tests the dead ball against the
-flag, checkpoints and switches (shifted by the camera): when the ghost touches the flag, that is a
-death warp. The 8 random debris pieces are not shown. The window remembers the last route in
-`rbview.ini` next to the exe.
+### Keys (as in the Practice Hack)
 
-Colours: dark grey = static ground, blue = moving parts, dark red = things that kill, small red
-triangles = spikes, cyan boxes = checkpoints (filled once collected), gold box = flag, blue/green/red
-boxes = switches (filled once pressed), orange = Level 16's wrong-way trigger.
+| key | what it does |
+|---|---|
+| A / W / D (or Left / Up / Right) | move. A key tapped between two frames still counts for the next frame |
+| T (or P) | pause / run |
+| Space | one frame (while paused or at speed 0). Shift+Space: remove the last frame |
+| , and . | game speed down / up: 0, 1/32 ... 1 ... 64 |
+| 0-9 | save the route up to the shown frame into state 0-9. Shift+0-9: load it |
+| I, then 0-9 | import the clipboard (a route string) into a state. Shift+0-9: import and play it |
+| O, then 0-9 | copy a state's string to the clipboard. Shift+O: the backups |
+| Backspace | remove the last 10 frames (Shift: 31), while paused |
+| Esc | drop the rest of a playback: the route ends at the shown frame (paused there) |
+| R / F | restart the level (empty route) / checkpoint restart (adds `R` to the route) |
+| U | real-time state loads: a loaded state plays back instead of appearing at once. Shift+U: fast playback |
+| G / Shift+G | invincibility / glitchless |
+| H / Shift+H / J | HUD / spike glitch marks (where each spike really kills this frame) / physics outlines + the ball's 16 control points |
+| B / Shift+B | the jump brute-forcer: B on the take-off frame, Shift+B on the landing frame (then W/S, Space, Enter, Esc) |
+| Ctrl+A / Ctrl+D | previous / next level |
+| / | the command line: `/config mathspikes 0`, `/config decimals 6`, `/set -vx 5 -vy -3 -vr 0 -px 12 -py 8`, `/remap a left`, `/remap reset` |
+| Z / Shift+Z / = | zoom in / out at the mouse / reset |
+
+rbview only: **Home / End** first / last frame, **PageUp / PageDown** one frame back / on (Shift: 10).
+These only move the view: nothing in the route changes. **F1** shows the keys. **Keys...** remaps any
+key (the mod's `/remap`). While you type in a text box (the route, the command line, a name), the keys do nothing:
+digits typed into the route do not save states. Click the level view to play again.
+
+### The window
+
+- **Top row:** level, start (level start or a checkpoint), **Glitchless**, **Invincible**, and the spike rule.
+  Keep *Standardized (mathspikes 1)* for the speedrun rules. *Flash shape test (mathspikes 0, TE)* is the original
+  game and the Tournament Edition. There, deaths depend on the size of the Flash area (**Window**: the projector
+  window without its menu bar; pick a preset or type a size such as `935x925`) and on **Scale** (*Show all* = the
+  projector's View > Show All).
+- **Route:** the input string, kept up to date while you play. Type or paste a string and press Enter (or **Load**)
+  to load it at frame 0. **Paste / Copy** use the clipboard. **Open...** (or drag a file onto the window) reads a
+  route file or a stats log (`.tsv`) from the logging mod: level, checkpoint, glitchless and the spike rule, window
+  and scale (its `#ENV` line) come from the log. **Save...** writes the route with its settings.
+- **Transport:** |< < Run > >|, the game speed, *Real-time loads* (U), *Stop at end* (pause when a playback reaches
+  the end of the route; the mod keeps running and records from there), *Follow camera*, *Show path*, *HUD*, and the
+  slider to look at any frame.
+- **Command line** and the mod's messages; the mode (RECORDING, PLAYBACK, PAUSED, BRUTE FORCE).
+- **Level view:** the level, moving parts, spikes, checkpoints, switches, the flag and the ball with the game's camera.
+  The played path is red, the rest of the route (still to play back) is faint. The HUD shows the mod's numbers
+  (time, speed, velocities, rotation, position, contacts) and the keys of the frame. After a death a dashed purple
+  **warp ghost** shows where the game tests the dead ball against the flag, checkpoints and switches: when it
+  touches the flag, that is a death warp. Mouse wheel zooms; dragging pans (*Follow camera* goes off).
+- **Tabs on the right:**
+  - **Events:** deaths, checkpoints, switches, restarts, warps and the flag frame. Click one to go there.
+  - **States:** the ten slots (0-9), saved states with names and no limit, and the backups: every route that
+    R, a rewind or a load replaced (the last 500). All of it is kept in `rbview_states.txt` next to the exe.
+  - **Ghost:** a second route drawn as a blue ball on the same frame: the current route (as it is now), a pasted
+    string, a file, or a saved state. The tab compares the flag frames.
+  - **Search:** rbsim's searches inside the program. *Optimize* improves the whole route for the chosen time;
+    *Beam* searches on from the shown frame. Stop ends early. **Load result** puts the best route found in the
+    editor (the old one goes to the backups).
+  - **Brute force:** the mod's jump brute-forcer. Every way it finds is also simulated, so the list shows the real
+    end height and speed next to the mod's estimate.
+
+### Differences from the mod
+
+- A key tapped between two frames is recorded in the route. The mod applies such a tap but does not write it into
+  its string, so the string does not replay the same.
+- Glitchless and invincibility apply to the whole route: changing them re-simulates it. In the mod they switch at
+  the moment you press the key.
+- `/set` warps are stored in the route, so states with a warp replay correctly in rbview. The game cannot replay
+  them. Routes with warps or invincibility are marked (`[tool]`, and on the HUD) and the search refuses them.
+- R, F, I, O, Backspace and B also work while paused in the middle of a playback. They act at the shown frame;
+  the rest of the route goes to the backups.
+
+Settings are kept in `rbview.ini`, and states and backups in `rbview_states.txt`, both next to the exe.
+
+Colours: dark grey = static ground, blue = moving parts, dark red = things that kill, red triangles = spikes,
+orange = where a spike really kills this frame (Shift+H), cyan boxes = checkpoints (filled once collected), gold
+box = flag, blue/green/red boxes = switches (filled once pressed), orange box = Level 16's wrong-way trigger.
 
 ## Command-line tool: `rbsim.exe`
 

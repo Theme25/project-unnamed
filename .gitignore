@@ -9,3 +9,4 @@ rbview.exe
 rbview.ini
 viewer/*.res.o
 tools/framescan
+viewer/tas_test
