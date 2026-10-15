@@ -1211,7 +1211,21 @@ static bool LooksLikeRoute(const std::string& s) {
 // ------------------------------------------------------------------ the mod's keys
 static uint8_t HeldCode() { return tas::KeysToCode(g_heldL || g_tapL, g_heldU || g_tapU, g_heldR || g_tapR); }
 static void ClearTaps() { g_tapL = g_tapU = g_tapR = false; }
-static void ReleaseAll() { g_heldL = g_heldU = g_heldR = false, ClearTaps(); }
+// Space held down: rbview repeats it itself (Windows' key repeat only repeats the last key pressed, so pressing A/W/D
+// while holding Space would stop the frame advance). Delay and rate follow the Windows keyboard settings.
+static bool g_spaceHeld = false, g_spaceShift = false;
+static LARGE_INTEGER g_spaceNext;
+static double KeyRepeatDelay() {
+    int d = 1;
+    SystemParametersInfoW(SPI_GETKEYBOARDDELAY, 0, &d, 0);
+    return 0.25 * (std::max(0, std::min(3, d)) + 1);
+}
+static double KeyRepeatInterval() {
+    DWORD sp = 31;
+    SystemParametersInfoW(SPI_GETKEYBOARDSPEED, 0, &sp, 0);
+    return 1.0 / (2.5 + std::min<DWORD>(sp, 31) * (27.5 / 31));
+}
+static void ReleaseAll() { g_heldL = g_heldU = g_heldR = false, g_spaceHeld = false, ClearTaps(); }
 
 static void ZoomAt(double f) {
     POINT p;
@@ -1247,7 +1261,8 @@ static bool TasKey(UINT msg, WPARAM wp, LPARAM lp) {
     const bool repeat = down && (lp & (1 << 30));
     const bool shift = GetKeyState(VK_SHIFT) < 0, ctrl = GetKeyState(VK_CONTROL) < 0;
     if (!down) {
-        if (vk == 'A' || vk == VK_LEFT) g_heldL = false;
+        if (vk == VK_SPACE) g_spaceHeld = false;
+        else if (vk == 'A' || vk == VK_LEFT) g_heldL = false;
         else if (vk == 'D' || vk == VK_RIGHT) g_heldR = false;
         else if (vk == 'W' || vk == VK_UP) g_heldU = false;
         else return false;
@@ -1366,9 +1381,13 @@ static bool TasKey(UINT msg, WPARAM wp, LPARAM lp) {
             return true;
         case VK_OEM_PERIOD: s.SpeedUp(); RefreshStatus(); return true;
         case VK_OEM_COMMA: s.SpeedDown(); RefreshStatus(); return true;
-        case VK_SPACE:  // one frame; while running the first press pauses
+        case VK_SPACE:  // one frame; while running the first press pauses. Held: repeats from the timer (TickSpace)
+            if (repeat) return true;
             if (shift && (s.speed == 0 || s.paused)) s.UndoFrame();
             else if (!shift) s.FrameAdvance(HeldCode()), ClearTaps();
+            g_spaceHeld = true, g_spaceShift = shift;
+            QueryPerformanceCounter(&g_spaceNext);
+            g_spaceNext.QuadPart += (LONGLONG)(KeyRepeatDelay() * (double)g_qpf.QuadPart);
             redraw();
             return true;
         case VK_ESCAPE:
@@ -2195,6 +2214,23 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             const double sec = double(now.QuadPart - g_lastTick.QuadPart) / double(g_qpf.QuadPart);
             g_lastTick = now;
             if (g_modal) return 0;
+            if (g_spaceHeld && GetKeyState(VK_SPACE) >= 0) g_spaceHeld = false;  // released while another window had the keys
+            if (g_spaceHeld && now.QuadPart >= g_spaceNext.QuadPart) {
+                const LONGLONG step = (LONGLONG)(KeyRepeatInterval() * (double)g_qpf.QuadPart);
+                int n = 0;
+                while (now.QuadPart >= g_spaceNext.QuadPart && n < 8) {
+                    if (g_s.speed == 0 || g_s.paused) {
+                        if (g_spaceShift) g_s.UndoFrame();
+                        else g_s.FrameAdvance(HeldCode()), ClearTaps();
+                    }
+                    g_spaceNext.QuadPart += step, ++n;
+                }
+                if (now.QuadPart >= g_spaceNext.QuadPart) g_spaceNext = now;
+                RefreshRouteText(false);
+                RefreshEvents(false);
+                RefreshStatus();
+                InvalidateRect(g_canvas, nullptr, FALSE);
+            }
             const bool wasPaused = g_s.paused;
             const int n = g_s.Run(std::min(sec, 0.25) * 31.0, HeldCode());
             {  // autosave every few seconds while the route changes (a crash or a killed process keeps the work)

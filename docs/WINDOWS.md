@@ -17,7 +17,7 @@ and play with A/W/D (or the arrows). Everything you play is recorded into the ro
 |---|---|
 | A / W / D (or Left / Up / Right) | move. A key tapped between two frames still counts for the next frame |
 | T (or P) | pause / run |
-| Space | one frame (if the game is running, the first press pauses it). Shift+Space: remove the last frame |
+| Space | one frame (if the game is running, the first press pauses it). Hold it to keep stepping, even while you press other keys. Shift+Space: remove the last frame |
 | , and . | game speed down / up: 0, 1/32 ... 1 ... 64 |
 | 0-9 | save the route up to the shown frame into state 0-9. Shift+0-9: load it |
 | I, then 0-9 | import the clipboard (a route string) into a state. Shift+0-9: import and play it |
