@@ -57,7 +57,7 @@ digits typed into the route do not save states. Click the level view to play aga
   The played path is red, the rest of the route (still to play back) is faint. The HUD shows the mod's numbers
   (time, speed, velocities, rotation, position, contacts) and the keys of the frame. After a death a dashed purple
   **warp ghost** shows where the game tests the dead ball against the flag, checkpoints and switches: when it
-  touches the flag, that is a death warp. Mouse wheel zooms; dragging pans (*Follow camera* goes off).
+  touches the flag, that is a death warp. The view follows the game camera by default, also while zooming (mouse wheel, Z). Dragging pans and leaves *Follow camera*; Play, loading a route and = go back to it.
 - **Tabs on the right:**
   - **Events:** deaths, checkpoints, switches, restarts, warps and the flag frame. Click one to go there.
   - **States:** the ten slots (0-9), saved states with names and no limit, and the backups: every route that

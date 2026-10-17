@@ -298,6 +298,7 @@ static bool LoadFromControls(bool showErrors) {
     g_s.Load(r, 0);
     g_s.paused = true;
     g_userZoom = 1.0;
+    g_follow_on = true;
     RefreshAll();
     return true;
 }
@@ -1309,9 +1310,7 @@ static void ZoomAt(double f) {
     const double wx = g_viewX + (p.x - rc.right / 2.0) / z0, wy = g_viewY + (p.y - rc.bottom / 2.0) / z0;
     g_userZoom = std::max(0.1, std::min(16.0, g_userZoom * f));
     const double z1 = std::min(rc.right / 550.0, rc.bottom / 400.0) * g_userZoom;
-    if (p.x >= 0 && p.y >= 0 && p.x < rc.right && p.y < rc.bottom) {
-        g_follow_on = false;
-        SetCheck(g_follow, false);
+    if (!g_follow_on && p.x >= 0 && p.y >= 0 && p.x < rc.right && p.y < rc.bottom) {  // following: zoom about the camera
         g_viewX = wx - (p.x - rc.right / 2.0) / z1;
         g_viewY = wy - (p.y - rc.bottom / 2.0) / z1;
     }
@@ -1448,7 +1447,10 @@ static bool TasKey(UINT msg, WPARAM wp, LPARAM lp) {
         }
     switch (vk) {
         case 'T': case 'P':
-            if (!repeat) s.TogglePause();
+            if (!repeat) {
+                s.TogglePause();
+                if (!s.paused) g_follow_on = true, SetCheck(g_follow, true);  // playing: back to the game camera
+            }
             RefreshStatus();
             return true;
         case VK_OEM_PERIOD: s.SpeedUp(); RefreshStatus(); return true;
@@ -1741,7 +1743,7 @@ static LRESULT CALLBACK CanvasProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                 GetClientRect(h, &rc);
                 const double z = std::min(rc.right / 550.0, rc.bottom / 400.0) * g_userZoom;
                 const int dx = (short)LOWORD(lp) - g_dragFrom.x, dy = (short)HIWORD(lp) - g_dragFrom.y;
-                if (std::abs(dx) + std::abs(dy) > 2 && g_follow_on) {
+                if (std::abs(dx) + std::abs(dy) > 8 && g_follow_on) {
                     g_follow_on = false;
                     SetCheck(g_follow, false);
                 }
@@ -1845,7 +1847,10 @@ static void OnCommand(int id, int code, HWND ctl) {
             else s.FrameAdvance(HeldCode());
             break;
         case ID_LAST: s.paused = true, s.Seek(s.tl.size()); break;
-        case ID_PLAY: s.TogglePause(); break;
+        case ID_PLAY:
+            s.TogglePause();
+            if (!s.paused) g_follow_on = true, SetCheck(g_follow, true);
+            break;
         case ID_REALTIME: s.realtimeLoad = Checked(g_realtime); break;
         case ID_OFAST: s.fastPlayback = Checked(g_fast); break;
         case ID_OPAUSEEND: s.stopAtEnd = true; break;
@@ -2208,7 +2213,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             g_hud = GetPrivateProfileIntW(L"view", L"hud", 1, ini) != 0;
             g_marks = GetPrivateProfileIntW(L"view", L"marks", 0, ini) != 0;
             g_polys = GetPrivateProfileIntW(L"view", L"polygons", 0, ini) != 0;
-            g_follow_on = GetPrivateProfileIntW(L"view", L"follow", 1, ini) != 0;
+            g_follow_on = true;  // the game camera is the standard view
             g_trail_on = GetPrivateProfileIntW(L"view", L"trail", 1, ini) != 0;
             g_decimals = (int)GetPrivateProfileIntW(L"view", L"decimals", 4, ini);
             g_s.realtimeLoad = GetPrivateProfileIntW(L"view", L"realtime", 0, ini) != 0;
