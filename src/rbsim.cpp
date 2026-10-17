@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstdio>
+#include <random>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -1081,6 +1082,50 @@ static int CmdTest() {
                             w->spriteX[w->playerBody] == 375 && w->camX == -100;
         w->Tick(IN_NONE);
         check(placed && w->world.bodies[w->playerBody].xf.position.x > 12.5, "warp (/set): new ball at the given position and velocity, camera snapped");
+    }
+    // 24. The viewer's mathspikes 0 kill map (SpikeKillPixels + BallControlPoints): a ball dies on a spike exactly when
+    // one of its control points lies in one of the spike's kill pixels. Random balls, cameras and redraw offsets on
+    // plain (Level 3) and turned/scaled (Levels 9, 15) spikes, showAll, noScale and hidden sizes.
+    {
+        DisplayConfig& dc = GetDisplayConfig();
+        const DisplayConfig saved = dc;
+        struct Win { int w, h; bool all; };
+        const Win wins[] = {{550, 400, true}, {829, 603, true}, {935, 925, true}, {1280, 720, true}, {700, 500, false}, {1920, 1080, true}};
+        std::mt19937 rng(24);
+        auto U = [&](double a, double b) { return std::uniform_real_distribution<double>(a, b)(rng); };
+        int cases = 0, agree = 0, hits = 0;
+        for (int lv : {3, 9, 15}) {
+            LevelTemplate t(lv);
+            if (t.spikeCount == 0) continue;
+            for (const Win& wn : wins) {
+                dc.mathSpikes = 0, dc.windowW = wn.w, dc.windowH = wn.h, dc.showAll = wn.all;
+                for (int n = 0; n < 400; ++n) {
+                    const SpikeObj& sp = t.spikes[rng() % (uint32_t)t.spikeCount];
+                    const double cx = (sp.bx0 + sp.bx1) / 40, cy = (sp.by0 + sp.by1) / 40;
+                    const double sx = std::round((cx + U(-16, 16)) * 20) / 20, sy = std::round((cy + U(-16, 16)) * 20) / 20, rot = U(-180, 180);
+                    const double camX = std::round((275 - cx + U(-150, 150)) * 20) / 20, camY = std::round((200 - cy + U(-120, 120)) * 20) / 20;
+                    const double dX = n % 3 ? camX + std::round(U(-15, 15) * 20) / 20 : camX, dY = n % 3 ? camY + std::round(U(-15, 15) * 20) / 20 : camY;
+                    const bool game = BallHitsSpike(sx, sy, rot, 0, 0, sp, camX, camY, dX, dY).hit;
+                    std::vector<KillPixel> px;
+                    SpikeKillPixels(sp, camX, camY, dX, dY, px);
+                    double cp[32];
+                    BallControlPoints(sx, sy, rot, 0, camX, camY, cp);
+                    bool view = false;
+                    for (int k = 0; k < 16 && !view; ++k) {
+                        const int64_t gx = std::llround(cp[2 * k] * 20), gy = std::llround(cp[2 * k + 1] * 20);
+                        for (const KillPixel& p : px)
+                            if (gx >= std::llround(p.x0 * 20) && gx < std::llround(p.x1 * 20) && gy >= std::llround(p.y0 * 20) && gy < std::llround(p.y1 * 20)) {
+                                view = true;
+                                break;
+                            }
+                    }
+                    ++cases, agree += game == view, hits += game;
+                }
+            }
+        }
+        dc = saved;
+        check(agree == cases && hits > cases / 20, "mathspikes 0 kill map (viewer): a control point in a kill pixel <=> the spike kills");
+        std::printf("       %d / %d agree (%d kills)\n", agree, cases, hits);
     }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;

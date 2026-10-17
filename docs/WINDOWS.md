@@ -94,7 +94,7 @@ digits typed into the route do not save states. Click the level view to play aga
 Settings are kept in `rbview.ini`, and states and backups in `rbview_states.txt`, both next to the exe.
 
 Colours: dark grey = static ground, blue = moving parts, dark red = things that kill, red triangles = spikes,
-orange = a spike's effective hitbox this frame: where a control point (magenta) kills, the outline shifted by the camera step and cut to the spike's box (Shift+H; the spike itself turns pale); the three dots under the ball are the jump probes (green = touching, so up jumps), cyan boxes = checkpoints (filled once collected), gold
+orange = a spike's effective hitbox this frame: where a control point (magenta) kills, the outline shifted by the camera step and cut to the spike's box (Shift+H; the spike itself turns pale). Under mathspikes 0 it is drawn as the exact set of window pixels that kill (Flash tests each control point on a whole window pixel), so with the window size and camera of that frame a magenta point inside an orange cell kills and one outside does not; the three dots under the ball are the jump probes (green = touching, so up jumps), cyan boxes = checkpoints (filled once collected), gold
 box = flag, blue/green/red boxes = switches (filled once pressed), orange box = Level 16's wrong-way trigger.
 
 ## Command-line tool: `rbsim.exe`

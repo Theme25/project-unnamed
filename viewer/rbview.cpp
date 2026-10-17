@@ -745,15 +745,23 @@ static void Paint(HDC hdc, int w, int h) {
                     // the point is shifted by -dp (the "cover"), i.e. the triangle by +dp, and must also lie inside the
                     // spike's box. Flash's shape test: the outline of the last redraw, inside the current box (padded by
                     // 2 subpixels right and bottom). Drawn as one shape: the shifted outline cut to the box.
-                    double ox = s.dpX, oy = s.dpY;
-                    double padX = 0, padY = 0;
                     if (ms == 0) {
-                        ox = s.spDrawn[i] ? s.spDrawnX[i] / 20.0 - s.camX : 0;
-                        oy = s.spDrawn[i] ? s.spDrawnY[i] / 20.0 - s.camY : 0;
-                        const DisplayConfig& dc = GetDisplayConfig();
-                        const double k = dc.showAll ? std::min(dc.windowW / 550.0, dc.windowH / 400.0) : 1.0;  // window px per px
-                        padX = padY = k > 0 ? 0.5 / k : 0;
+                        // Flash's shape test is done on whole window pixels: draw every window pixel that kills, as the
+                        // area of control-point positions that probe it (exact, rbsim self-test 24).
+                        const gp::PointF a0 = v.P(sp.bx0 / 20.0 - 12, sp.by0 / 20.0 - 12), a1 = v.P(sp.bx1 / 20.0 + 12, sp.by1 / 20.0 + 12);
+                        if (a1.X < 0 || a0.X > w || a1.Y < 0 || a0.Y > h) continue;
+                        std::vector<KillPixel> kp;
+                        SpikeKillPixels(sp, s.camX, s.camY, s.spDrawn[i] ? s.spDrawnX[i] / 20.0 : NAN, s.spDrawn[i] ? s.spDrawnY[i] / 20.0 : NAN, kp);
+                        gp::SolidBrush cb(Rgb(255, 120, 0, 220));
+                        gp::Pen grid(Rgb(150, 50, 0, 160), 1);
+                        for (const KillPixel& p : kp) {
+                            const gp::PointF q0 = v.P(p.x0, p.y0), q1 = v.P(p.x1, p.y1);
+                            g.FillRectangle(&cb, q0.X, q0.Y, q1.X - q0.X, q1.Y - q0.Y);
+                            if (q1.X - q0.X >= 6) g.DrawRectangle(&grid, q0.X, q0.Y, q1.X - q0.X, q1.Y - q0.Y);  // one window pixel
+                        }
+                        continue;
                     }
+                    const double ox = s.dpX, oy = s.dpY, padX = 0, padY = 0;
                     gp::PointF cov[3];
                     for (int k = 0; k < 3; ++k) cov[k] = gp::PointF(pts[k].X + (gp::REAL)(ox * v.z), pts[k].Y + (gp::REAL)(oy * v.z));
                     const gp::PointF a = v.P(sp.bx0 / 20.0, sp.by0 / 20.0), b = v.P(sp.bx1 / 20.0 + padX, sp.by1 / 20.0 + padY);
@@ -912,11 +920,14 @@ static void Paint(HDC hdc, int w, int h) {
                         g.FillRectangle(&bb, c.X - (gp::REAL)(half * v.z), c.Y - (gp::REAL)(half * v.z), (gp::REAL)(2 * half * v.z),
                                         (gp::REAL)(2 * half * v.z));
                         // the 16 control points (what the spike hitboxes kill)
+                        // (whole twips, exactly as the spike test computes them)
                         gp::SolidBrush cpb(Rgb(255, 0, 255));
+                        double cp[32];
+                        BallControlPoints(bx, by, s.spriteRotW[s.playerBody], GetDisplayConfig().mathSpikes, s.camX, s.camY, cp);
+                        const float cr = std::min(4.0f, std::max(1.5f, (float)(0.6 * v.z)));
                         for (int k = 0; k < 16; ++k) {
-                            const double an = 2 * AS3_PI / 16 * k + a;
-                            const gp::PointF p = v.P(bx + 10.5 * std::cos(an), by + 10.5 * std::sin(an));
-                            g.FillRectangle(&cpb, p.X - 1.5f, p.Y - 1.5f, 3.0f, 3.0f);
+                            const gp::PointF p = v.P(cp[2 * k], cp[2 * k + 1]);
+                            g.FillRectangle(&cpb, p.X - cr, p.Y - cr, 2 * cr, 2 * cr);
                         }
                         // jump probes: the three ground tests of the last Update (Level.Update, at the ball's position after
                         // the step = the shown position). Any hit = grounded: up jumps, left/right accelerate fully.
@@ -924,7 +935,7 @@ static void Paint(HDC hdc, int w, int h) {
                         const double px = pb.xf.position.x, py = pb.xf.position.y;
                         const double qx[3] = {px - 0.2, px, px + 0.2}, qy[3] = {py + 0.38, py + 0.4, py + 0.38};
                         const bool hitp[3] = {s.probeL, s.probeC, s.probeR};
-                        const float pr = std::max(2.5f, (float)(2.2 * v.z));
+                        const float pr = std::min(7.0f, std::max(2.5f, (float)(2.2 * v.z)));
                         for (int k = 0; k < 3; ++k) {
                             const gp::PointF p = v.P(qx[k] * PHYS_SCALE, qy[k] * PHYS_SCALE);
                             gp::SolidBrush pbr(hitp[k] ? Rgb(0, 200, 60) : Rgb(255, 255, 255));

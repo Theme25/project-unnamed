@@ -91,6 +91,13 @@ SpikeResult BallHitsSpike(double spriteXpx, double spriteYpx, double rotationDeg
 // mathSpikes 0: is any part of the spike's box inside the window with the Level at cam (px)? Flash only redraws
 // (and so only rebuilds the edges of) shapes that are on screen.
 bool SpikeOnScreen(const SpikeObj& s, double camXpx, double camYpx);
+// mathSpikes 0, for display: every window pixel whose probe kills on spike s this frame (Level at cam, edges from the
+// last redraw at drawnCam), as the Level-px rectangle of the control-point positions (whole twips) that probe there.
+// A control point kills exactly when it lies in one of these rectangles. P/Q: the window pixel.
+struct KillPixel { double x0, y0, x1, y1; int64_t P, Q; };
+void SpikeKillPixels(const SpikeObj& s, double camXpx, double camYpx, double drawnCamXpx, double drawnCamYpx, std::vector<KillPixel>& out);
+// The ball's 16 control points (Level px, whole twips) as the spike test computes them.
+void BallControlPoints(double spriteXpx, double spriteYpx, double rotationDeg, int mathSpikes, double camXpx, double camYpx, double outPx[32]);
 constexpr int CAP_SPIKES = 256;
 
 // Real-game timers (not in the TAS hack; teammate data, 31 fps): after a death the game respawns 1.2 s later

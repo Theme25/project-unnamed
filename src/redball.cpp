@@ -346,6 +346,74 @@ bool SpikeOnScreen(const SpikeObj& s, double camXpx, double camYpx) {
     return x1 >= L && x0 < R && y1 >= T && y0 < B;
 }
 
+// The level twips U (control point + Level position) whose probe lands on window pixel P along one axis:
+// P = rint(f32(StageRoundTrip(U) * k)) + t. Returns false if none (cannot happen for k <= 1 px per twip).
+static bool ProbeTwipRange(float k, int64_t t, int64_t P, int64_t& lo, int64_t& hi) {
+    const double c = (double)(P - t) / k, span = 1.0 / k + 2;
+    lo = INT64_MAX, hi = INT64_MIN;
+    for (int64_t U = (int64_t)std::floor(c - span); U <= (int64_t)std::ceil(c + span); ++U) {
+        if (pix::Rint(pix::F32((double)pix::StageRoundTrip(U) * k)) + t != P) continue;
+        lo = std::min(lo, U), hi = std::max(hi, U);
+    }
+    return lo <= hi;
+}
+
+void SpikeKillPixels(const SpikeObj& s, double camXpx, double camYpx, double drawnCamXpx, double drawnCamYpx, std::vector<KillPixel>& out) {
+    const DisplayConfig& dc = GetDisplayConfig();
+    const pix::Window w = pix::MakeWindow(dc.windowW, dc.windowH, dc.showAll);
+    const int64_t LX = std::llround(camXpx * 20), LY = std::llround(camYpx * 20);
+    const int64_t DX = std::isnan(drawnCamXpx) ? LX : std::llround(drawnCamXpx * 20);
+    const int64_t DY = std::isnan(drawnCamYpx) ? LY : std::llround(drawnCamYpx * 20);
+    const pix::DevMatrix now = SpikeDevMatrix(w, s, LX, LY), drawn = SpikeDevMatrix(w, s, DX, DY);
+    // the padded device box now: no probe outside it can hit
+    int64_t x0 = INT64_MAX, x1 = INT64_MIN, y0 = INT64_MAX, y1 = INT64_MIN;
+    for (int64_t x : {0, 120})
+        for (int64_t y : {-193, 0}) {
+            int64_t ox, oy;
+            pix::Xform(now, x, y, ox, oy);
+            x0 = std::min(x0, ox), x1 = std::max(x1, ox), y0 = std::min(y0, oy), y1 = std::max(y1, oy);
+        }
+    x1 += pix::kBoundsPad, y1 += pix::kBoundsPad;
+    const int64_t P0 = (x0 - 4) / 4 - 1, P1 = x1 / 4 + 1, Q0 = (y0 - 4) / 4 - 1, Q1 = y1 / 4 + 1;
+    for (int64_t Q = Q0; Q <= Q1; ++Q) {
+        int64_t vlo, vhi;
+        bool rowDone = false;
+        for (int64_t P = P0; P <= P1; ++P) {
+            if (!pix::SpikeShapeHit(now, drawn, 4 * P, 4 * Q)) continue;
+            if (!rowDone) {
+                if (!ProbeTwipRange(w.ky, w.ty, Q, vlo, vhi)) break;
+                rowDone = true;
+            }
+            int64_t ulo, uhi;
+            if (!ProbeTwipRange(w.kx, w.tx, P, ulo, uhi)) continue;
+            out.push_back(KillPixel{(ulo - LX) / 20.0, (vlo - LY) / 20.0, (uhi + 1 - LX) / 20.0, (vhi + 1 - LY) / 20.0, P, Q});
+        }
+    }
+}
+
+void BallControlPoints(double sx, double sy, double rotDeg, int mathSpikes, double camXpx, double camYpx, double outPx[32]) {
+    const int64_t X = std::llround(sx * 20), Y = std::llround(sy * 20);
+    const FlashMatrix fm = FlashRotationMatrix(rotDeg);
+    const double fa = fm.a / 65536.0, fb = fm.b / 65536.0;
+    const int64_t LX = std::llround(camXpx * 20), LY = std::llround(camYpx * 20);
+    const double r = PLAYER_SPRITE_WIDTH_TWIPS / 20.0 / 2, step = 2 * AS3_PI / 16;
+    for (int k = 0; k < 16; ++k) {
+        const int64_t qx = (int64_t)std::trunc(r * as3_cos(step * k) * 20), qy = (int64_t)std::trunc(r * as3_sin(step * k) * 20);
+        int64_t gx, gy;
+        if (mathSpikes == 0) {  // the stage round trip of localToGlobal, back in Level twips
+            gx = pix::StageRoundTrip(X + FlashXformX(fa, -fb, qx, qy) + LX) - LX;
+            gy = pix::StageRoundTrip(Y + FlashXformY(fb, fa, qx, qy) + LY) - LY;
+        } else if (mathSpikes == 2) {  // MATHSPIKES 2: 16.16 matrix in Level space
+            gx = X + ((fm.a * qx - fm.b * qy + 32768) >> 16);
+            gy = Y + ((fm.b * qx + fm.a * qy + 32768) >> 16);
+        } else {  // standardized: Flash's float32 point transform
+            gx = X + FlashXformX(fa, -fb, qx, qy);
+            gy = Y + FlashXformY(fb, fa, qx, qy);
+        }
+        outPx[2 * k] = gx / 20.0, outPx[2 * k + 1] = gy / 20.0;
+    }
+}
+
 SpikeResult BallHitsSpike(double sx, double sy, double rotDeg, double dpx, double dpy, const SpikeObj& s, double camXpx, double camYpx,
                           double drawnCamXpx, double drawnCamYpx) {
     const int mode = GetDisplayConfig().mathSpikes;

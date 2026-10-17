@@ -126,6 +126,9 @@ padding was found this way and then located in the player's code.
     reproduces Flash's row: usually the previous tick's, but a route can change keys on exactly that frame.
 - **Viewer:** the Spikes, Window and Scale boxes on the top row. Window takes a preset or a typed `WxH`.
   The settings are saved in `rbview.ini` under `[display]`.
+  With the graphics marks on (Shift+H), each spike's hit area is drawn as the exact window pixels that kill this
+  frame (`SpikeKillPixels`), next to the ball's control points (`BallControlPoints`); self-test 24 checks that a
+  control point in a kill pixel is exactly a spike death (7,200 random cases, 6 window setups, plain and turned spikes).
 - **Search:** routes found with `--mathspikes 0` are only valid for that window setup. Under `--mathspikes 0`,
   `beam` and `optimize` cost a little more per frame: each tick redraws the spike cache.
 
