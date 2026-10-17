@@ -562,7 +562,7 @@ static const wchar_t* kKeyHelp =
     L"Esc   drop the rest of a playback     R   restart the level     F   checkpoint restart\r\n"
     L"U   real-time state loads          Shift+U   fast playback\r\n"
     L"G   invincibility     Shift+G   glitchless     C   clear the message\r\n"
-    L"H   HUD     Shift+H   spike glitch marks     J   physics outlines + control points\r\n"
+    L"H   HUD     Shift+H   graphics marks (spike hitboxes, jump probes)     J   physics outlines + control points\r\n"
     L"B   jump take-off     Shift+B   landing: the jump brute-forcer (W/S, Space, Enter, Esc)\r\n"
     L"Ctrl+A / Ctrl+D (Ctrl+Left/Right)   previous / next level\r\n"
     L"/   command line: /config mathspikes N, /config decimals N, /set -vx -vy -vr -px -py, /remap A LEFT, /remap reset\r\n"
@@ -738,24 +738,43 @@ static void Paint(HDC hdc, int w, int h) {
                 const double lx[3] = {0, 3, 6}, ly[3] = {0, -9.65, 0};
                 gp::PointF pts[3];
                 for (int k = 0; k < 3; ++k) pts[k] = v.P(sp.a * lx[k] + sp.c * ly[k] + sp.tx, sp.b * lx[k] + sp.d * ly[k] + sp.ty);
-                gp::SolidBrush br(Rgb(200, 30, 30));
+                gp::SolidBrush br(g_marks && ms >= 0 ? Rgb(200, 30, 30, 90) : Rgb(200, 30, 30));
                 g.FillPolygon(&br, pts, 3);
                 if (g_marks && ms >= 0) {
-                    // standardized / math: the point is shifted by -dp (the "cover"), i.e. the triangle by +dp, inside the
-                    // spike's box. Flash's shape test: the outline of the last redraw inside the current box.
+                    // The effective hitbox of this frame: where a control point of the ball kills. Standardized / math:
+                    // the point is shifted by -dp (the "cover"), i.e. the triangle by +dp, and must also lie inside the
+                    // spike's box. Flash's shape test: the outline of the last redraw, inside the current box (padded by
+                    // 2 subpixels right and bottom). Drawn as one shape: the shifted outline cut to the box.
                     double ox = s.dpX, oy = s.dpY;
+                    double padX = 0, padY = 0;
                     if (ms == 0) {
                         ox = s.spDrawn[i] ? s.spDrawnX[i] / 20.0 - s.camX : 0;
                         oy = s.spDrawn[i] ? s.spDrawnY[i] / 20.0 - s.camY : 0;
+                        const DisplayConfig& dc = GetDisplayConfig();
+                        const double k = dc.showAll ? std::min(dc.windowW / 550.0, dc.windowH / 400.0) : 1.0;  // window px per px
+                        padX = padY = k > 0 ? 0.5 / k : 0;
                     }
                     gp::PointF cov[3];
                     for (int k = 0; k < 3; ++k) cov[k] = gp::PointF(pts[k].X + (gp::REAL)(ox * v.z), pts[k].Y + (gp::REAL)(oy * v.z));
-                    gp::SolidBrush cb(Rgb(255, 128, 0, 150));
-                    g.FillPolygon(&cb, cov, 3);
-                    gp::Pen bp(Rgb(255, 128, 0, 200), 1);
-                    bp.SetDashStyle(gp::DashStyleDot);
-                    const gp::PointF a = v.P(sp.bx0 / 20.0, sp.by0 / 20.0), b = v.P(sp.bx1 / 20.0, sp.by1 / 20.0);
-                    g.DrawRectangle(&bp, a.X, a.Y, b.X - a.X, b.Y - a.Y);
+                    const gp::PointF a = v.P(sp.bx0 / 20.0, sp.by0 / 20.0), b = v.P(sp.bx1 / 20.0 + padX, sp.by1 / 20.0 + padY);
+                    gp::GraphicsPath tri;
+                    tri.AddPolygon(cov, 3);
+                    gp::GraphicsPath box;
+                    box.AddRectangle(gp::RectF(a.X, a.Y, b.X - a.X, b.Y - a.Y));
+                    gp::Region hit(&tri);
+                    hit.Intersect(&box);
+                    gp::SolidBrush cb(Rgb(255, 120, 0, 220));
+                    g.FillRegion(&cb, &hit);
+                    // outline of the hitbox (drawn clipped to it, so only its own edges show)
+                    gp::Region oldClip;
+                    g.GetClip(&oldClip);
+                    g.SetClip(&box, gp::CombineModeIntersect);
+                    gp::Pen op(Rgb(150, 50, 0), std::max(1.0f, lw * 0.8f));
+                    g.DrawPolygon(&op, cov, 3);
+                    g.SetClip(&oldClip);
+                    g.SetClip(&tri, gp::CombineModeIntersect);
+                    g.DrawRectangle(&op, a.X, a.Y, b.X - a.X, b.Y - a.Y);
+                    g.SetClip(&oldClip);
                 }
             }
             // checkpoints
@@ -886,11 +905,33 @@ static void Paint(HDC hdc, int w, int h) {
                 const float r = (float)(10.5 * v.z);
                 if (s.playerAlive) {
                     DrawBall(g, c, r, s.spriteRotW[s.playerBody], Rgb(230, 30, 30), Rgb(110, 0, 0), lw * 1.2f);
-                    if (g_marks) {  // the mod's ball box mark
+                    if (g_marks) {
+                        // the mod's ball box mark
                         const double a = s.spriteRotW[s.playerBody] * AS3_PI / 180, half = 10.5 * (std::fabs(std::cos(a)) + std::fabs(std::sin(a)));
                         gp::SolidBrush bb(Rgb(32, 0, 192, 60));
                         g.FillRectangle(&bb, c.X - (gp::REAL)(half * v.z), c.Y - (gp::REAL)(half * v.z), (gp::REAL)(2 * half * v.z),
                                         (gp::REAL)(2 * half * v.z));
+                        // the 16 control points (what the spike hitboxes kill)
+                        gp::SolidBrush cpb(Rgb(255, 0, 255));
+                        for (int k = 0; k < 16; ++k) {
+                            const double an = 2 * AS3_PI / 16 * k + a;
+                            const gp::PointF p = v.P(bx + 10.5 * std::cos(an), by + 10.5 * std::sin(an));
+                            g.FillRectangle(&cpb, p.X - 1.5f, p.Y - 1.5f, 3.0f, 3.0f);
+                        }
+                        // jump probes: the three ground tests of the last Update (Level.Update, at the ball's position after
+                        // the step = the shown position). Any hit = grounded: up jumps, left/right accelerate fully.
+                        const Body& pb = wd.bodies[s.playerBody];
+                        const double px = pb.xf.position.x, py = pb.xf.position.y;
+                        const double qx[3] = {px - 0.2, px, px + 0.2}, qy[3] = {py + 0.38, py + 0.4, py + 0.38};
+                        const bool hitp[3] = {s.probeL, s.probeC, s.probeR};
+                        const float pr = std::max(2.5f, (float)(2.2 * v.z));
+                        for (int k = 0; k < 3; ++k) {
+                            const gp::PointF p = v.P(qx[k] * PHYS_SCALE, qy[k] * PHYS_SCALE);
+                            gp::SolidBrush pbr(hitp[k] ? Rgb(0, 200, 60) : Rgb(255, 255, 255));
+                            gp::Pen pp(Rgb(0, 0, 0), 1);
+                            g.FillEllipse(&pbr, p.X - pr, p.Y - pr, 2 * pr, 2 * pr);
+                            g.DrawEllipse(&pp, p.X - pr, p.Y - pr, 2 * pr, 2 * pr);
+                        }
                     }
                 } else {
                     // after a death the frozen ball is tested against targets shifted by the camera: the death-warp ghost
@@ -930,25 +971,45 @@ static void Paint(HDC hdc, int w, int h) {
                 std::wstring cl = L"Contact List: ";
                 for (int32_t i = 0; i < s.world.listener.count; ++i) cl += (i ? L", " : L"") + Widen(s.BodyName(s.world.listener.bodies[i]));
                 lines.push_back(cl);
+                // distance to the flag: the gap between the ball's box and the flag's box (hitTestObject wins at 0)
+                if (s.tpl->aim && s.playerAlive) {
+                    const DisplayObj goal = const_cast<Sim&>(s).GoalTarget();
+                    const Rect bb = BallBounds(s.spriteX[s.playerBody], s.spriteY[s.playerBody], s.spriteRotW[s.playerBody]);
+                    const double gx = std::max({0.0, goal.x0 - bb.x1, bb.x0 - goal.x1}) / 20 / PHYS_SCALE;
+                    const double gy = std::max({0.0, goal.y0 - bb.y1, bb.y0 - goal.y1}) / 20 / PHYS_SCALE;
+                    lines.push_back(L"To goal: " + Fixed(std::sqrt(gx * gx + gy * gy)) + L" m     (dx " + Fixed(gx) + L", dy " + Fixed(gy) + L")");
+                }
                 std::wstring flags;
                 if (g_s.route().invincible) flags += L"INVINCIBLE  ";
                 if (!g_s.route().warps.empty()) flags += L"WARPED  ";
                 if (g_s.route().gless) flags += L"GLITCHLESS  ";
+                // the HUD grows with the canvas (1x up to about 800x580, then with the smaller side)
+                const float hs = (float)std::max(1.0, std::min(3.0, std::min(w / 800.0, h / 580.0)));
+                const float fs = 13 * hs, lh = 17 * hs;
+                gp::FontFamily ff(L"Segoe UI");
+                gp::Font mf(ff.IsAvailable() ? &ff : gp::FontFamily::GenericSansSerif(), fs, gp::FontStyleRegular, gp::UnitPixel);
+                float tw = 0;
+                for (const std::wstring& l : lines) {
+                    gp::RectF r;
+                    g.MeasureString(l.c_str(), -1, &mf, gp::PointF(0, 0), &r);
+                    tw = std::max(tw, r.Width);
+                }
                 gp::SolidBrush back(Rgb(255, 255, 255, 150));
-                g.FillRectangle(&back, 4, 4, 380, (INT)(lines.size() * 17 + 8 + (flags.empty() ? 0 : 18)));
-                for (size_t i = 0; i < lines.size(); ++i) DrawLabel(g, gp::PointF(8, (gp::REAL)(6 + 17 * i)), lines[i].c_str(), Rgb(20, 20, 30), 13, false);
-                if (!flags.empty()) DrawLabel(g, gp::PointF(8, (gp::REAL)(6 + 17 * lines.size())), flags.c_str(), Rgb(190, 0, 120), 13);
+                g.FillRectangle(&back, 4.0f, 4.0f, std::max(380 * hs, tw + 12), lines.size() * lh + 8 + (flags.empty() ? 0 : lh + 1));
+                for (size_t i = 0; i < lines.size(); ++i) DrawLabel(g, gp::PointF(8, 6 + lh * i), lines[i].c_str(), Rgb(20, 20, 30), fs, false);
+                if (!flags.empty()) DrawLabel(g, gp::PointF(8, 6 + lh * lines.size()), flags.c_str(), Rgb(190, 0, 120), fs);
                 // A W D (filled = pressed this frame)
                 const uint8_t code = g_s.InPlayback() ? g_s.route().in[(size_t)g_s.pos] : tas::KeysToCode(g_heldL || g_tapL, g_heldU || g_tapU, g_heldR || g_tapR);
                 const bool k[3] = {(code & 4) != 0 && code != IN_RESTART, (code & 2) != 0 && code != IN_RESTART, (code & 1) != 0 && code != IN_RESTART};
                 const wchar_t* nm[3] = {L"A", L"W", L"D"};
-                const float kx[3] = {(float)w - 100, (float)w - 70, (float)w - 40}, ky[3] = {36, 8, 36};
+                const float kw = 26 * hs, kh = 24 * hs, gap = 30 * hs;
+                const float kx[3] = {(float)w - 14 - 2 * gap - kw, (float)w - 14 - gap - kw, (float)w - 14 - kw}, ky[3] = {8 + 28 * hs, 8, 8 + 28 * hs};
                 for (int i = 0; i < 3; ++i) {
                     gp::SolidBrush kb(k[i] ? Rgb(230, 30, 30, 220) : Rgb(255, 255, 255, 150));
-                    g.FillRectangle(&kb, kx[i], ky[i], 26.0f, 24.0f);
+                    g.FillRectangle(&kb, kx[i], ky[i], kw, kh);
                     gp::Pen kp(Rgb(40, 40, 40), 1);
-                    g.DrawRectangle(&kp, kx[i], ky[i], 26.0f, 24.0f);
-                    DrawLabel(g, gp::PointF(kx[i] + 7, ky[i] + 3), nm[i], k[i] ? Rgb(255, 255, 255) : Rgb(40, 40, 40), 13);
+                    g.DrawRectangle(&kp, kx[i], ky[i], kw, kh);
+                    DrawLabel(g, gp::PointF(kx[i] + 7 * hs, ky[i] + 3 * hs), nm[i], k[i] ? Rgb(255, 255, 255) : Rgb(40, 40, 40), fs);
                 }
             }
             // big status line
@@ -2019,7 +2080,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             g_lblFlag = MakeCtl(L"STATIC", L"(After the flag the run is over: the clock always stops there.)", 0, 0, 0, 5);
             g_grpView = MakeCtl(L"BUTTON", L"Display", BS_GROUPBOX, 0, 0, 5);
             g_hudBox = MakeCtl(L"BUTTON", L"HUD: the mod's numbers and keys (H)", BS_AUTOCHECKBOX, ID_HUD, 0, 5);
-            g_marksBox = MakeCtl(L"BUTTON", L"Spike glitch marks: where each spike kills this frame (Shift+H)", BS_AUTOCHECKBOX, ID_OMARKS, 0, 5);
+            g_marksBox = MakeCtl(L"BUTTON", L"Graphics marks: spike hitboxes, control points, jump probes (Shift+H)", BS_AUTOCHECKBOX, ID_OMARKS, 0, 5);
             g_polysBox = MakeCtl(L"BUTTON", L"Physics outlines and the ball's 16 control points (J)", BS_AUTOCHECKBOX, ID_OPOLYS, 0, 5);
             g_trail = MakeCtl(L"BUTTON", L"Show the path", BS_AUTOCHECKBOX, ID_TRAIL, 0, 5);
             g_lblDec = MakeCtl(L"STATIC", L"HUD decimals: 4", 0, 0, 0, 5);

@@ -27,7 +27,7 @@ and play with A/W/D (or the arrows). Everything you play is recorded into the ro
 | R / F | restart the level (empty route) / checkpoint restart (adds `R` to the route) |
 | U | real-time state loads: a loaded state plays back instead of appearing at once. Shift+U: fast playback |
 | G / Shift+G | invincibility / glitchless |
-| H / Shift+H / J | HUD / spike glitch marks (where each spike really kills this frame) / physics outlines + the ball's 16 control points |
+| H / Shift+H / J | HUD (grows with the window; includes the distance to the flag) / graphics marks: each spike's effective hitbox this frame, the ball's 16 control points and the 3 jump probes / physics outlines + the ball's 16 control points |
 | B / Shift+B | the jump brute-forcer: B on the take-off frame, Shift+B on the landing frame (then W/S, Space, Enter, Esc) |
 | Ctrl+A / Ctrl+D | previous / next level |
 | / | the command line: `/config mathspikes 0`, `/config decimals 6`, `/set -vx 5 -vy -3 -vr 0 -px 12 -py 8`, `/remap a left`, `/remap reset` |
@@ -94,7 +94,7 @@ digits typed into the route do not save states. Click the level view to play aga
 Settings are kept in `rbview.ini`, and states and backups in `rbview_states.txt`, both next to the exe.
 
 Colours: dark grey = static ground, blue = moving parts, dark red = things that kill, red triangles = spikes,
-orange = where a spike really kills this frame (Shift+H), cyan boxes = checkpoints (filled once collected), gold
+orange = a spike's effective hitbox this frame: where a control point (magenta) kills, the outline shifted by the camera step and cut to the spike's box (Shift+H; the spike itself turns pale); the three dots under the ball are the jump probes (green = touching, so up jumps), cyan boxes = checkpoints (filled once collected), gold
 box = flag, blue/green/red boxes = switches (filled once pressed), orange box = Level 16's wrong-way trigger.
 
 ## Command-line tool: `rbsim.exe`
