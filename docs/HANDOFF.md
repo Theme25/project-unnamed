@@ -195,6 +195,13 @@ team's TASes in short runs.
   mixed finds a death warp by itself (flag 353; TAS 274), `score` alone dies out at the crushers.
 - **Main limitation:** the score. On Level 2 a 20,000-wide beam was no better than 2,000-wide;
   `--explain` showed the TAS line is behind the beam's best mid-level and overtakes late.
+- **Later session (beam review):** the Windows crash was MinGW's `thread_local` destructor at thread exit (the
+  physics scratch buffers; now fiber-local storage on Windows); "body capacity exceeded" on Level 4 (the drop
+  platform is re-created every frame the ball touches it) is fixed by reusing dead body slots, only when full;
+  duplicates are merged by a field hash (2x faster; the snapshot hash was 60% of the time); `--seed-route` now
+  coasts past the end of a route; `--diversity` defaults to width / 8 (the fixed 16 cut the TASes in their first
+  25 frames, `--trace`); `--polish SEC` (default 60) runs `optimize --keep <prefix>` on the result. Width 2,000, two
+  threads: Level 2 218 -> 191, Level 4 412 -> 282, Level 8 559 -> 533 (TASes 186, 274, 405).
 
 Measured: compact state ~1.4 KB (L2) to ~9 KB avg / 17 KB worst (L8); encode ~10 us, decode ~5 us;
 sim speed per thread ~450k frames/s (L2), ~140k (L12 idle), ~36-60k (L8 with the car). Exhaustive

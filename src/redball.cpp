@@ -605,7 +605,20 @@ int32_t Sim::BeginBody(const char* name) {
         idx = (int32_t)tpl->bodyNames.size() - 1;
     }
     bd.userTag = 100 + idx;
-    int32_t b = world.CreateBody(bd);
+    int32_t reuse = -1;
+    if (world.numBodies >= CAP_BODIES) {
+        // out of slots: reuse the lowest dead body that was destroyed before the last Step and that nothing in the
+        // game refers to any more (this only happens where the run used to abort with "body capacity exceeded")
+        for (int32_t c = 0; c < world.numBodies && reuse < 0; ++c) {
+            if (world.bodies[c].inWorld || world.deadAt[c] < 0 || world.deadAt[c] >= world.stepCount) continue;
+            bool used = c == playerBody || c == aimBody || c == createAtSprite || c == world.groundBody;
+            for (int32_t i = 0; i < LV_VARS; ++i) used = used || lvBody[i] == c;
+            for (int32_t i = 0; i < world.listener.count; ++i) used = used || world.listener.bodies[i] == c;
+            if (!used) reuse = c;
+        }
+        if (reuse < 0) fatal("body capacity exceeded");
+    }
+    int32_t b = world.CreateBody(bd, reuse);
     hasSprite[b] = true;
     spriteX[b] = x;
     spriteY[b] = y;

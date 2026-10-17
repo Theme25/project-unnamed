@@ -42,6 +42,8 @@
 using namespace rb;
 namespace fs = std::filesystem;
 
+int CmdOptimize(int argc, char** argv);  // search.cpp
+
 namespace {
 
 // ---------------------------------------------------------------- navigation distance field
@@ -145,21 +147,65 @@ struct NavField {
 };
 
 // ---------------------------------------------------------------- helpers
-uint64_t Hash64(const uint8_t* p, size_t n) {  // FNV-1a over 8-byte words + final mix
-    uint64_t h = 1469598103934665603ULL ^ n;
-    size_t i = 0;
-    for (; i + 8 <= n; i += 8) {
-        uint64_t v;
-        std::memcpy(&v, p + i, 8);
+// Hash of everything that moves (for merging duplicate states): every body's transform, sweep, velocities and
+// pending force/torque,
+// the camera, the game's counters and the level scripts' variables. Built field by field from bit patterns, so it
+// is the same on every platform and costs well under a microsecond (encoding the snapshot to hash it cost ~12 us
+// per child, most of the score pass). Two states that differ only in fields outside it (contact impulses) are
+// merged: that can only drop a near-twin from the beam, never produce a wrong route.
+struct Hasher {
+    uint64_t h = 1469598103934665603ULL;
+    void U(uint64_t v) {
         h = (h ^ v) * 1099511628211ULL;
-        h ^= h >> 31;
+        h ^= h >> 29;
     }
-    for (; i < n; ++i) h = (h ^ p[i]) * 1099511628211ULL;
-    h ^= h >> 33;
-    h *= 0xff51afd7ed558ccdULL;
-    h ^= h >> 33;
-    return h;
+    void D(double d) {
+        uint64_t v;
+        std::memcpy(&v, &d, 8);
+        U(v);
+    }
+    void V(const Vec2& v) { D(v.x), D(v.y); }
+};
+uint64_t StateHash(const Sim& s) {
+    Hasher z;
+    const World& w = s.world;
+    z.U((uint64_t)(uint32_t)s.frameCount << 32 | (uint32_t)w.numBodies);
+    for (int32_t b = 0; b < w.numBodies; ++b) {
+        const Body& bd = w.bodies[b];
+        if (bd.IsStatic() && bd.inWorld) continue;
+        z.U((uint64_t)bd.flags << 1 | (bd.inWorld ? 1 : 0));
+        z.V(bd.xf.position), z.D(bd.sweep.a), z.V(bd.sweep.c0), z.D(bd.sweep.a0);
+        z.V(bd.linearVelocity), z.D(bd.angularVelocity), z.D(bd.sleepTime);
+        z.V(bd.force), z.D(bd.torque);  // applied by the level scripts after a step, used by the next one
+    }
+    z.U((uint64_t)s.playerAlive | (uint64_t)s.isTimeStop << 1 | (uint64_t)s.camTween << 2 | (uint64_t)(uint32_t)s.lastCheckNum << 8 |
+        (uint64_t)(uint32_t)s.aimFrame << 32);
+    z.D(s.camX), z.D(s.camY), z.D(s.camTargetX), z.D(s.camTargetY), z.D(s.dpX), z.D(s.dpY);
+    z.U((uint64_t)(uint32_t)s.deathFrame << 32 | (uint32_t)s.deadTicks);
+    for (int i = 0; i < 4; ++i) z.U((uint64_t)(uint32_t)s.switchFrame[i] << 1 | s.staticFlag[i]);
+    for (int i = 0; i < 5; ++i) z.U((uint64_t)(uint32_t)s.cpFrame[i]);
+    for (int i = 0; i < LV_VARS; ++i) z.U((uint64_t)(uint32_t)s.lvInt[i]);
+    z.U((uint64_t)(uint32_t)w.listener.count);
+    z.h ^= z.h >> 33;
+    z.h *= 0xff51afd7ed558ccdULL;
+    z.h ^= z.h >> 33;
+    return z.h;
 }
+
+// Score of a living state (lower is better): the navigation distance to the flag from where the ball would be
+// `lookahead` frames ahead (m/s == px per frame at 30 px/m and 30 steps/s), so momentum counts. Spin is momentum
+// too: on the ground friction turns the ball's spin into rolling speed (omega * 0.35 m), which is how fast routes
+// reach 8-9 m/s, so the horizontal speed used for the look-ahead moves towards the rolling speed by `spin`.
+struct Scorer {
+    const NavField* nav = nullptr;
+    double lookahead = 6, spin = 0;
+    double operator()(const Sim& s) const {
+        const Body& pb = s.world.bodies[s.playerBody];
+        const double roll = pb.angularVelocity * (PLAYER_SPRITE_WIDTH_TWIPS / 20.0 / 2 / PHYS_SCALE);
+        const double vx = pb.linearVelocity.x + spin * (roll - pb.linearVelocity.x);
+        return nav->Query(s.spriteX[s.playerBody] + vx * lookahead, s.spriteY[s.playerBody] + pb.linearVelocity.y * lookahead);
+    }
+};
 
 struct Cand {
     double score;
@@ -212,18 +258,18 @@ size_t ParseSize(const char* s) {  // "10G", "512M", bytes
     return (size_t)v;
 }
 
-const uint32_t MAGIC = 0x52424D31;  // "RBM1"
+const uint32_t MAGIC = 0x52424D32;  // "RBM2" (the state layout changed: body slot reuse)
 
 }  // namespace
 
 int CmdBeam(int argc, char** argv) {
     int level = 0, checkpoint = 0, threads = (int)std::max(1u, std::thread::hardware_concurrency());
-    int maxFrames = 3000, diversity = 16;
-    double lookahead = 6;
+    int maxFrames = 3000, diversity = 0;  // 0: auto (width / 8, at least 16)
+    double lookahead = 6, spin = 0, spinBucket = 0;
     size_t memory = 0, fixedWidth = 0;
-    double saveMinutes = 10;
+    double saveMinutes = 10, polish = 60;
     bool gless = false, resume = false;
-    std::string prefixStr, dir, explainStr, seedStr;
+    std::string prefixStr, dir, explainStr, seedStr, traceStr;
     int selectMode = 2;  // 0 score, 1 coverage, 2 mixed (default)
     for (int i = 2; i < argc; ++i) {
         auto next = [&]() -> const char* { return i + 1 < argc ? argv[++i] : ""; };
@@ -236,15 +282,19 @@ int CmdBeam(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--max-frames")) maxFrames = std::atoi(next());
         else if (!std::strcmp(argv[i], "--diversity")) diversity = std::max(1, std::atoi(next()));
         else if (!std::strcmp(argv[i], "--lookahead")) lookahead = std::atof(next());
+        else if (!std::strcmp(argv[i], "--spin")) spin = std::atof(next());
+        else if (!std::strcmp(argv[i], "--spin-bucket")) spinBucket = std::atof(next());
         else if (!std::strcmp(argv[i], "--dir")) dir = next();
         else if (!std::strcmp(argv[i], "--save-every")) saveMinutes = std::atof(next());
         else if (!std::strcmp(argv[i], "--resume")) resume = true;
         else if (!std::strcmp(argv[i], "--explain")) explainStr = next();
         else if (!std::strcmp(argv[i], "--seed-route")) seedStr = next();
+        else if (!std::strcmp(argv[i], "--trace")) traceStr = next();
         else if (!std::strcmp(argv[i], "--select")) {
             const char* m = next();
             selectMode = !std::strcmp(m, "score") ? 0 : !std::strcmp(m, "coverage") ? 1 : 2;
         }
+        else if (!std::strcmp(argv[i], "--polish")) polish = std::atof(next());
         else if (!std::strcmp(argv[i], "--gless")) gless = true;
         else {
             Err( "unknown option %s\n", argv[i]);
@@ -256,7 +306,10 @@ int CmdBeam(int argc, char** argv) {
                      "usage: rbsim beam --level N [--checkpoint C] [--prefix RLE] [--memory 10G | --width W]\n"
                      "                  [--threads N] [--max-frames F] [--diversity K] [--lookahead T] [--dir DIR]\n"
                      "                  [--save-every MIN] [--resume] [--gless] [--select mixed|score|coverage]\n"
-                     "                  [--seed-route RLE] [--explain RLE]\n");
+                     "                  [--seed-route RLE] [--explain RLE] [--trace RLE] [--polish SEC]\n"
+                     "                  [--lookahead T] [--spin S] [--spin-bucket W]\n"
+                     "  --polish SEC: after the beam, improve its route with `optimize` for SEC seconds (default 60, 0 = off);\n"
+                     "               the --prefix inputs are kept\n");
         return 2;
     }
     if (dir.empty()) dir = "beam_L" + std::to_string(level) + (checkpoint ? "_cp" + std::to_string(checkpoint) : "");
@@ -326,6 +379,8 @@ int CmdBeam(int argc, char** argv) {
     auto startState = std::make_unique<Sim>(*base);
     for (uint8_t c : prefix) startState->Tick(c);
     nav.Build(*startState);
+    Scorer scoreOf;
+    scoreOf.nav = &nav, scoreOf.lookahead = lookahead, scoreOf.spin = spin;
     Out("level %d%s, start frame %d, nav grid %dx%d (%.0f px cells), %d threads, %s\n", level,
                 checkpoint ? (" checkpoint " + std::to_string(checkpoint)).c_str() : "", startFrame, nav.nx, nav.ny, nav.cell, threads,
                 fixedWidth ? ("width " + std::to_string(fixedWidth)).c_str()
@@ -342,9 +397,7 @@ int CmdBeam(int argc, char** argv) {
                 Out("frame %5d  %s\n", s->frameCount, s->isTimeStop ? "flag" : "death");
                 break;
             }
-            const Body& pb = s->world.bodies[s->playerBody];
-            const double sc = nav.Query(s->spriteX[s->playerBody] + pb.linearVelocity.x * lookahead,
-                                        s->spriteY[s->playerBody] + pb.linearVelocity.y * lookahead);
+            const double sc = scoreOf(*s);
             if ((f + 1) % 10 == 0) Out("frame %5d  score %7.1f px\n", s->frameCount, sc);
         }
         return 0;
@@ -363,17 +416,14 @@ int CmdBeam(int argc, char** argv) {
         }
         auto s = std::make_unique<Sim>(*base);
         for (size_t f = 0; f < prefix.size(); ++f) s->Tick(seed[f]);
-        std::vector<uint8_t> buf;
         auto push = [&]() {
-            buf.clear();
-            EncodeSnapshot(*base, *s, buf);
-            seedHash.push_back(Hash64(buf.data(), buf.size()));
-            const Body& pb = s->world.bodies[s->playerBody];
-            seedScore.push_back(nav.Query(s->spriteX[s->playerBody] + pb.linearVelocity.x * lookahead,
-                                          s->spriteY[s->playerBody] + pb.linearVelocity.y * lookahead));
+            seedHash.push_back(StateHash(*s));
+            seedScore.push_back(scoreOf(*s));
         };
         push();
-        for (size_t f = prefix.size(); f < seed.size(); ++f) {
+        // a route string may stop before the flag (the ball coasts in with no keys): play it on with no input
+        for (size_t f = prefix.size(); f < seed.size() + 600; ++f) {
+            if (f >= seed.size()) seed.push_back(IN_NONE);
             s->Tick(seed[f]);
             if (s->isTimeStop || !s->playerAlive) break;  // the score pass finds the finish itself
             push();
@@ -381,8 +431,29 @@ int CmdBeam(int argc, char** argv) {
         if (!resume) seedIdx = 0;  // layer 0 holds exactly the start state
         else
             for (size_t i = 0; i < layer.size() && (size_t)k < seedHash.size(); ++i)
-                if (Hash64(layer[i].data(), layer[i].size()) == seedHash[(size_t)k]) seedIdx = (int64_t)i;
+                if (Sim t; DecodeSnapshot(*base, layer[i].data(), t), StateHash(t) == seedHash[(size_t)k]) seedIdx = (int64_t)i;
         Out("seed route: %zu frames kept in the beam\n", seedHash.size() - 1);
+    }
+
+    // --trace RLE: a known route (from the level start / checkpoint, beginning with --prefix): report on which frame
+    // and why the beam loses it (its rank and score against the states kept). Diagnostics only.
+    std::vector<uint64_t> traceHash;
+    std::vector<double> traceScore;
+    bool traceOn = false;
+    if (!traceStr.empty()) {
+        const std::vector<uint8_t> tr = DecodeInputs(traceStr);
+        if (tr.size() < prefix.size() || !std::equal(prefix.begin(), prefix.end(), tr.begin())) {
+            Err("--trace must begin with the --prefix inputs\n");
+            return 2;
+        }
+        auto s = std::make_unique<Sim>(*startState);
+        traceHash.push_back(StateHash(*s)), traceScore.push_back(scoreOf(*s));
+        for (size_t f = prefix.size(); f < tr.size(); ++f) {
+            s->Tick(tr[f]);
+            if (s->isTimeStop || !s->playerAlive) break;
+            traceHash.push_back(StateHash(*s)), traceScore.push_back(scoreOf(*s));
+        }
+        traceOn = !resume;
     }
 
     auto save = [&]() {
@@ -425,8 +496,12 @@ int CmdBeam(int argc, char** argv) {
     const auto t0 = std::chrono::steady_clock::now();
     auto lastSave = t0;
     std::mutex solMutex;
-    std::vector<std::vector<uint8_t>> encBuf((size_t)threads);
     uint64_t totalChildren = 0;
+    // two working states per thread, allocated once (a Sim is ~157 KB: not on the worker threads' stacks)
+    std::vector<std::unique_ptr<Sim>> workP((size_t)threads), workC((size_t)threads);
+    for (int t = 0; t < threads; ++t) workP[(size_t)t] = std::make_unique<Sim>(), workC[(size_t)t] = std::make_unique<Sim>();
+    double lastPrint = -1e9;  // per run (the viewer runs several searches in one process)
+    int lastBestWin = 1 << 30;
 
     for (;; ++k) {
         const int frame = startFrame + k;  // frameCount of the current layer
@@ -444,14 +519,19 @@ int CmdBeam(int argc, char** argv) {
         for (size_t i = 0; i < layer.size(); i += std::max<size_t>(1, layer.size() / 256)) avg = std::max(avg, layer[i].size());
         size_t W = fixedWidth ? fixedWidth : memory / (2 * (avg + 64) + 8 * sizeof(Cand) + 64);
         W = std::max<size_t>(W, 1);
+        // states per region/velocity bucket. A fixed 16 cut the best routes early on (Level 2 and 4 TASes were dropped
+        // in their first 25 frames while ranked in the top few hundred) and left wide beams nearly empty, since at the
+        // start almost every state shares a bucket. Scaling with the width: Level 4 412 -> 294 frames at width 2,000.
+        const int div = diversity > 0 ? diversity : (int)std::max<size_t>(16, W / 8);
 
         // ---- 1. score pass
         std::vector<std::vector<Cand>> local((size_t)threads);
         Parallel(threads, layer.size(), [&](int tid, size_t pi) {
-            Sim p;
+            Sim& p = *workP[(size_t)tid];
             DecodeSnapshot(*base, layer[pi].data(), p);
             for (uint8_t c = 0; c < 8; ++c) {
-                Sim ch = p;
+                Sim& ch = c < 7 ? *workC[(size_t)tid] : p;  // the last child steps the parent itself (one copy fewer)
+                if (c < 7) ch = p;
                 ch.Tick(c);
                 if (ch.isTimeStop || !ch.playerAlive) {
                     Solution s;
@@ -470,18 +550,15 @@ int CmdBeam(int argc, char** argv) {
                     }
                     continue;
                 }
-                std::vector<uint8_t>& buf = encBuf[(size_t)tid];
-                buf.clear();
-                EncodeSnapshot(*base, ch, buf);
                 const double bx = ch.spriteX[ch.playerBody], by = ch.spriteY[ch.playerBody];
                 const Body& pb = ch.world.bodies[ch.playerBody];
                 const int64_t gx = (int64_t)std::floor((bx - nav.x0) / (2 * nav.cell)), gy = (int64_t)std::floor((by - nav.y0) / (2 * nav.cell));
                 const int64_t vx = (int64_t)std::lround(pb.linearVelocity.x), vy = (int64_t)std::lround(pb.linearVelocity.y);
-                const uint64_t bucket = (uint64_t)((gx * 1000003 + gy) * 1009 + vx) * 1013 + (uint64_t)vy;
-                // score: distance to the flag from where the ball would be `lookahead` frames ahead at its
-                // current velocity (m/s == px per frame at 30 px/m and 30 steps/s): rewards momentum
-                const double score = nav.Query(bx + pb.linearVelocity.x * lookahead, by + pb.linearVelocity.y * lookahead);
-                local[(size_t)tid].push_back({score, Hash64(buf.data(), buf.size()), (uint32_t)pi, c, bucket});
+                // spin is a separate resource (it becomes rolling speed on landing), so it splits buckets too
+                const int64_t wq = spinBucket > 0 ? (int64_t)std::floor(pb.angularVelocity / spinBucket) : 0;
+                const uint64_t bucket = ((uint64_t)((gx * 1000003 + gy) * 1009 + vx) * 1013 + (uint64_t)vy) * 1019 + (uint64_t)wq;
+                const double score = scoreOf(ch);
+                local[(size_t)tid].push_back({score, StateHash(ch), (uint32_t)pi, c, bucket});
             }
         });
         std::vector<Cand> cands;
@@ -511,16 +588,39 @@ int CmdBeam(int argc, char** argv) {
             for (uint32_t i = 0; i < (uint32_t)cands.size(); ++i)
                 if (seen.insert(cands[i].hash).second) uniq.push_back(i);
             std::unordered_map<uint64_t, int> rankInBucket;
-            std::vector<uint8_t> round(uniq.size());
-            for (size_t u = 0; u < uniq.size(); ++u) round[u] = (uint8_t)std::min(255, rankInBucket[cands[uniq[u]].bucket]++);
+            std::vector<int> round(uniq.size());  // rank of the state inside its bucket
+            int maxRound = 0;
+            for (size_t u = 0; u < uniq.size(); ++u) maxRound = std::max(maxRound, round[u] = rankInBucket[cands[uniq[u]].bucket]++);
             std::vector<uint8_t> taken(uniq.size(), 0);
+            const auto traceReport = [&](bool kept) {  // after selection: is the traced route's next state kept?
+                if (!traceOn || (size_t)k + 1 >= traceHash.size()) return;
+                const uint64_t h = traceHash[(size_t)k + 1];
+                size_t pos = uniq.size();
+                for (size_t u = 0; u < uniq.size(); ++u)
+                    if (cands[uniq[u]].hash == h) pos = u;
+                bool inKeep = false;
+                for (const Cand& c : keep) inKeep = inKeep || c.hash == h;
+                if (kept && inKeep) {
+                    if ((k + 1) % 10 == 0)
+                        Out("trace: frame %d kept, rank %zu of %zu (score %.1f, best %.1f)\n", frame + 1, pos + 1, uniq.size(), traceScore[(size_t)k + 1],
+                            cands[uniq[0]].score);
+                    return;
+                }
+                if (!kept) return;
+                traceOn = false;
+                if (pos == uniq.size()) Out("trace: frame %d: the route's state was not generated (its parent was lost)\n", frame + 1);
+                else
+                    Out("trace: frame %d DROPPED: score %.1f, rank %zu of %zu unique (bucket round %d, --diversity %d); kept scores %.1f .. %.1f\n",
+                        frame + 1, traceScore[(size_t)k + 1], pos + 1, uniq.size(), (int)round[pos], div, keep.empty() ? 0.0 : keep.front().score,
+                        keep.empty() ? 0.0 : keep.back().score);
+            };
             const size_t scoreQuota = selectMode == 0 ? W : selectMode == 1 ? 0 : W / 2;
             for (size_t u = 0; u < uniq.size() && keep.size() < scoreQuota; ++u)
-                if (round[u] < diversity) {
+                if (round[u] < div) {
                     keep.push_back(cands[uniq[u]]);
                     taken[u] = 1;
                 }
-            for (int r = 0; r < diversity && keep.size() < W; ++r)
+            for (int r = 0; r < std::min(div, maxRound + 1) && keep.size() < W; ++r)
                 for (size_t u = 0; u < uniq.size() && keep.size() < W; ++u)
                     if (round[u] == r && !taken[u]) {
                         keep.push_back(cands[uniq[u]]);
@@ -537,6 +637,7 @@ int CmdBeam(int argc, char** argv) {
                     keep.push_back({seedScore[(size_t)k + 1], h, (uint32_t)seedIdx, seed[(size_t)(startFrame + k)], 0});
                 }
             }
+            traceReport(true);
             std::sort(keep.begin(), keep.end(), [](const Cand& a, const Cand& b) {
                 if (a.score != b.score) return a.score < b.score;
                 if (a.parent != b.parent) return a.parent < b.parent;
@@ -552,8 +653,8 @@ int CmdBeam(int argc, char** argv) {
 
         // ---- 3. store pass + links
         std::vector<std::vector<uint8_t>> next(keep.size());
-        Parallel(threads, keep.size(), [&](int, size_t i) {
-            Sim ch;
+        Parallel(threads, keep.size(), [&](int tid, size_t i) {
+            Sim& ch = *workC[(size_t)tid];
             DecodeSnapshot(*base, layer[keep[i].parent].data(), ch);
             ch.Tick(keep[i].input);
             EncodeSnapshot(*base, ch, next[i]);
@@ -565,8 +666,6 @@ int CmdBeam(int argc, char** argv) {
         layer.swap(next);
 
         const double el = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-        static double lastPrint = -1e9;
-        static int lastBestWin = 1 << 30;
         const bool newSolution = best.win != lastBestWin;
         lastBestWin = best.win;
         if (el - lastPrint < 5 && !newSolution && k > 0) {
@@ -614,5 +713,18 @@ int CmdBeam(int argc, char** argv) {
                     best.death + RESPAWN_LAST_PAUSE_FRAMES, best.win + WIN_TIMER_FRAMES);
     if (chk->displayUncertain) Out("note: a hit test on this route was within one matrix unit of flipping: check it in Flash\n");
     Out("%s\n", EncodeInputsRLE(route).c_str());
-    return ok ? 0 : 1;
+    if (!ok) return 1;
+    // polish: local search on the route (moves single frames and run boundaries, which a beam cannot afford to
+    // explore); on Level 2 it took a 2,000-wide beam's 218-frame route to 190 in two minutes on two threads
+    if (polish > 0 && !g_searchCancel.load()) {
+        Out("polishing the route with optimize for %.0f s (the first %zu inputs are kept)...\n", polish, prefix.size());
+        std::vector<std::string> a = {"rbsim", "optimize", "--level", std::to_string(level), "--checkpoint", std::to_string(checkpoint),
+                                      "--inputs", EncodeInputsRLE(route), "--keep", std::to_string(prefix.size()),
+                                      "--time", std::to_string(polish), "--threads", std::to_string(threads)};
+        if (gless) a.push_back("--gless");
+        std::vector<char*> av;
+        for (std::string& x : a) av.push_back(&x[0]);
+        return CmdOptimize((int)av.size(), av.data());
+    }
+    return 0;
 }

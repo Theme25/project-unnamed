@@ -3,6 +3,13 @@
 // from the Red Ball 1 SWF. Comments flag every place where this port's
 // behaviour differs from stock Box2D 2.0 C++.
 #include "b2world.h"
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include <algorithm>
 
 namespace rb {
@@ -24,6 +31,8 @@ void World::Init(const GeomTable* table, const AABB& worldAABB, const Vec2& g, b
     inv_dt0 = 0;
     positionIterationCount = 0;
     numBodies = numShapes = numJoints = 0;
+    stepCount = 0;
+    for (int32_t& d : deadAt) d = -1;
     freeContact = -1;
     numContactSlots = 0;
     listener = PlayerContactListener();
@@ -809,10 +818,24 @@ void World::CollideAll() {
 
 // ============================================================ bodies
 
-int32_t World::CreateBody(const BodyDef& def) {
+int32_t World::CreateBody(const BodyDef& def, int32_t reuseSlot) {
     if (lock) return -1;
-    if (numBodies >= CAP_BODIES) fatal("body capacity exceeded");
-    int32_t b = numBodies++;
+    int32_t b;
+    if (reuseSlot >= 0) {
+        if (reuseSlot >= numBodies || bodies[reuseSlot].inWorld || deadAt[reuseSlot] >= stepCount) fatal("CreateBody: slot not reusable");
+        b = reuseSlot;
+        // the dead body's shapes become free shape slots (body -1, no proxy)
+        for (int32_t s = bodies[b].shapeList; s != -1;) {
+            const int32_t nx = shapes[s].next;
+            shapes[s].body = -1;
+            shapes[s].next = -1;
+            s = nx;
+        }
+    } else {
+        if (numBodies >= CAP_BODIES) fatal("body capacity exceeded");
+        b = numBodies++;
+    }
+    deadAt[b] = -1;
     Body& body = bodies[b];
     body = Body();
     body.flags = 0;
@@ -881,12 +904,17 @@ void World::DestroyBody(int32_t b) {
     if (b == bodyList) bodyList = body.next;
     --bodyCount;
     body.inWorld = false;
+    deadAt[b] = stepCount;
 }
 
 int32_t World::CreateShape(int32_t b, int32_t geom, const ShapeDef& def) {
     if (lock) return -1;
-    if (numShapes >= CAP_SHAPES) fatal("shape capacity exceeded");
-    int32_t s = numShapes++;
+    int32_t s = -1;
+    if (numShapes < CAP_SHAPES) s = numShapes++;
+    else  // full: a shape freed by a reused body slot (see CreateBody)
+        for (int32_t k = 0; k < numShapes && s < 0; ++k)
+            if (shapes[k].body == -1 && shapes[k].proxyId == NULL_PROXY) s = k;
+    if (s < 0) fatal("shape capacity exceeded");
     Shape& sh = shapes[s];
     sh = Shape();
     sh.geom = geom;
@@ -1309,7 +1337,23 @@ struct Scratch {
     std::vector<int32_t> stack, islandBodies, islandContacts, islandJoints;
     std::vector<ContactConstraint> constraints;
 };
-thread_local Scratch g_scratch;
+#ifdef _WIN32
+// MinGW's thread_local objects with destructors can crash at thread exit (the destructor ran on freed TLS memory:
+// beam search, many short-lived worker threads). Fiber-local storage hands its cleanup callback the right pointer.
+void WINAPI FreeScratch(void* p) { delete static_cast<Scratch*>(p); }
+Scratch& GetScratch() {
+    static const DWORD slot = FlsAlloc(FreeScratch);
+    void* p = FlsGetValue(slot);
+    if (!p) {
+        p = new Scratch;
+        FlsSetValue(slot, p);
+    }
+    return *static_cast<Scratch*>(p);
+}
+#else
+thread_local Scratch g_scratchTls;
+inline Scratch& GetScratch() { return g_scratchTls; }
+#endif
 
 }  // namespace
 
@@ -1327,7 +1371,7 @@ struct Island {
 
     Island(World& world, int32_t bodyCap, int32_t contactCap, int32_t jointCap)
         : w(world), bodyCapacity(bodyCap), contactCapacity(contactCap), jointCapacity(jointCap) {
-        Scratch& S = g_scratch;
+        Scratch& S = GetScratch();
         if ((int32_t)S.islandBodies.size() < bodyCap) S.islandBodies.resize((size_t)bodyCap);
         if ((int32_t)S.islandContacts.size() < contactCap) S.islandContacts.resize((size_t)contactCap);
         if ((int32_t)S.islandJoints.size() < jointCap + 1) S.islandJoints.resize((size_t)jointCap + 1);
@@ -1372,7 +1416,7 @@ struct Island {
                     b.angularVelocity = settings::maxAngularVelocity;
             }
         }
-        ContactSolver contactSolver(w, step, contacts, contactCount, g_scratch.constraints);
+        ContactSolver contactSolver(w, step, contacts, contactCount, GetScratch().constraints);
         contactSolver.InitVelocityConstraints(step);
         for (int32_t i = 0; i < jointCount; ++i) w.JointInitVelocityConstraints(joints[i], step);
         for (int32_t i = 0; i < step.maxIterations; ++i) {
@@ -1436,7 +1480,7 @@ struct Island {
     }
 
     void SolveTOI(const TimeStep& subStep) {
-        ContactSolver contactSolver(w, subStep, contacts, contactCount, g_scratch.constraints);
+        ContactSolver contactSolver(w, subStep, contacts, contactCount, GetScratch().constraints);
         for (int32_t i = 0; i < subStep.maxIterations; ++i) contactSolver.SolveVelocityConstraints();
         for (int32_t i = 0; i < bodyCount; ++i) {
             int32_t bi = bodies[i];
@@ -1468,7 +1512,7 @@ void World::Solve(const TimeStep& step) {
     for (int32_t c = contactList; c != -1; c = contacts[c].next) contacts[c].flags &= ~CF_ISLAND;
     for (int32_t j = jointList; j != -1; j = joints[j].next) joints[j].islandFlag = false;
 
-    std::vector<int32_t>& stack = g_scratch.stack;
+    std::vector<int32_t>& stack = GetScratch().stack;
     if ((int32_t)stack.size() < CAP_BODIES) stack.resize(CAP_BODIES);
     for (int32_t seed = bodyList; seed != -1; seed = bodies[seed].next) {
         if (bodies[seed].flags & (BF_ISLAND | BF_SLEEP | BF_FROZEN)) continue;
@@ -1524,7 +1568,7 @@ void World::Solve(const TimeStep& step) {
 
 void World::SolveTOI(const TimeStep& step) {
     Island island(*this, bodyCount, settings::maxTOIContactsPerIsland, 0);
-    std::vector<int32_t>& queue = g_scratch.stack;
+    std::vector<int32_t>& queue = GetScratch().stack;
     if ((int32_t)queue.size() < CAP_BODIES) queue.resize(CAP_BODIES);
     for (int32_t b = bodyList; b != -1; b = bodies[b].next) {
         bodies[b].flags &= ~BF_ISLAND;
@@ -1630,6 +1674,7 @@ void World::SolveTOI(const TimeStep& step) {
 }
 
 void World::Step(double dt, int32_t iterations) {
+    ++stepCount;
     lock = true;
     TimeStep step;
     step.dt = dt;

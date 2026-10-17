@@ -354,6 +354,12 @@ struct World {
     int32_t numJoints = 0;
     int32_t freeContact = -1;
     int32_t numContactSlots = 0;
+    // Slot reuse. Bodies and shapes are never recycled while there is room (AS3 keeps destroyed objects readable,
+    // and the slot order stays the one of the verified runs). Only when a level would run out of slots (Level 4
+    // re-creates its drop platform on every frame the ball touches it) does Sim reuse a dead body's slot: one
+    // destroyed before the last Step (its contacts are gone by then) that the game no longer refers to.
+    int32_t stepCount = 0;               // Steps run
+    int32_t deadAt[CAP_BODIES];          // stepCount when the body was destroyed
 
     Body bodies[CAP_BODIES];
     Shape shapes[CAP_SHAPES];
@@ -366,7 +372,7 @@ struct World {
     void Init(const GeomTable* table, const AABB& worldAABB, const Vec2& gravity, bool doSleep);
 
     // ---- b2World API
-    int32_t CreateBody(const BodyDef& def);
+    int32_t CreateBody(const BodyDef& def, int32_t reuseSlot = -1);  // reuseSlot: a dead body's slot (see stepCount)
     void DestroyBody(int32_t b);
     void Step(double dt, int32_t iterations);
     int32_t Query(const AABB& aabb, int32_t* out, int32_t maxCount);  // returns shape indices

@@ -27,7 +27,8 @@ and play with A/W/D (or the arrows). Everything you play is recorded into the ro
 | R / F | restart the level (empty route) / checkpoint restart (adds `R` to the route) |
 | U | real-time state loads: a loaded state plays back instead of appearing at once. Shift+U: fast playback |
 | G / Shift+G | invincibility / glitchless |
-| H / Shift+H / J | HUD (grows with the window; includes the distance to the flag) / graphics marks: each spike's effective hitbox this frame, the ball's 16 control points and the 3 jump probes / physics outlines + the ball's 16 control points |
+| Shift+J | jump probes on/off (rbview): the 3 ground tests under the ball, green when touching (the HUD lists them too) |
+| H / Shift+H / J | HUD (grows with the window; includes the distance to the flag) / graphics marks: each spike's effective hitbox this frame, the ball's 16 control points / physics outlines + the ball's 16 control points |
 | B / Shift+B | the jump brute-forcer: B on the take-off frame, Shift+B on the landing frame (then W/S, Space, Enter, Esc) |
 | Ctrl+A / Ctrl+D | previous / next level |
 | / | the command line: `/config mathspikes 0`, `/config decimals 6`, `/set -vx 5 -vy -3 -vr 0 -px 12 -py 8`, `/remap a left`, `/remap reset` |
@@ -64,9 +65,15 @@ digits typed into the route do not save states. Click the level view to play aga
     R, a rewind or a load replaced (the last 500). All of it is kept in `rbview_states.txt` next to the exe.
   - **Ghost:** a second route drawn as a blue ball on the same frame: the current route (as it is now), a pasted
     string, a file, or a saved state. The tab compares the flag frames.
-  - **Search:** rbsim's searches inside the program. *Optimize* improves the whole route for the chosen time;
-    *Beam* searches on from the shown frame. Stop ends early. **Load result** puts the best route found in the
-    editor (the old one goes to the backups).
+  - **Search:** rbsim's searches inside the program; the tab explains the chosen mode.
+    - *Improve the current route (optimize):* random small edits to the whole route for *Time* seconds; keeps every
+      edit that takes the flag sooner. Needs a route that reaches the flag.
+    - *Find a route from the shown frame (beam search):* plays every key combination on every frame from the shown
+      frame on, keeps the most promising states (*Beam width*: Quick 2,000 to Huge 500,000) until one takes the
+      flag, then polishes that route for *Polish* seconds. The route up to the shown frame is kept. Start with Quick
+      or Normal: the time grows with the width (Quick on Level 2: about a minute on two cores).
+    - The status line shows the progress (frame, how close to the flag, the best flag frame). Stop ends early.
+      **Load result** puts the best route found in the editor (the old one goes to the backups).
   - **Options:** every setting the mod has as a key or a command, as checkboxes and sliders.
     - *Playback:* real-time state loads (U), fast playback (Shift+U), and what happens when a playback reaches the
       end of the route: pause there, or keep running and record your keys (the mod's behaviour). After the flag the
@@ -94,7 +101,7 @@ digits typed into the route do not save states. Click the level view to play aga
 Settings are kept in `rbview.ini`, and states and backups in `rbview_states.txt`, both next to the exe.
 
 Colours: dark grey = static ground, blue = moving parts, dark red = things that kill, red triangles = spikes,
-orange = a spike's effective hitbox this frame: where a control point (magenta) kills, the outline shifted by the camera step and cut to the spike's box (Shift+H; the spike itself turns pale). Under mathspikes 0 it is drawn as the exact set of window pixels that kill (Flash tests each control point on a whole window pixel), so with the window size and camera of that frame a magenta point inside an orange cell kills and one outside does not; the three dots under the ball are the jump probes (green = touching, so up jumps), cyan boxes = checkpoints (filled once collected), gold
+orange = a spike's effective hitbox this frame: where a control point (magenta) kills, the outline shifted by the camera step and cut to the spike's box (Shift+H; the spike itself turns pale). Under mathspikes 0 it is drawn as the exact set of window pixels that kill (Flash tests each control point on a whole window pixel), so with the window size and camera of that frame a magenta point inside an orange cell kills and one outside does not; the three rings under the ball are the jump probes (green = touching, so up jumps; Shift+J), cyan boxes = checkpoints (filled once collected), gold
 box = flag, blue/green/red boxes = switches (filled once pressed), orange box = Level 16's wrong-way trigger.
 
 ## Command-line tool: `rbsim.exe`
@@ -168,14 +175,16 @@ Save the output to a file by adding `> result.txt` at the end of the command.
 ## 3. Finding a route without a known one (beam search)
 
 ```
-rbsim.exe beam --level 4 --memory 10G
+rbsim.exe beam --level 4 --width 20000
 ```
 
 Keeps the best states after every frame and expands them with all inputs, starting from the
 level start (`--checkpoint C`: a checkpoint; `--prefix "..."`: after some inputs). It prints a
-progress line every few seconds and the route at the end. `--memory` is the RAM it may use
-(default 4G); leave room for Windows. `--seed-route "..."` keeps a known route in the beam so the
-result can only match or beat it.
+progress line every few seconds and the route at the end, then improves that route with
+`optimize` for a minute (`--polish 60`; `--polish 0` turns it off). `--width` is the number of
+states kept per frame (time grows with it); `--memory 10G` instead picks the width from the RAM it
+may use (default 4G); leave room for Windows. `--seed-route "..."` keeps a known route in the beam
+so the result can only match or beat it.
 
 Long runs save progress to a folder (`beam_L4` here) every 10 minutes. If the PC restarts or
 you press `Ctrl+C`, run the same command again with `--resume` added to continue. The result is

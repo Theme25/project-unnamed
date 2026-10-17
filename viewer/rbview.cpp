@@ -71,9 +71,9 @@ enum : int {
     ID_NAMED, ID_NSAVE, ID_NLOAD, ID_NRENAME, ID_NDELETE, ID_NGHOST, ID_NCOPY,
     ID_BACKUPS, ID_BLOAD,
     ID_GCUR, ID_GPASTE, ID_GOPEN, ID_GCLEAR, ID_GINFO,
-    ID_SMODE, ID_STIME, ID_STHREADS, ID_SMEM, ID_SMAXF, ID_SSTART, ID_SSTOP, ID_SLOAD, ID_SLOG, ID_SSTATUS,
+    ID_SMODE, ID_STIME, ID_STHREADS, ID_SMEM, ID_SMAXF, ID_SPOLISH, ID_SSTART, ID_SSTOP, ID_SLOAD, ID_SLOG, ID_SSTATUS,
     ID_BINFO, ID_BLIST, ID_BUP, ID_BDOWN, ID_BNEXT, ID_BAPPLY, ID_BLEAVE,
-    ID_OFAST, ID_OPAUSEEND, ID_OKEEPEND, ID_OMARKS, ID_OPOLYS, ID_ODEC, ID_OKEYS, ID_WFILL, ID_WAPPLY, ID_WCLEAR,
+    ID_OFAST, ID_OPAUSEEND, ID_OKEEPEND, ID_OMARKS, ID_OPOLYS, ID_OPROBES, ID_ODEC, ID_OKEYS, ID_WFILL, ID_WAPPLY, ID_WCLEAR,
 };
 enum : UINT { WM_SEARCH_LINE = WM_APP + 1, WM_SEARCH_DONE };
 
@@ -87,6 +87,7 @@ static HWND g_lblSlots, g_slots, g_slotSave, g_slotLoad, g_slotImport, g_slotExp
     g_nGhost, g_nCopy, g_lblBackups, g_backups, g_bLoad;
 static HWND g_gInfo, g_gCur, g_gPaste, g_gOpen, g_gClear;
 static HWND g_sMode, g_lblSTime, g_sTime, g_lblSThreads, g_sThreads, g_lblSMem, g_sMem, g_lblSMaxF, g_sMaxF, g_sStart, g_sStop, g_sLoad, g_sStatus, g_sLog;
+static HWND g_sHelp, g_lblSPolish, g_sPolish, g_probesBox;  // g_sMem: the beam width list
 static HWND g_bInfo, g_bList, g_bUp, g_bDown, g_bNext, g_bApply, g_bLeave;
 static HWND g_speedLbl, g_grpPlay, g_fast, g_lblEnd, g_pauseEnd, g_keepEnd, g_lblFlag, g_grpView, g_marksBox, g_polysBox, g_lblDec, g_dec,
     g_grpWarp, g_lblWarp, g_wLbl[5], g_wEdit[5], g_wFill, g_wApply, g_wClear, g_grpKeys, g_lblKeys, g_oKeys;
@@ -100,7 +101,7 @@ static tas::Timeline g_ghost;
 static bool g_ghostOn = false;
 static std::wstring g_ghostName;
 
-static bool g_hud = true, g_marks = false, g_polys = false, g_follow_on = true, g_trail_on = true;
+static bool g_hud = true, g_marks = false, g_polys = false, g_follow_on = true, g_trail_on = true, g_probes = true;
 static int g_decimals = 4;
 static int g_remap[256];  // key -> key (Practice Hack "/remap"), 0 = none
 static bool g_heldL, g_heldU, g_heldR, g_tapL, g_tapU, g_tapR;
@@ -255,7 +256,7 @@ static void SaveSettings() {
         std::swprintf(b, 32, L"%d", v);
         WritePrivateProfileStringW(L"view", k, b, ini);
     };
-    wi(L"hud", g_hud), wi(L"marks", g_marks), wi(L"polygons", g_polys), wi(L"follow", g_follow_on), wi(L"trail", g_trail_on);
+    wi(L"hud", g_hud), wi(L"marks", g_marks), wi(L"polygons", g_polys), wi(L"follow", g_follow_on), wi(L"trail", g_trail_on), wi(L"probes", g_probes);
     wi(L"decimals", g_decimals), wi(L"realtime", g_s.realtimeLoad), wi(L"stopatend", g_s.stopAtEnd);
     std::wstring rm;
     for (int k = 0; k < 256; ++k)
@@ -563,7 +564,7 @@ static const wchar_t* kKeyHelp =
     L"Esc   drop the rest of a playback     R   restart the level     F   checkpoint restart\r\n"
     L"U   real-time state loads          Shift+U   fast playback\r\n"
     L"G   invincibility     Shift+G   glitchless     C   clear the message\r\n"
-    L"H   HUD     Shift+H   graphics marks (spike hitboxes, jump probes)     J   physics outlines + control points\r\n"
+    L"H   HUD     Shift+H   graphics marks (spike hitboxes, control points)     J   physics outlines + control points     Shift+J   jump probes\r\n"
     L"B   jump take-off     Shift+B   landing: the jump brute-forcer (W/S, Space, Enter, Esc)\r\n"
     L"Ctrl+A / Ctrl+D (Ctrl+Left/Right)   previous / next level\r\n"
     L"/   command line: /config mathspikes N, /config decimals N, /set -vx -vy -vr -px -py, /remap A LEFT, /remap reset\r\n"
@@ -930,17 +931,24 @@ static void Paint(HDC hdc, int w, int h) {
                             const gp::PointF p = v.P(cp[2 * k], cp[2 * k + 1]);
                             g.FillRectangle(&cpb, p.X - cr, p.Y - cr, 2 * cr, 2 * cr);
                         }
+                    }
+                    if (g_probes) {
                         // jump probes: the three ground tests of the last Update (Level.Update, at the ball's position after
                         // the step = the shown position). Any hit = grounded: up jumps, left/right accelerate fully.
+                        // Drawn as rings with a line from the centre, so they stay visible under and next to the ball.
                         const Body& pb = wd.bodies[s.playerBody];
                         const double px = pb.xf.position.x, py = pb.xf.position.y;
                         const double qx[3] = {px - 0.2, px, px + 0.2}, qy[3] = {py + 0.38, py + 0.4, py + 0.38};
                         const bool hitp[3] = {s.probeL, s.probeC, s.probeR};
-                        const float pr = std::min(7.0f, std::max(2.5f, (float)(2.2 * v.z)));
+                        const float pr = std::min(6.0f, std::max(3.5f, (float)(1.6 * v.z)));
+                        const gp::PointF ctr = v.P(px * PHYS_SCALE, py * PHYS_SCALE);
                         for (int k = 0; k < 3; ++k) {
                             const gp::PointF p = v.P(qx[k] * PHYS_SCALE, qy[k] * PHYS_SCALE);
-                            gp::SolidBrush pbr(hitp[k] ? Rgb(0, 200, 60) : Rgb(255, 255, 255));
-                            gp::Pen pp(Rgb(0, 0, 0), 1);
+                            const gp::Color on = Rgb(0, 210, 60), off = Rgb(255, 170, 0);
+                            gp::Pen ln(hitp[k] ? Rgb(0, 150, 40, 200) : Rgb(120, 120, 120, 160), 1.5f);
+                            g.DrawLine(&ln, ctr, p);
+                            gp::SolidBrush pbr(hitp[k] ? on : Rgb(255, 255, 255));
+                            gp::Pen pp(hitp[k] ? Rgb(0, 90, 20) : off, 2);
                             g.FillEllipse(&pbr, p.X - pr, p.Y - pr, 2 * pr, 2 * pr);
                             g.DrawEllipse(&pp, p.X - pr, p.Y - pr, 2 * pr, 2 * pr);
                         }
@@ -983,6 +991,8 @@ static void Paint(HDC hdc, int w, int h) {
                 std::wstring cl = L"Contact List: ";
                 for (int32_t i = 0; i < s.world.listener.count; ++i) cl += (i ? L", " : L"") + Widen(s.BodyName(s.world.listener.bodies[i]));
                 lines.push_back(cl);
+                lines.push_back(std::wstring(L"Jump probes: ") + (s.probeL ? L"L " : L"- ") + (s.probeC ? L"C " : L"- ") + (s.probeR ? L"R" : L"-") +
+                                (s.probeL || s.probeC || s.probeR ? L"   (grounded: up jumps)" : L"   (in the air)"));
                 // distance to the flag: the gap between the ball's box and the flag's box (hitTestObject wins at 0)
                 if (s.tpl->aim && s.playerAlive) {
                     const DisplayObj goal = const_cast<Sim&>(s).GoalTarget();
@@ -1090,6 +1100,7 @@ static void RefreshMode() {
     SetCheck(g_hudBox, g_hud);
     SetCheck(g_marksBox, g_marks);
     SetCheck(g_polysBox, g_polys);
+    SetCheck(g_probesBox, g_probes);
     SetCheck(g_trail, g_trail_on);
     SetCheck(g_follow, g_follow_on);
     if (GetCapture() != g_dec && SendMessageW(g_dec, TBM_GETPOS, 0, 0) != g_decimals) SendMessageW(g_dec, TBM_SETPOS, TRUE, g_decimals);
@@ -1236,7 +1247,10 @@ static void StartSearch() {
             return;
         }
         if (!prefix.empty()) args.push_back("--prefix"), args.push_back(EncodeInputsRLE(prefix));
-        args.push_back("--memory"), args.push_back(Narrow(GetText(g_sMem)));
+        static const char* widths[] = {"2000", "20000", "100000", "500000"};
+        const int wsel = std::max(0, std::min(3, (int)SendMessageW(g_sMem, CB_GETCURSEL, 0, 0)));
+        args.push_back("--width"), args.push_back(widths[wsel]);
+        args.push_back("--polish"), args.push_back(Narrow(GetText(g_sPolish)));
         args.push_back("--max-frames"), args.push_back(Narrow(GetText(g_sMaxF)));
         wchar_t tmp[MAX_PATH];
         GetTempPathW(MAX_PATH, tmp);
@@ -1269,7 +1283,14 @@ static void StartSearch() {
         std::vector<std::string> a = args;
         std::vector<char*> argv;
         for (std::string& s : a) argv.push_back(&s[0]);
-        const int rc = beam ? CmdBeam((int)argv.size(), argv.data()) : CmdOptimize((int)argv.size(), argv.data());
+        int rc = 1;
+        try {
+            rc = beam ? CmdBeam((int)argv.size(), argv.data()) : CmdOptimize((int)argv.size(), argv.data());
+        } catch (const std::bad_alloc&) {
+            Err("out of memory: lower the Memory setting\n");
+        } catch (const std::exception& e) {
+            Err("search failed: %s\n", e.what());
+        }
         PostMessageW(g_wnd, WM_SEARCH_DONE, (WPARAM)rc, 0);
     });
 }
@@ -1438,8 +1459,14 @@ static bool TasKey(UINT msg, WPARAM wp, LPARAM lp) {
                 redraw();
                 return true;
             case 'J':
-                g_polys = !g_polys;
-                s.feedback = g_polys ? "Polygon display enabled" : "Polygon display disabled";
+                if (shift) {  // rbview: the jump probes
+                    g_probes = !g_probes;
+                    s.feedback = g_probes ? "Jump probes shown" : "Jump probes hidden";
+                } else {
+                    g_polys = !g_polys;
+                    s.feedback = g_polys ? "Polygon display enabled" : "Polygon display disabled";
+                }
+                SetCheck(g_probesBox, g_probes);
                 redraw();
                 return true;
             case 'L': return true;  // stage.align: nothing to align in rbview
@@ -1544,10 +1571,27 @@ static bool TasKey(UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 // ------------------------------------------------------------------ layout
+// The Search tab shows the settings of the chosen mode only, with a short explanation.
+static void ShowSearchMode() {
+    const bool beam = SendMessageW(g_sMode, CB_GETCURSEL, 0, 0) == 1;
+    SetWindowTextW(g_sHelp,
+                   beam ? L"Plays every key combination on every frame from the shown frame on, keeps the most promising "
+                          L"states (Beam width) until one takes the flag, then improves that route for Polish seconds. "
+                          L"The route up to the shown frame is kept. A wider beam finds better routes but takes longer "
+                          L"(time grows with the width): start with Quick or Normal."
+                        : L"Tries small random edits to the whole route (a jump a frame earlier, a key held a frame longer, "
+                          L"...) and keeps every edit that takes the flag sooner. Needs a route that reaches the flag; runs "
+                          L"for Time seconds. Good after a beam search or on a TAS.");
+    if (TabCtrl_GetCurSel(g_tabs) != 3) return;
+    for (HWND h : {g_lblSMem, g_sMem, g_lblSPolish, g_sPolish, g_lblSMaxF, g_sMaxF}) ShowWindow(h, beam ? SW_SHOW : SW_HIDE);
+    for (HWND h : {g_lblSTime, g_sTime}) ShowWindow(h, beam ? SW_HIDE : SW_SHOW);
+}
+
 static void ShowTab(int t) {
     TabCtrl_SetCurSel(g_tabs, t);
     for (int i = 0; i < NPAGES; ++i)
         for (HWND h : g_pages[i]) ShowWindow(h, i == t ? SW_SHOW : SW_HIDE);
+    ShowSearchMode();
 }
 
 static void Layout() {
@@ -1638,14 +1682,22 @@ static void Layout() {
     }
     {  // Search
         int yy = py;
-        MoveWindow(g_sMode, px, yy, pw, S(200), TRUE), yy += rowH + S(6);
-        const int lw = S(112), ew = pw / 2 - lw - S(6);
+        MoveWindow(g_sMode, px, yy, pw, S(200), TRUE), yy += rowH + S(4);
+        MoveWindow(g_sHelp, px, yy, pw, S(84), TRUE), yy += S(88);
+        const int lw = S(84), ew = pw / 2 - lw - S(6);
+        // optimize: Time | Threads; beam: Beam width (whole row), then Polish | Threads, Max frames
         MoveWindow(g_lblSTime, px, yy + S(4), lw, S(20), TRUE), MoveWindow(g_sTime, px + lw, yy, ew, rowH, TRUE);
+        MoveWindow(g_lblSMem, px, yy + S(4), lw, S(20), TRUE), MoveWindow(g_sMem, px + lw, yy, pw - lw, S(200), TRUE);
+        const bool beamMode = SendMessageW(g_sMode, CB_GETCURSEL, 0, 0) == 1;
+        if (beamMode) yy += rowH + S(4);
+        MoveWindow(g_lblSPolish, px, yy + S(4), lw, S(20), TRUE), MoveWindow(g_sPolish, px + lw, yy, ew, rowH, TRUE);
         MoveWindow(g_lblSThreads, px + pw / 2, yy + S(4), lw, S(20), TRUE), MoveWindow(g_sThreads, px + pw / 2 + lw, yy, ew, rowH, TRUE);
         yy += rowH + S(4);
-        MoveWindow(g_lblSMem, px, yy + S(4), lw, S(20), TRUE), MoveWindow(g_sMem, px + lw, yy, ew, rowH, TRUE);
-        MoveWindow(g_lblSMaxF, px + pw / 2, yy + S(4), lw, S(20), TRUE), MoveWindow(g_sMaxF, px + pw / 2 + lw, yy, ew, rowH, TRUE);
-        yy += rowH + S(6);
+        if (beamMode) {
+            MoveWindow(g_lblSMaxF, px, yy + S(4), lw, S(20), TRUE), MoveWindow(g_sMaxF, px + lw, yy, ew, rowH, TRUE);
+            yy += rowH + S(4);
+        }
+        yy += S(2);
         const int bw3 = (pw - 2 * S(4)) / 3;
         MoveWindow(g_sStart, px, yy, bw3, rowH, TRUE);
         MoveWindow(g_sStop, px + bw3 + S(4), yy, bw3, rowH, TRUE);
@@ -1679,7 +1731,7 @@ static void Layout() {
         MoveWindow(g_lblFlag, ix, yy, iw, lh, TRUE), yy += lh;
         end(g_grpPlay);
         begin();
-        for (HWND c : {g_hudBox, g_marksBox, g_polysBox, g_trail}) MoveWindow(c, ix, yy, iw, lh, TRUE), yy += lh;
+        for (HWND c : {g_hudBox, g_marksBox, g_polysBox, g_probesBox, g_trail}) MoveWindow(c, ix, yy, iw, lh, TRUE), yy += lh;
         MoveWindow(g_lblDec, ix, yy + S(6), S(120), lh, TRUE);
         MoveWindow(g_dec, ix + S(124), yy, iw - S(124), S(30), TRUE), yy += S(32);
         end(g_grpView);
@@ -1788,7 +1840,7 @@ static void FillWarpFields() {
 }
 
 static void OnCommand(int id, int code, HWND ctl) {
-    const bool isCombo = id == ID_LEVEL || id == ID_CHECKPOINT || id == ID_SPIKES || id == ID_SCALE || id == ID_SMODE;
+    const bool isCombo = id == ID_LEVEL || id == ID_CHECKPOINT || id == ID_SPIKES || id == ID_SCALE || id == ID_SMODE || id == ID_SMEM;
     if (id == ID_WINDOW) {
         if (code == CBN_SELCHANGE) {
             const int sel = (int)SendMessageW(g_window, CB_GETCURSEL, 0, 0);
@@ -1809,7 +1861,14 @@ static void OnCommand(int id, int code, HWND ctl) {
     if ((id == ID_EVENTS || id == ID_SLOTS || id == ID_NAMED || id == ID_BACKUPS || id == ID_BLIST || id == ID_SLOG) && code != LBN_SELCHANGE &&
         code != LBN_DBLCLK)
         return;
-    if (id == ID_INPUTS || id == IDC_CMD || id == ID_STIME || id == ID_STHREADS || id == ID_SMEM || id == ID_SMAXF) return;
+    if (id == ID_INPUTS || id == IDC_CMD || id == ID_STIME || id == ID_STHREADS || id == ID_SPOLISH || id == ID_SMAXF) return;
+    if (id == ID_SMEM) return;
+    if (id == ID_SMODE) {
+        ShowSearchMode();
+        Layout();
+        RedrawWindow(g_wnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+        return;
+    }
     tas::Session& s = g_s;
     bool keepFocus = false;
     switch (id) {
@@ -1857,6 +1916,7 @@ static void OnCommand(int id, int code, HWND ctl) {
         case ID_OKEEPEND: s.stopAtEnd = false; break;
         case ID_OMARKS: g_marks = Checked(g_marksBox); break;
         case ID_OPOLYS: g_polys = Checked(g_polysBox); break;
+        case ID_OPROBES: g_probes = Checked(g_probesBox); break;
         case ID_OKEYS: KeysDialog(); break;
         case ID_WFILL: FillWarpFields(); break;
         case ID_WAPPLY: {
@@ -2096,8 +2156,9 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             g_lblFlag = MakeCtl(L"STATIC", L"(After the flag the run is over: the clock always stops there.)", 0, 0, 0, 5);
             g_grpView = MakeCtl(L"BUTTON", L"Display", BS_GROUPBOX, 0, 0, 5);
             g_hudBox = MakeCtl(L"BUTTON", L"HUD: the mod's numbers and keys (H)", BS_AUTOCHECKBOX, ID_HUD, 0, 5);
-            g_marksBox = MakeCtl(L"BUTTON", L"Graphics marks: spike hitboxes, control points, jump probes (Shift+H)", BS_AUTOCHECKBOX, ID_OMARKS, 0, 5);
+            g_marksBox = MakeCtl(L"BUTTON", L"Graphics marks: spike hitboxes and the ball's control points (Shift+H)", BS_AUTOCHECKBOX, ID_OMARKS, 0, 5);
             g_polysBox = MakeCtl(L"BUTTON", L"Physics outlines and the ball's 16 control points (J)", BS_AUTOCHECKBOX, ID_OPOLYS, 0, 5);
+            g_probesBox = MakeCtl(L"BUTTON", L"Jump probes: the 3 ground tests under the ball, green = touching (Shift+J)", BS_AUTOCHECKBOX, ID_OPROBES, 0, 5);
             g_trail = MakeCtl(L"BUTTON", L"Show the path", BS_AUTOCHECKBOX, ID_TRAIL, 0, 5);
             g_lblDec = MakeCtl(L"STATIC", L"HUD decimals: 4", 0, 0, 0, 5);
             g_dec = MakeCtl(TRACKBAR_CLASSW, L"", TBS_HORZ | TBS_AUTOTICKS, ID_ODEC, 0, 5);
@@ -2161,17 +2222,23 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             g_gOpen = MakeCtl(L"BUTTON", L"Open a route or log as ghost...", BS_PUSHBUTTON, ID_GOPEN, 0, 2);
             g_gClear = MakeCtl(L"BUTTON", L"No ghost", BS_PUSHBUTTON, ID_GCLEAR, 0, 2);
             g_sMode = MakeCtl(L"COMBOBOX", L"", CBS_DROPDOWNLIST, ID_SMODE, 0, 3);
-            SendMessageW(g_sMode, CB_ADDSTRING, 0, (LPARAM)L"Optimize: improve the whole route (rbsim optimize)");
-            SendMessageW(g_sMode, CB_ADDSTRING, 0, (LPARAM)L"Beam: search on from the shown frame (rbsim beam)");
+            SendMessageW(g_sMode, CB_ADDSTRING, 0, (LPARAM)L"Improve the current route (optimize)");
+            SendMessageW(g_sMode, CB_ADDSTRING, 0, (LPARAM)L"Find a route from the shown frame (beam search)");
             SendMessageW(g_sMode, CB_SETCURSEL, 0, 0);
-            g_lblSTime = MakeCtl(L"STATIC", L"Time (s, optimize)", 0, 0, 0, 3);
+            g_sHelp = MakeCtl(L"STATIC", L"", 0, 0, 0, 3);
+            g_lblSTime = MakeCtl(L"STATIC", L"Time (s)", 0, 0, 0, 3);
             g_sTime = MakeCtl(L"EDIT", L"60", ES_AUTOHSCROLL, ID_STIME, WS_EX_CLIENTEDGE, 3);
             g_lblSThreads = MakeCtl(L"STATIC", L"Threads", 0, 0, 0, 3);
             g_sThreads = MakeCtl(L"EDIT", std::to_wstring(std::max(1u, std::thread::hardware_concurrency() - 1)).c_str(), ES_AUTOHSCROLL, ID_STHREADS,
                                  WS_EX_CLIENTEDGE, 3);
-            g_lblSMem = MakeCtl(L"STATIC", L"Memory (beam)", 0, 0, 0, 3);
-            g_sMem = MakeCtl(L"EDIT", L"2G", ES_AUTOHSCROLL, ID_SMEM, WS_EX_CLIENTEDGE, 3);
-            g_lblSMaxF = MakeCtl(L"STATIC", L"Max frames (beam)", 0, 0, 0, 3);
+            g_lblSMem = MakeCtl(L"STATIC", L"Beam width", 0, 0, 0, 3);
+            g_sMem = MakeCtl(L"COMBOBOX", L"", CBS_DROPDOWNLIST, ID_SMEM, 0, 3);
+            for (const wchar_t* t : {L"Quick: 2,000 states", L"Normal: 20,000 states", L"Deep: 100,000 states", L"Huge: 500,000 states"})
+                SendMessageW(g_sMem, CB_ADDSTRING, 0, (LPARAM)t);
+            SendMessageW(g_sMem, CB_SETCURSEL, 1, 0);
+            g_lblSPolish = MakeCtl(L"STATIC", L"Polish (s)", 0, 0, 0, 3);
+            g_sPolish = MakeCtl(L"EDIT", L"60", ES_AUTOHSCROLL, ID_SPOLISH, WS_EX_CLIENTEDGE, 3);
+            g_lblSMaxF = MakeCtl(L"STATIC", L"Max frames", 0, 0, 0, 3);
             g_sMaxF = MakeCtl(L"EDIT", L"3000", ES_AUTOHSCROLL, ID_SMAXF, WS_EX_CLIENTEDGE, 3);
             g_sStart = MakeCtl(L"BUTTON", L"Start", BS_PUSHBUTTON, ID_SSTART, 0, 3);
             g_sStop = MakeCtl(L"BUTTON", L"Stop", BS_PUSHBUTTON | WS_DISABLED, ID_SSTOP, 0, 3);
@@ -2213,6 +2280,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             g_hud = GetPrivateProfileIntW(L"view", L"hud", 1, ini) != 0;
             g_marks = GetPrivateProfileIntW(L"view", L"marks", 0, ini) != 0;
             g_polys = GetPrivateProfileIntW(L"view", L"polygons", 0, ini) != 0;
+            g_probes = GetPrivateProfileIntW(L"view", L"probes", 1, ini) != 0;
             g_follow_on = true;  // the game camera is the standard view
             g_trail_on = GetPrivateProfileIntW(L"view", L"trail", 1, ini) != 0;
             g_decimals = (int)GetPrivateProfileIntW(L"view", L"decimals", 4, ini);
@@ -2371,6 +2439,21 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             while (!t.empty() && t.back() == ' ') t.pop_back();
             const size_t sp = t.find_last_of(' ');
             const std::string last = sp == std::string::npos ? t : t.substr(sp + 1);
+            // beam progress: "frame N  width W  best distance D px  no flag yet | flag on frame F  ..."
+            if (t.rfind("frame ", 0) == 0 && t.find("best distance") != std::string::npos) {
+                int fr = 0, wd = 0;
+                double dist = 0;
+                char flag[64] = "";
+                if (std::sscanf(t.c_str(), "frame %d width %d best distance %lf px %63[^0-9]", &fr, &wd, &dist, flag) >= 3) {
+                    const size_t f = t.find("flag on frame ");
+                    std::wstring st = L"searching: frame " + std::to_wstring(fr) + L", " + std::to_wstring(wd) + L" states; closest " +
+                                      std::to_wstring((int)dist) + L" px from the flag";
+                    st += f != std::string::npos ? L"; " + Widen(t.substr(f, t.find("  ", f) - f)) + L" so far" : L"; no flag yet";
+                    SetText(g_sStatus, st);
+                }
+            } else if (t.rfind("polishing", 0) == 0) {
+                SetText(g_sStatus, L"route found: polishing it (optimize)...");
+            }
             if (LooksLikeRoute(last)) {
                 g_searchBest = last;
                 EnableWindow(g_sLoad, TRUE);

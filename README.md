@@ -139,7 +139,8 @@ to 53 contacts). Tested by slowing known routes: Level 8 424 -> 405 frames in 60
 ```
 rbsim beam --level N [--checkpoint C] [--prefix RLE] [--memory 10G | --width W] [--threads N]
            [--max-frames F] [--diversity K] [--lookahead T] [--select mixed|score|coverage]
-           [--seed-route RLE] [--explain RLE] [--dir DIR] [--save-every MIN] [--resume] [--gless]
+           [--seed-route RLE] [--explain RLE] [--trace RLE] [--polish SEC] [--spin S] [--spin-bucket W]
+           [--dir DIR] [--save-every MIN] [--resume] [--gless]
 ```
 
 A breadth-first beam search: starting from the level start, a checkpoint, or the state after
@@ -150,14 +151,22 @@ does not need a known route.
   from the start state), measured from where the ball would be `--lookahead` frames ahead (default
   6). Moving bodies are not part of the grid.
 - **Per frame:** children that collect the flag are solutions; children that die are played through
-  the death-warp window at once and kept only if they warp to the flag in time for a real run. Exact
-  duplicate states are merged.
-- **Selection** (`--select`): `score` keeps the best scores (at most `--diversity`, default 16, per
-  region/velocity bucket); `coverage` keeps the best state of every bucket first, so lines that are
-  behind now but ahead later (waiting for a crusher, timing a platform) survive; `mixed` (default)
-  fills half the beam each way.
+  the death-warp window at once and kept only if they warp to the flag in time for a real run.
+  Duplicate states are merged (a hash of every moving body, the camera and the level scripts' state;
+  checked on all 17 levels: merged states never diverge).
+- **Selection** (`--select`): `score` keeps the best scores (at most `--diversity` per
+  region/velocity bucket; default: width / 8, at least 16); `coverage` keeps the best state of every
+  bucket first, so lines that are behind now but ahead later (waiting for a crusher, timing a
+  platform) survive; `mixed` (default) fills half the beam each way.
+- **`--polish SEC`** (default 60, 0 = off): once the beam has a route, `optimize` improves it for SEC
+  seconds, keeping the `--prefix` inputs. Moving single frames and run boundaries is what a beam
+  cannot afford to explore; this is where most of the time comes from (table below).
 - **`--seed-route RLE`:** keeps a known route in the beam, so the result can only match or beat it.
   **`--explain RLE`:** prints the score a known route gets every 10 frames (no search).
+  **`--trace RLE`:** runs the search and reports on which frame and why a known route drops out of the
+  beam (its rank, score and bucket against the states kept).
+- **`--spin S`, `--spin-bucket W`** (experimental, off): count spin (which becomes rolling speed on
+  landing) in the look-ahead / split buckets by angular velocity. No clear gain yet.
 - **Width:** `--memory` (default 4 GB) sets W from the measured state sizes; `--width` fixes it.
 - **Stops** when no state can reach the flag before the best solution, at `--max-frames` (default
   3000), or if the beam empties. The route is rebuilt and re-checked by a replay from scratch.
@@ -165,7 +174,19 @@ does not need a known route.
   `--resume` continues an interrupted run. `DIR` defaults to `beam_L<level>`.
 - **Deterministic** across thread counts, interruptions (`kill -9` + resume) and OS.
 
-Results so far (one core, small widths; the TASes are 186 on Level 2 and 274 on Level 4):
+Results with the current defaults (width 2,000, two threads; the TASes are 186, 274 and 405):
+
+| level | beam | + 60 s polish | time |
+|---|---|---|---|
+| 2 | 218 | 191 | 1.4 min |
+| 4 | 294 (death warp; 412 with the old fixed `--diversity 16`) | 282 (death warp) | 2.1 min |
+| 8 | 559 | 533 | 4.1 min |
+
+`--trace` on the TASes shows where the beam loses them: in the first 20-30 frames, among thousands of
+near-identical jumps a few pixels apart (the TAS line pays off ~100 frames later, e.g. with a
+spin-boosted landing). Wider beams keep them longer (Level 2 at width 20,000: 203 before the polish).
+
+Older results (one core, small widths, fixed `--diversity 16`):
 
 | run | result |
 |---|---|

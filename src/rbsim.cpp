@@ -1127,6 +1127,39 @@ static int CmdTest() {
         check(agree == cases && hits > cases / 20, "mathspikes 0 kill map (viewer): a control point in a kill pixel <=> the spike kills");
         std::printf("       %d / %d agree (%d kills)\n", agree, cases, hits);
     }
+    // 25. Body slots: Level 4 re-creates its drop platform on every frame the ball touches it. Riding it for 300 frames
+    // needs far more than CAP_BODIES bodies; the dead platforms' slots are reused (this used to abort the program with
+    // "body capacity exceeded", e.g. in a beam search). Same result twice, and through snapshots.
+    {
+        LevelTemplate t4(4);
+        const RawPlacement& dp = t4.Place("dropPlatform");
+        auto ride = [&](Sim& s) {
+            s.Load(&t4);
+            s.Warp(0, 0, 0, (dp.tx / 20.0 + 65) / 30, (dp.ty / 20.0 - 11) / 30);
+            int created = 0;
+            for (int f = 0; f < 300; ++f) {
+                const int32_t before = s.lvBody[5];  // L4_DROP
+                s.Tick(IN_NONE);
+                created += s.lvBody[5] != before;
+            }
+            return created;
+        };
+        auto a = std::make_unique<Sim>(), b = std::make_unique<Sim>();
+        const int created = ride(*a);
+        ride(*b);
+        std::vector<uint8_t> ea, eb;
+        auto base = std::make_unique<Sim>();
+        base->Load(&t4);
+        EncodeSnapshot(*base, *a, ea), EncodeSnapshot(*base, *b, eb);
+        auto c = std::make_unique<Sim>();
+        DecodeSnapshot(*base, ea.data(), *c);
+        a->Tick(IN_R), c->Tick(IN_R);
+        std::vector<uint8_t> ea2, ec2;
+        EncodeSnapshot(*base, *a, ea2), EncodeSnapshot(*base, *c, ec2);
+        check(created > CAP_BODIES && a->world.numBodies <= CAP_BODIES && ea == eb && ea2 == ec2,
+              "body slots: riding Level 4's drop platform re-creates it >96 times without running out of slots");
+        std::printf("       platform re-created %d times, %d body slots used\n", created, a->world.numBodies);
+    }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }

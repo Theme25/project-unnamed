@@ -38,6 +38,7 @@ struct Result {
     int death = -1;        // death frame if the finish is a death warp
     int uncertain = 0;     // Sim::displayUncertain at the finish (route should be checked in Flash)
     double margin = 0;     // overlap depth with the flag at the win (twips): tie-breaker, deeper is better
+    int ticks = 0;         // inputs played up to and including the flag frame
 };
 // a strictly better than b: earlier flag, or same frame with a deeper overlap
 static bool Better(const Result& a, const Result& b) { return a.win < b.win || (a.win == b.win && a.margin > b.margin); }
@@ -61,6 +62,7 @@ Result Finish(Sim& sim, const std::vector<uint8_t>& route, int start, int limit)
             r.death = sim.deathFrame;
             r.uncertain = sim.displayUncertain;
             r.margin = sim.winMargin;
+            r.ticks = t + 1;
             break;
         }
     }
@@ -104,14 +106,16 @@ static void Boundaries(const std::vector<uint8_t>& r, std::vector<int>& out) {
         if (r[t] != r[t - 1]) out.push_back((int)t);
 }
 
-// One random edit; returns the first changed frame (or -1 if nothing changed).
-static int Mutate(std::vector<uint8_t>& r, std::mt19937_64& rng, std::vector<int>& bounds) {
+// One random edit at frame `lo` or later (the first `lo` inputs are kept); returns the first changed frame (or -1 if
+// nothing changed).
+static int Mutate(std::vector<uint8_t>& r, std::mt19937_64& rng, std::vector<int>& bounds, int lo) {
     const int L = (int)r.size();
-    if (L == 0) return -1;
+    if (L <= lo) return -1;
     auto rnd = [&](int n) { return (int)(rng() % (uint64_t)n); };
+    auto at = [&]() { return lo + rnd(L - lo); };  // a frame that may change
     switch (rnd(6)) {
         case 0: {  // flip one frame
-            const int t = rnd(L);
+            const int t = at();
             const uint8_t c = (uint8_t)((r[(size_t)t] + 1 + rnd(7)) % 8);
             r[(size_t)t] = c;
             return t;
@@ -119,6 +123,7 @@ static int Mutate(std::vector<uint8_t>& r, std::mt19937_64& rng, std::vector<int
         case 1:
         case 2: {  // move a run boundary by 1..3 frames
             Boundaries(r, bounds);
+            bounds.erase(std::remove_if(bounds.begin(), bounds.end(), [&](int b) { return b <= lo; }), bounds.end());
             if (bounds.empty()) return -1;
             const int b = bounds[(size_t)rnd((int)bounds.size())];
             const int k = 1 + rnd(3);
@@ -126,24 +131,24 @@ static int Mutate(std::vector<uint8_t>& r, std::mt19937_64& rng, std::vector<int
                 for (int t = b; t < std::min(L, b + k); ++t) r[(size_t)t] = r[(size_t)(b - 1)];
                 return b;
             }
-            const int from = std::max(0, b - k);  // right run grows into the left one
+            const int from = std::max(lo, b - k);  // right run grows into the left one
             for (int t = from; t < b; ++t) r[(size_t)t] = r[(size_t)b];
             return from;
         }
         case 3: {  // delete a frame
-            const int t = rnd(L);
+            const int t = at();
             r.erase(r.begin() + t);
             return t;
         }
         case 4: {  // insert a frame (duplicate of a neighbour or random)
-            const int t = rnd(L);
+            const int t = at();
             const uint8_t c = rnd(2) ? r[(size_t)t] : (uint8_t)rnd(8);
             r.insert(r.begin() + t, c);
             return t;
         }
         default: {  // overwrite a block of 2..8 frames with one input
             const int len = 2 + rnd(7);
-            const int t = rnd(L);
+            const int t = at();
             const uint8_t c = (uint8_t)rnd(8);
             for (int u = t; u < std::min(L, t + len); ++u) r[(size_t)u] = c;
             return t;
@@ -152,7 +157,7 @@ static int Mutate(std::vector<uint8_t>& r, std::mt19937_64& rng, std::vector<int
 }
 
 void WorkerLoop(Shared& sh, Worker w, uint64_t seed, double sidewaysP, std::chrono::steady_clock::time_point deadline,
-                bool verbose, uint64_t maxEvals) {
+                bool verbose, uint64_t maxEvals, int keep) {
     std::mt19937_64 rng(seed);
     std::uniform_real_distribution<double> uni(0, 1);
     std::vector<int> bounds;
@@ -170,9 +175,9 @@ void WorkerLoop(Shared& sh, Worker w, uint64_t seed, double sidewaysP, std::chro
         }
         for (int batch = 0; batch < 64; ++batch) {
             cand = w.route;
-            int first = Mutate(cand, rng, bounds);
+            int first = Mutate(cand, rng, bounds, keep);
             if (rng() % 3 == 0) {  // sometimes a second edit
-                const int f2 = Mutate(cand, rng, bounds);
+                const int f2 = Mutate(cand, rng, bounds, keep);
                 if (f2 >= 0) first = first < 0 ? f2 : std::min(first, f2);
             }
             if (first < 0 || cand == w.route) continue;
@@ -184,7 +189,7 @@ void WorkerLoop(Shared& sh, Worker w, uint64_t seed, double sidewaysP, std::chro
             if (r.win > w.res.win) continue;
             const bool better = Better(r, w.res);
             if (!better && (r.win != w.res.win || r.margin < w.res.margin || uni(rng) >= sidewaysP)) continue;
-            cand.resize((size_t)std::min((int)cand.size(), r.win));  // inputs after the flag are irrelevant
+            cand.resize((size_t)r.ticks, IN_NONE);  // up to the flag: inputs after it are irrelevant, missing ones are none
             std::lock_guard<std::mutex> lk(sh.m);
             if (Better(sh.bestRes, r)) break;                  // someone else got further meanwhile
             if (!better && sh.version != w.version) break;     // stale sideways move
@@ -212,6 +217,7 @@ int CmdOptimize(int argc, char** argv) {
     double seconds = 30, sidewaysP = 0.05;
     uint64_t seed = 1, maxEvals = 0;
     bool gless = false, quiet = false;
+    int keep = 0;
     std::string inputs;
     for (int i = 2; i < argc; ++i) {
         auto next = [&]() -> const char* { return i + 1 < argc ? argv[++i] : ""; };
@@ -228,6 +234,7 @@ int CmdOptimize(int argc, char** argv) {
         }
         else if (!std::strcmp(argv[i], "--gless")) gless = true;
         else if (!std::strcmp(argv[i], "--quiet")) quiet = true;
+        else if (!std::strcmp(argv[i], "--keep")) keep = std::max(0, std::atoi(next()));
         else {
             Err( "unknown option %s\n", argv[i]);
             return 2;
@@ -236,7 +243,8 @@ int CmdOptimize(int argc, char** argv) {
     if (!level || inputs.empty()) {
         Err(
                      "usage: rbsim optimize --level N --inputs RLE [--checkpoint C] [--time SEC] [--threads N]\n"
-                     "                      [--seed S] [--sideways P] [--evals N] [--gless] [--quiet]\n"
+                     "                      [--seed S] [--sideways P] [--evals N] [--keep N] [--gless] [--quiet]\n"
+                     "  --keep N never changes the first N inputs (e.g. the route up to where a search started)\n"
                      "  --evals N stops after N candidates (with --threads 1: identical results on any machine)\n");
         return 2;
     }
@@ -259,7 +267,7 @@ int CmdOptimize(int argc, char** argv) {
         Err( "the given inputs do not collect the flag (or only via an unusable death warp)\n");
         return 1;
     }
-    route.resize((size_t)std::min((int)route.size(), sh.bestRes.win));
+    route.resize((size_t)sh.bestRes.ticks, IN_NONE);
     sh.best = route;
     const int startWin = sh.bestRes.win;
     if (maxEvals)
@@ -268,12 +276,13 @@ int CmdOptimize(int argc, char** argv) {
     else
         Out("level %d, start: frame %d%s (%.3f s), flag overlap %.0f twips, %d threads, %.0f s\n", level, startWin,
                     sh.bestRes.death >= 0 ? " (death warp)" : "", startWin / 31.0, sh.bestRes.margin, threads, seconds);
+    g_ticks = 0;  // per run (the viewer runs several searches in one process)
     const auto t0 = std::chrono::steady_clock::now();
     const auto deadline = t0 + std::chrono::milliseconds((long long)std::min(seconds * 1000, 1e15));
     std::vector<std::thread> pool;
     for (int k = 0; k < threads; ++k) {
         Worker w{&tpl, checkpoint, gless, {}, {}, {}, ~0ULL};
-        pool.emplace_back(WorkerLoop, std::ref(sh), std::move(w), seed * 1000003ULL + (uint64_t)k, sidewaysP, deadline, !quiet, maxEvals);
+        pool.emplace_back(WorkerLoop, std::ref(sh), std::move(w), seed * 1000003ULL + (uint64_t)k, sidewaysP, deadline, !quiet, maxEvals, keep);
     }
     for (auto& t : pool) t.join();
     const Result& b = sh.bestRes;
