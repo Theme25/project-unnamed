@@ -45,6 +45,9 @@ inline double as3_sqrt(double a) { return std::sqrt(a); }  // IEEE correctly rou
 
 // ECMAScript ToUint32 / ToInt32
 inline uint32_t as3_toUint32(double v) {
+    // fast path (the broadphase calls this 4x per proxy update with values clamped to [0, 65535]): for 0 <= v < 2^32,
+    // trunc(v) is already the result mod 2^32, and the cast truncates toward zero, so this is the same value
+    if (v >= 0.0 && v < 4294967296.0) return (uint32_t)v;
     if (!std::isfinite(v)) return 0;
     double t = std::trunc(v);
     double m = std::fmod(t, 4294967296.0);
@@ -113,6 +116,14 @@ struct Mat22 {
     Vec2 col1, col2;
     // b2Mat22.Set(angle)
     void Set(double angle) {
+        // speed-up: +0 (static and non-rotating bodies, TOI sweeps) is exactly cos 1, sin +0 in every libm (C99 F.9.1)
+        if (angle == 0 && !std::signbit(angle) && !g_sinHook && !g_cosHook) {
+            col1.x = 1;
+            col2.x = -0.0;
+            col1.y = 0;
+            col2.y = 1;
+            return;
+        }
         double c = as3_cos(angle);
         double s = as3_sin(angle);
         col1.x = c;

@@ -3,6 +3,7 @@
 // from the Red Ball 1 SWF. Comments flag every place where this port's
 // behaviour differs from stock Box2D 2.0 C++.
 #include "b2world.h"
+#include <cstring>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
@@ -792,6 +793,7 @@ void World::ContactEvaluate(int32_t c) {
 }
 
 void World::ContactUpdate(int32_t c) {
+    contacts[c].evalValid = false;  // only CollideAll re-validates (SolveTOI evaluates at advanced transforms)
     int32_t oldCount = contacts[c].manifoldCount;
     ContactEvaluate(c);
     Contact& ct = contacts[c];
@@ -812,7 +814,22 @@ void World::CollideAll() {
     for (int32_t c = contactList; c != -1; c = contacts[c].next) {
         const Body& b1 = bodies[shapes[contacts[c].shape1].body];
         const Body& b2 = bodies[shapes[contacts[c].shape2].body];
-        if (!(b1.IsSleeping() && b2.IsSleeping())) ContactUpdate(c);
+        if (b1.IsSleeping() && b2.IsSleeping()) continue;
+        Contact& ct = contacts[c];
+        // Neither body moved since this contact's last evaluation (typically a sleeping body on a static one):
+        // re-evaluating gives back the stored manifold (same geometry and keys, impulses copied from the matching
+        // keys, no listener events, no wake-up), so only ContactUpdate's flag update is left.
+        if (ct.evalValid && !std::memcmp(&ct.evalXf1, &b1.xf, sizeof(XForm)) && !std::memcmp(&ct.evalXf2, &b2.xf, sizeof(XForm))) {
+            if (b1.IsStatic() || b1.IsBullet() || b2.IsStatic() || b2.IsBullet())
+                ct.flags &= ~CF_SLOW;
+            else
+                ct.flags |= CF_SLOW;
+            continue;
+        }
+        ContactUpdate(c);
+        ct.evalValid = true;
+        ct.evalXf1 = b1.xf;
+        ct.evalXf2 = b2.xf;
     }
 }
 

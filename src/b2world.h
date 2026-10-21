@@ -148,6 +148,10 @@ struct Contact {
     int32_t manifoldCount = 0;
     Manifold manifold;
     int32_t nextFree = -1;
+    // speed-up (not in Box2DFlash): the bodies' transforms when CollideAll last evaluated this contact; while both
+    // are unchanged a new evaluation would reproduce the stored manifold exactly, so it is skipped
+    bool evalValid = false;
+    XForm evalXf1, evalXf2;
 };
 
 // ----------------------------------------------------------------- joints

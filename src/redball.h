@@ -147,6 +147,8 @@ struct LevelTemplate {
     const DisplayObj* aim = nullptr;                    // levelAim
     const SpikeObj* spikes = nullptr;                   // every top-level Ships10/Shipik spike
     int32_t spikeCount = 0;
+    // speed-up: the union of the spikes' reject boxes as BallHitsSpike's standardized test computes them (px)
+    double spikeLoX = 0, spikeHiX = 0, spikeLoY = 0, spikeHiY = 0;
     const DisplayObj* cps[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};  // checkPoint0..4
     bool HasPlacement(const char* name) const;
     int32_t CheckpointCount() const;
@@ -207,6 +209,10 @@ struct Sim {
     // matrix is built from THIS value (FlashRotationMatrix), not from the normalised getter value.
     double spriteRotW[CAP_BODIES];
     bool hasSprite[CAP_BODIES];
+    // speed-up (not in the game): the body x, y and angle the sprite fields were last computed from; the sync skips
+    // bodies whose values are bitwise unchanged (the sprite fields are pure functions of them)
+    double syncX[CAP_BODIES], syncY[CAP_BODIES], syncA[CAP_BODIES];
+    bool syncValid[CAP_BODIES];
     // per-level script state (Level_N private fields)
     int32_t lvBody[LV_VARS];
     int32_t lvInt[LV_VARS];

@@ -46,6 +46,14 @@ LevelTemplate::LevelTemplate(int32_t levelId) : id(levelId) {
             spikes = ls.items;
             spikeCount = ls.count;
         }
+    for (int32_t i = 0; i < spikeCount; ++i) {  // same expressions as BallHitsSpike's standardized reject
+        const SpikeObj& s = spikes[i];
+        const double bx0 = s.bx0 / 20.0, by0 = s.by0 / 20.0, bw = (s.bx1 - s.bx0) / 20.0, bh = (s.by1 - s.by0) / 20.0;
+        if (i == 0 || bx0 < spikeLoX) spikeLoX = bx0;
+        if (i == 0 || bx0 + bw > spikeHiX) spikeHiX = bx0 + bw;
+        if (i == 0 || by0 < spikeLoY) spikeLoY = by0;
+        if (i == 0 || by0 + bh > spikeHiY) spikeHiY = by0 + bh;
+    }
     for (int32_t i = 0; i < 5; ++i) {
         char buf[32];
         std::snprintf(buf, sizeof buf, "checkPoint%d", i);
@@ -620,6 +628,7 @@ int32_t Sim::BeginBody(const char* name) {
     }
     int32_t b = world.CreateBody(bd, reuse);
     hasSprite[b] = true;
+    syncValid[b] = false;
     spriteX[b] = x;
     spriteY[b] = y;
     spriteRot[b] = rot;
@@ -702,6 +711,7 @@ void Sim::CreatePlayer(double px, double py) {
     world.SetMassFromShapes(playerBody);
     world.listener.playerBody = playerBody;
     hasSprite[playerBody] = true;
+    syncValid[playerBody] = false;
     spriteX[playerBody] = SpriteCoord(px);
     spriteY[playerBody] = SpriteCoord(py);
     spriteRot[playerBody] = spriteRotW[playerBody] = 0;
@@ -2007,6 +2017,7 @@ void Sim::Restart() {
     if (!script.implemented) fatal("level script not implemented yet");
     for (int32_t i = 0; i < CAP_BODIES; ++i) {
         hasSprite[i] = false;
+        syncValid[i] = false;
         spriteX[i] = spriteY[i] = spriteRot[i] = spriteRotW[i] = 0;
     }
     for (int32_t i = 0; i < LV_VARS; ++i) lvBody[i] = lvInt[i] = 0;
@@ -2107,10 +2118,14 @@ void Sim::LevelUpdate(bool left, bool up, bool right) {
     for (int32_t b = world.bodyList; b != -1; b = world.bodies[b].next) {
         const Body& bb = world.bodies[b];
         if (hasSprite[b] && !bb.IsStatic()) {
+            if (syncValid[b] && !std::memcmp(&syncX[b], &bb.xf.position.x, 8) && !std::memcmp(&syncY[b], &bb.xf.position.y, 8) &&
+                !std::memcmp(&syncA[b], &bb.sweep.a, 8))
+                continue;  // a sleeping (or resting) body: the same inputs give the same sprite values
             spriteX[b] = SpriteCoord(bb.xf.position.x * PHYS_SCALE);
             spriteY[b] = SpriteCoord(bb.xf.position.y * PHYS_SCALE);
             spriteRot[b] = SpriteRotation(bb.sweep.a);
             spriteRotW[b] = SpriteRotationWritten(bb.sweep.a);
+            syncX[b] = bb.xf.position.x, syncY[b] = bb.xf.position.y, syncA[b] = bb.sweep.a, syncValid[b] = true;
         }
     }
 
@@ -2254,7 +2269,11 @@ void Sim::DisplayUpdate() {
         }
     }
     // Spikes: any Shipik/Ships10 hit by a control point kills a live ball (PlayerDie is guarded here).
-    if (playerAlive) {
+    // Speed-up: with the standardized rule, a ball outside the union of all reject boxes is rejected by every spike.
+    const double bsx = spriteX[playerBody], bsy = spriteY[playerBody];
+    const bool farFromSpikes = GetDisplayConfig().mathSpikes == 1 && tpl->spikeCount > 0 &&
+                               (bsx + 11 < tpl->spikeLoX || bsx - 11 > tpl->spikeHiX || bsy + 11 < tpl->spikeLoY || bsy - 11 > tpl->spikeHiY);
+    if (playerAlive && !farFromSpikes) {
         for (int32_t i = 0; i < tpl->spikeCount; ++i) {
             // mathSpikes 0: the spikes' edges are from the last redraw in which they were on screen (RenderSpikes)
             double drawnX = NAN, drawnY = NAN;
