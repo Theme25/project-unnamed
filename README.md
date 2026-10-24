@@ -21,6 +21,35 @@ frame matches that Flash Player to the last bit.
 | smartforce | `rbsim smartforce`: simulates every string of an input pattern and reports those meeting conditions |
 | tests | `rbsim test`: 97 self-tests; `make tastest`: the TAS core of the viewer |
 
+## What's new in v2.0
+
+- **Red Ball TAS (`rbview.exe`)** is now the Practice Hack's TAS mode on the simulator: the mod's keys and
+  behaviour, with a proper UI (below). New since v1.2:
+  - savestates without a limit, with names, kept in a file, plus backups of every route a restart, rewind or
+    load replaced;
+  - a ghost route to race against, and the jump brute-forcer's candidates actually simulated;
+  - every setting the mod has as a key or a command is also a checkbox or slider (Options tab);
+  - Space can be held to keep stepping while you press other keys;
+  - the HUD grows with the window and shows the distance to the flag and the jump probes (also drawn under
+    the ball, Shift+J);
+  - spike hitboxes are drawn as the game tests them (Shift+H). Under `mathspikes 0` they are the exact window
+    pixels that kill at the chosen window size;
+  - the view follows the game camera unless you drag it.
+- **`rbsim smartforce`** (contributed by @donaldkabelhdmi in PR #2) simulates every input string of a
+  hand-written pattern and lists those that meet your conditions (section below). It replaces `rbsim optimize`,
+  `rbsim beam` and the viewer's Search tab; those are in the git history up to commit `7a21128`.
+- **Faster engine** (PR #2): exact shortcuts, 1.31x on Level 14 replays. The results are unchanged bit for
+  bit: per-frame full-state digests match the previous engine on 2,040 random runs over all 17 levels,
+  checkpoints, restarts and the three spike rules.
+- **Fixes:**
+  - Level 15 started from a checkpoint and then from the beginning closed the program ("new body name after
+    template freeze"). The loose plank exists only from the level start; every start is now registered when
+    a level is first built.
+  - Drop platforms re-created more than 96 times (riding one on Level 4, 6 or 14) closed the program ("body
+    capacity exceeded"). The slots of destroyed bodies are now reused, only once the slots run out, so
+    verified routes are unchanged.
+  - Windows: a crash when worker threads ended (the physics scratch buffers now use fiber-local storage).
+
 ## Red Ball TAS / route viewer (Windows, no command line)
 
 **[⬇ Download rbview.exe](https://github.com/Theme25/project-unnamed/releases/latest/download/rbview.exe)**
@@ -35,16 +64,18 @@ Backspace rewind, R/F restarts, G invincibility, Shift+G glitchless, H/J overlay
   replaced;
 - a ghost route to race against;
 - the jump brute-forcer's candidates actually simulated;
-- remappable keys that stay out of the way while you type;
-- the route viewer: seek any frame, events list, death-warp ghost, path, HUD, Flash's spike test at any window size.
+- remappable keys that stay out of the way while you type, and every setting as a checkbox or slider;
+- the route viewer: seek any frame, events list, death-warp ghost, path, a HUD that scales with the window
+  (distance to the flag, jump probes), spike hitboxes as the game tests them, Flash's spike test at any window
+  size.
 Guide and full key list: [`docs/WINDOWS.md`](docs/WINDOWS.md).
 Build: `make viewer` (MinGW-w64 cross build; Win32 + GDI+, static; source in `viewer/`: `tas.cpp` is the TAS logic
 without Windows code, checked natively by `make tastest && viewer/tas_test`).
-To publish a new version: create a GitHub release (new tag, e.g. `v1.1`) and attach the exe named
+To publish a new version: create a GitHub release (new tag, e.g. `v2.0`) and attach the exe named
 exactly `rbview.exe`, so the download link above keeps pointing at the newest one
-(`gh release create v1.1 rbview.exe --title "..." --notes "..."` does the same from the command line).
+(`gh release create v2.0 rbview.exe rbsim.exe --title "..." --notes "..."` does the same from the command line).
 
-![rbview: Level 2, a route against a slower ghost, with the HUD and the path](docs/rbview.png)
+![rbview: Level 2, the TAS against a ghost 8 frames behind, with the HUD, the jump probes and the path](docs/rbview.png)
 
 ## Build & run
 
@@ -53,7 +84,7 @@ exactly `rbview.exe`, so the download link above keeps pointing at the newest on
 
 ```
 make                 # see "Build flags" below; do not change them
-./rbsim test         # 95 self-tests (physics, display layer, spikes, death warps, all 17 levels, snapshots, ...)
+./rbsim test         # 97 self-tests (physics, display layer, spikes, death warps, all 17 levels, snapshots, ...)
 ./rbsim run --level 2 --inputs "n20w1d25n40" [--hex] [--every N] [--checkpoint K]
 ./rbsim log --level 2 --inputs "..."      # simulator log in the Flash mod's TSV format
 ./rbsim bench [--frames N]                # throughput
@@ -227,8 +258,8 @@ the larger of the x and y gaps; <= 0 means touching, minus the overlap depth). E
 | `viewer/tas.cpp`, `tas.h`, `tas_test.cpp` | its TAS core (the mod's keys as operations on a route), tests (`make tastest`) |
 
 All mutable state lives in fixed arrays linked by `int` indices, so `Sim copy = sim;` is a complete,
-bit-exact snapshot (152 KB). Immutable geometry is shared; scratch buffers are thread-local, so one
-sim per thread is safe.
+bit-exact snapshot (175 KB). Immutable geometry is shared; scratch buffers are per thread (fiber-local
+storage on Windows), so one sim per thread is safe.
 
 ## What is modelled beyond the physics
 
@@ -277,7 +308,9 @@ Details and numbers: `docs/STATS_LOGGING.md` §3.5-3.11.
    ids, new pair order).
 8. Game listener bug: `playerContactBodies.splice(body, 1)` always removes index 0; Add/Remove fire
    per manifold point and on feature-key changes, so the list can hold stale or duplicate entries.
-9. Destroyed bodies remain readable (the game keeps probing a dead ball).
+9. Destroyed bodies remain readable (the game keeps probing a dead ball). Their slots are reused only when
+   all are taken (a drop platform re-created on every frame it is touched), and only for bodies destroyed
+   before the last step that nothing refers to any more.
 10. Decompiler loss: JPEXS dropped the `bestEdge/bestSeparation` update in `FindMaxSeparation`; the
     AVM2 p-code has it and the port includes it.
 
@@ -351,7 +384,8 @@ section/symbol directives adapted; ARM (incl. Apple Silicon) cannot run the Inte
 ## Roadmap
 
 1. **Viewer:** `rbview.exe` is the TAS tool (the mod's keys) plus viewer, states, ghost. Possible next:
-   an input piano roll (edit frames by clicking), a real-Windows check of the keyboard timing.
+   an input piano roll (edit frames by clicking), smartforce inside the viewer, a real-Windows check of the
+   keyboard timing.
 2. **Simulator:** complete; the display layer is the player's own arithmetic, including the real game's
    shape spike test at any window size (`MATHSPIKES 0`, `docs/RESOLUTION.md`). Open: confirm it with one stats
    log recorded on real Windows; the Tournament Edition's Level 15 money tween (0.3 s of real time).
