@@ -20,8 +20,7 @@ using namespace rb;
 
 int CmdVerify(int argc, char** argv);
 int CmdCalib(int argc, char** argv);
-int CmdOptimize(int argc, char** argv);
-int CmdBeam(int argc, char** argv);
+int CmdSmartforce(int argc, char** argv);
 static double SpriteCoordForTest(double v) { return (double)as3_toInt32(v * 20) / 20.0; }
 
 static uint64_t bits(double d) {
@@ -1129,7 +1128,7 @@ static int CmdTest() {
     }
     // 25. Body slots: Level 4 re-creates its drop platform on every frame the ball touches it. Riding it for 300 frames
     // needs far more than CAP_BODIES bodies; the dead platforms' slots are reused (this used to abort the program with
-    // "body capacity exceeded", e.g. in a beam search). Same result twice, and through snapshots.
+    // "body capacity exceeded"). Same result twice, and through snapshots.
     {
         LevelTemplate t4(4);
         const RawPlacement& dp = t4.Place("dropPlatform");
@@ -1223,14 +1222,16 @@ static bool ParseDisplayOptions(int& argc, char** argv) {
 
 int main(int argc, char** argv) {
     if (!ParseDisplayOptions(argc, argv)) return 2;
-    for (int i = 1; i + 1 < argc; ++i)
+    for (int i = 1; i < argc; ++i)
         if (!std::strcmp(argv[i], "--trig")) {
-            if (!std::strcmp(argv[i + 1], "glibc")) g_trigImpl = TrigImpl::Glibc;
-            else if (!std::strcmp(argv[i + 1], "intel")) g_trigImpl = TrigImpl::IntelLibm;
+            if (i + 1 < argc && !std::strcmp(argv[i + 1], "glibc")) g_trigImpl = TrigImpl::Glibc;
+            else if (i + 1 < argc && !std::strcmp(argv[i + 1], "intel")) g_trigImpl = TrigImpl::IntelLibm;
             else { std::fprintf(stderr, "--trig intel|glibc\n"); return 2; }
+            for (int j = i; j + 2 <= argc; ++j) argv[j] = argv[j + 2];
+            argc -= 2, --i;
         }
     if (argc < 2) {
-        std::fprintf(stderr, "usage: rbsim run|log|test|bench|verify|calib|optimize|beam [options]\n");
+        std::fprintf(stderr, "usage: rbsim run|log|test|bench|verify|calib|smartforce [options]\n");
         return 2;
     }
     if (!std::strcmp(argv[1], "run")) return CmdRun(argc, argv);
@@ -1239,8 +1240,7 @@ int main(int argc, char** argv) {
     if (!std::strcmp(argv[1], "bench")) return CmdBench(argc, argv);
     if (!std::strcmp(argv[1], "verify")) return CmdVerify(argc, argv);
     if (!std::strcmp(argv[1], "calib")) return CmdCalib(argc, argv);
-    if (!std::strcmp(argv[1], "optimize")) return CmdOptimize(argc, argv);
-    if (!std::strcmp(argv[1], "beam")) return CmdBeam(argc, argv);
+    if (!std::strcmp(argv[1], "smartforce")) return CmdSmartforce(argc, argv);
     std::fprintf(stderr, "unknown command %s\n", argv[1]);
     return 2;
 }

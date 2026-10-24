@@ -2,7 +2,6 @@
 // Game.UpdateHandler) driving the Box2D port.
 #include "redball.h"
 
-#include <cstdarg>
 #include "level_polys.h"
 #include "flashpix.h"
 #include <cmath>
@@ -46,6 +45,14 @@ LevelTemplate::LevelTemplate(int32_t levelId) : id(levelId) {
             spikes = ls.items;
             spikeCount = ls.count;
         }
+    for (int32_t i = 0; i < spikeCount; ++i) {  // same expressions as BallHitsSpike's standardized reject
+        const SpikeObj& s = spikes[i];
+        const double bx0 = s.bx0 / 20.0, by0 = s.by0 / 20.0, bw = (s.bx1 - s.bx0) / 20.0, bh = (s.by1 - s.by0) / 20.0;
+        if (i == 0 || bx0 < spikeLoX) spikeLoX = bx0;
+        if (i == 0 || bx0 + bw > spikeHiX) spikeHiX = bx0 + bw;
+        if (i == 0 || by0 < spikeLoY) spikeLoY = by0;
+        if (i == 0 || by0 + bh > spikeHiY) spikeHiY = by0 + bh;
+    }
     for (int32_t i = 0; i < 5; ++i) {
         char buf[32];
         std::snprintf(buf, sizeof buf, "checkPoint%d", i);
@@ -620,6 +627,7 @@ int32_t Sim::BeginBody(const char* name) {
     }
     int32_t b = world.CreateBody(bd, reuse);
     hasSprite[b] = true;
+    syncValid[b] = false;
     spriteX[b] = x;
     spriteY[b] = y;
     spriteRot[b] = rot;
@@ -662,29 +670,6 @@ int32_t Sim::CreateCircleBody(const char* name, double density, double friction,
     return b;
 }
 
-void (*g_outSink)(const char*, bool) = nullptr;
-std::atomic<bool> g_searchCancel{false};
-static void OutV(bool err, const char* fmt, va_list ap) {
-    if (!g_outSink) {
-        std::vfprintf(err ? stderr : stdout, fmt, ap);
-        return;
-    }
-    char buf[8192];
-    std::vsnprintf(buf, sizeof buf, fmt, ap);
-    g_outSink(buf, err);
-}
-void Out(const char* fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    OutV(false, fmt, ap);
-    va_end(ap);
-}
-void Err(const char* fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    OutV(true, fmt, ap);
-    va_end(ap);
-}
 void (*g_playerDieHook)(const Sim&) = nullptr;
 // PlayerBox(x, y, world, sprite): the ball at sprite position (x, y) px, and the camera centred on it.
 void Sim::CreatePlayer(double px, double py) {
@@ -702,6 +687,7 @@ void Sim::CreatePlayer(double px, double py) {
     world.SetMassFromShapes(playerBody);
     world.listener.playerBody = playerBody;
     hasSprite[playerBody] = true;
+    syncValid[playerBody] = false;
     spriteX[playerBody] = SpriteCoord(px);
     spriteY[playerBody] = SpriteCoord(py);
     spriteRot[playerBody] = spriteRotW[playerBody] = 0;
@@ -2007,6 +1993,7 @@ void Sim::Restart() {
     if (!script.implemented) fatal("level script not implemented yet");
     for (int32_t i = 0; i < CAP_BODIES; ++i) {
         hasSprite[i] = false;
+        syncValid[i] = false;
         spriteX[i] = spriteY[i] = spriteRot[i] = spriteRotW[i] = 0;
     }
     for (int32_t i = 0; i < LV_VARS; ++i) lvBody[i] = lvInt[i] = 0;
@@ -2107,10 +2094,14 @@ void Sim::LevelUpdate(bool left, bool up, bool right) {
     for (int32_t b = world.bodyList; b != -1; b = world.bodies[b].next) {
         const Body& bb = world.bodies[b];
         if (hasSprite[b] && !bb.IsStatic()) {
+            if (syncValid[b] && !std::memcmp(&syncX[b], &bb.xf.position.x, 8) && !std::memcmp(&syncY[b], &bb.xf.position.y, 8) &&
+                !std::memcmp(&syncA[b], &bb.sweep.a, 8))
+                continue;  // a sleeping (or resting) body: the same inputs give the same sprite values
             spriteX[b] = SpriteCoord(bb.xf.position.x * PHYS_SCALE);
             spriteY[b] = SpriteCoord(bb.xf.position.y * PHYS_SCALE);
             spriteRot[b] = SpriteRotation(bb.sweep.a);
             spriteRotW[b] = SpriteRotationWritten(bb.sweep.a);
+            syncX[b] = bb.xf.position.x, syncY[b] = bb.xf.position.y, syncA[b] = bb.sweep.a, syncValid[b] = true;
         }
     }
 
@@ -2141,14 +2132,17 @@ void Sim::LevelUpdate(bool left, bool up, bool right) {
             b.linearVelocity = Vec2(b.linearVelocity.x + 0.25, b.linearVelocity.y);
         }
     }
+    upIdle = false;
     if (up) {
+        unsigned char before[sizeof(Body)];
+        std::memcpy(before, static_cast<const void*>(&b), sizeof(Body));
         b.WakeUp();
         if (world.listener.count > 0 && grounded) {
             world.ApplyForce(playerBody, Vec2(0, -65), world.bodies[playerBody].sweep.c);
         } else if (b.linearVelocity.y < 0) {
             world.ApplyForce(playerBody, Vec2(0, -1), world.bodies[playerBody].sweep.c);
         }
-    }
+        upIdle = !std::memcmp(before, static_cast<const void*>(&b), sizeof(Body));    }
     // Tweener.addTween(m_sprite, {x: scaleX * (-playerBox.x + stageWidth / 2), y: ..., useFrames, time 31,
     // easeOutExpo}); overwrites the previous camera tween. scaleX/scaleY stay 1 (scaleTimer never runs).
     camTargetX = 1.0 * (-spriteX[playerBody] + 550.0 / 2);
@@ -2254,7 +2248,11 @@ void Sim::DisplayUpdate() {
         }
     }
     // Spikes: any Shipik/Ships10 hit by a control point kills a live ball (PlayerDie is guarded here).
-    if (playerAlive) {
+    // Speed-up: with the standardized rule, a ball outside the union of all reject boxes is rejected by every spike.
+    const double bsx = spriteX[playerBody], bsy = spriteY[playerBody];
+    const bool farFromSpikes = GetDisplayConfig().mathSpikes == 1 && tpl->spikeCount > 0 &&
+                               (bsx + 11 < tpl->spikeLoX || bsx - 11 > tpl->spikeHiX || bsy + 11 < tpl->spikeLoY || bsy - 11 > tpl->spikeHiY);
+    if (playerAlive && !farFromSpikes) {
         for (int32_t i = 0; i < tpl->spikeCount; ++i) {
             // mathSpikes 0: the spikes' edges are from the last redraw in which they were on screen (RenderSpikes)
             double drawnX = NAN, drawnY = NAN;

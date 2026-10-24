@@ -1,6 +1,6 @@
 // viewer/rbview.cpp - "Red Ball TAS": the Practice Hack's TAS mode (same keys, same behaviour) on the bit-exact
 // simulator, in a Windows program with a proper UI: savestates without limits, a ghost route, the jump brute-forcer,
-// rbsim's optimize/beam searches, and a route viewer (seek, events, death-warp ghost).
+// and a route viewer (seek, events, death-warp ghost).
 // The TAS logic itself is in viewer/tas.{h,cpp} (no Windows code, tested by viewer/tas_test.cpp).
 //
 // Build: make viewer  (cross-compiled with MinGW-w64; static, one .exe)
@@ -18,22 +18,16 @@
 #include <shellapi.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cwctype>
 #include <memory>
-#include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "../src/redball.h"
 #include "tas.h"
-
-int CmdOptimize(int argc, char** argv);
-int CmdBeam(int argc, char** argv);
 
 using namespace rb;
 namespace gp = Gdiplus;
@@ -71,11 +65,9 @@ enum : int {
     ID_NAMED, ID_NSAVE, ID_NLOAD, ID_NRENAME, ID_NDELETE, ID_NGHOST, ID_NCOPY,
     ID_BACKUPS, ID_BLOAD,
     ID_GCUR, ID_GPASTE, ID_GOPEN, ID_GCLEAR, ID_GINFO,
-    ID_SMODE, ID_STIME, ID_STHREADS, ID_SMEM, ID_SMAXF, ID_SPOLISH, ID_SSTART, ID_SSTOP, ID_SLOAD, ID_SLOG, ID_SSTATUS,
     ID_BINFO, ID_BLIST, ID_BUP, ID_BDOWN, ID_BNEXT, ID_BAPPLY, ID_BLEAVE,
     ID_OFAST, ID_OPAUSEEND, ID_OKEEPEND, ID_OMARKS, ID_OPOLYS, ID_OPROBES, ID_ODEC, ID_OKEYS, ID_WFILL, ID_WAPPLY, ID_WCLEAR,
 };
-enum : UINT { WM_SEARCH_LINE = WM_APP + 1, WM_SEARCH_DONE };
 
 static HWND g_wnd, g_canvas, g_status, g_tabs;
 static HWND g_lblLevel, g_level, g_lblCp, g_cp, g_gless, g_invincible, g_lblSpikes, g_spikes, g_lblWindow, g_window, g_scale, g_keys, g_help;
@@ -86,12 +78,11 @@ static HWND g_events;
 static HWND g_lblSlots, g_slots, g_slotSave, g_slotLoad, g_slotImport, g_slotExport, g_lblNamed, g_named, g_nSave, g_nLoad, g_nRename, g_nDelete,
     g_nGhost, g_nCopy, g_lblBackups, g_backups, g_bLoad;
 static HWND g_gInfo, g_gCur, g_gPaste, g_gOpen, g_gClear;
-static HWND g_sMode, g_lblSTime, g_sTime, g_lblSThreads, g_sThreads, g_lblSMem, g_sMem, g_lblSMaxF, g_sMaxF, g_sStart, g_sStop, g_sLoad, g_sStatus, g_sLog;
-static HWND g_sHelp, g_lblSPolish, g_sPolish, g_probesBox;  // g_sMem: the beam width list
+static HWND g_probesBox;
 static HWND g_bInfo, g_bList, g_bUp, g_bDown, g_bNext, g_bApply, g_bLeave;
 static HWND g_speedLbl, g_grpPlay, g_fast, g_lblEnd, g_pauseEnd, g_keepEnd, g_lblFlag, g_grpView, g_marksBox, g_polysBox, g_lblDec, g_dec,
     g_grpWarp, g_lblWarp, g_wLbl[5], g_wEdit[5], g_wFill, g_wApply, g_wClear, g_grpKeys, g_lblKeys, g_oKeys;
-static const int NPAGES = 6;
+static const int NPAGES = 5;
 static std::vector<HWND> g_pages[NPAGES];
 static HFONT g_font;
 static double g_dpi = 1.0;
@@ -116,12 +107,6 @@ static std::wstring g_iniPath, g_statesPath;
 static std::string g_shownRoute;
 static size_t g_shownEvents = (size_t)-1;
 static bool g_modal = false;
-
-// search
-static std::thread g_searchThread;
-static std::atomic<bool> g_searchRunning{false};
-static std::string g_searchBest;
-static tas::Route g_searchBase;
 
 static int S(int v) { return (int)std::lround(v * g_dpi); }
 static std::wstring Widen(const std::string& s) { return std::wstring(s.begin(), s.end()); }
@@ -212,13 +197,11 @@ static void SetDisplayControls() {
     std::swprintf(b, 32, L"%dx%d", dc.windowW, dc.windowH);
     if (GetFocus() != GetWindow(g_window, GW_CHILD)) SetText(g_window, b);
     SendMessageW(g_scale, CB_SETCURSEL, dc.showAll ? 0 : 1, 0);
-    const bool flash = dc.mathSpikes == 0, free = !g_searchRunning;
-    EnableWindow(g_spikes, free);
-    EnableWindow(g_window, flash && free);
-    EnableWindow(g_scale, flash && free);
+    const bool flash = dc.mathSpikes == 0;
+    EnableWindow(g_window, flash);
+    EnableWindow(g_scale, flash);
 }
 static void ReadDisplayControls() {
-    if (g_searchRunning) return;
     DisplayConfig& dc = GetDisplayConfig();
     const int sel = (int)SendMessageW(g_spikes, CB_GETCURSEL, 0, 0);
     dc.mathSpikes = kSpikeModes[sel >= 0 && sel < 4 ? sel : 0];
@@ -378,16 +361,15 @@ static bool ReadRouteFile(const wchar_t* file, tas::Route& out) {
                 q = t + 1;
             }
             DisplayConfig& dc = GetDisplayConfig();
-            if (!g_searchRunning)
-                for (size_t i = 0; i + 1 < kv.size(); i += 2) {
-                    if (kv[i] == "mathspikes") {
-                        const int ms = std::atoi(kv[i + 1].c_str());
-                        if (ms >= 0 && ms <= 2) dc.mathSpikes = ms;
-                    }
-                    int ww, wh;
-                    if (kv[i] == "window" && ParseWindowSize(Widen(kv[i + 1]), ww, wh)) dc.windowW = ww, dc.windowH = wh;
-                    if (kv[i] == "scaleMode") dc.showAll = kv[i + 1] != "noScale";
+            for (size_t i = 0; i + 1 < kv.size(); i += 2) {
+                if (kv[i] == "mathspikes") {
+                    const int ms = std::atoi(kv[i + 1].c_str());
+                    if (ms >= 0 && ms <= 2) dc.mathSpikes = ms;
                 }
+                int ww, wh;
+                if (kv[i] == "window" && ParseWindowSize(Widen(kv[i + 1]), ww, wh)) dc.windowW = ww, dc.windowH = wh;
+                if (kv[i] == "scaleMode") dc.showAll = kv[i + 1] != "noScale";
+            }
         } else if (line.rfind("LEVEL ", 0) == 0) {
             if (!prevR) {
                 std::sscanf(line.c_str() + 6, "%d %d", &level, &cp);
@@ -1216,92 +1198,6 @@ static void RefreshAll() {
     SaveSettings();
 }
 
-// ------------------------------------------------------------------ search (rbsim optimize / beam, in-process)
-static void SearchSink(const char* text, bool) {
-    std::string s(text);
-    size_t a = 0;
-    while (a < s.size()) {
-        size_t b = s.find('\n', a);
-        if (b == std::string::npos) b = s.size();
-        if (b > a) PostMessageW(g_wnd, WM_SEARCH_LINE, 0, (LPARAM) new std::string(s.substr(a, b - a)));
-        a = b + 1;
-    }
-}
-
-static void StartSearch() {
-    if (g_searchRunning) return;
-    const tas::Route& r = g_s.route();
-    if (r.Tool()) {
-        MessageBoxW(g_wnd, L"The search works on real-game routes: turn invincibility off and remove warps first.", L"Search", MB_ICONINFORMATION);
-        return;
-    }
-    const bool beam = SendMessageW(g_sMode, CB_GETCURSEL, 0, 0) == 1;
-    std::vector<std::string> args = {"rbsim", beam ? "beam" : "optimize", "--level", std::to_string(r.level), "--checkpoint", std::to_string(r.checkpoint)};
-    const std::string threads = Narrow(GetText(g_sThreads));
-    if (!threads.empty()) args.push_back("--threads"), args.push_back(threads);
-    if (r.gless) args.push_back("--gless");
-    if (beam) {
-        const std::vector<uint8_t> prefix(r.in.begin(), r.in.begin() + g_s.pos);
-        if (std::find(prefix.begin(), prefix.end(), (uint8_t)IN_RESTART) != prefix.end()) {
-            MessageBoxW(g_wnd, L"Beam search goes on from the shown frame; the route up to it must not contain R.", L"Search", MB_ICONINFORMATION);
-            return;
-        }
-        if (!prefix.empty()) args.push_back("--prefix"), args.push_back(EncodeInputsRLE(prefix));
-        static const char* widths[] = {"2000", "20000", "100000", "500000"};
-        const int wsel = std::max(0, std::min(3, (int)SendMessageW(g_sMem, CB_GETCURSEL, 0, 0)));
-        args.push_back("--width"), args.push_back(widths[wsel]);
-        args.push_back("--polish"), args.push_back(Narrow(GetText(g_sPolish)));
-        args.push_back("--max-frames"), args.push_back(Narrow(GetText(g_sMaxF)));
-        wchar_t tmp[MAX_PATH];
-        GetTempPathW(MAX_PATH, tmp);
-        args.push_back("--dir"), args.push_back(Narrow(std::wstring(tmp)) + "rbview_beam_L" + std::to_string(r.level));
-        args.push_back("--save-every"), args.push_back("100000");
-    } else {
-        if (r.in.empty() || std::find(r.in.begin(), r.in.end(), (uint8_t)IN_RESTART) != r.in.end()) {
-            MessageBoxW(g_wnd, L"Optimize improves a route that takes the flag in one attempt (no R).", L"Search", MB_ICONINFORMATION);
-            return;
-        }
-        args.push_back("--inputs"), args.push_back(EncodeInputsRLE(r.in));
-        args.push_back("--time"), args.push_back(Narrow(GetText(g_sTime)));
-    }
-    SendMessageW(g_sLog, LB_RESETCONTENT, 0, 0);
-    std::string cmd;
-    for (const std::string& a : args) cmd += a + " ";
-    SendMessageW(g_sLog, LB_ADDSTRING, 0, (LPARAM)Widen("> " + cmd).c_str());
-    g_searchBest.clear();
-    g_searchBase = r;
-    g_searchCancel = false;
-    g_outSink = SearchSink;
-    g_searchRunning = true;
-    SetDisplayControls();
-    EnableWindow(g_sStart, FALSE);
-    EnableWindow(g_sStop, TRUE);
-    EnableWindow(g_sLoad, FALSE);
-    SetText(g_sStatus, L"running...");
-    if (g_searchThread.joinable()) g_searchThread.join();
-    g_searchThread = std::thread([args, beam]() {
-        std::vector<std::string> a = args;
-        std::vector<char*> argv;
-        for (std::string& s : a) argv.push_back(&s[0]);
-        int rc = 1;
-        try {
-            rc = beam ? CmdBeam((int)argv.size(), argv.data()) : CmdOptimize((int)argv.size(), argv.data());
-        } catch (const std::bad_alloc&) {
-            Err("out of memory: lower the Memory setting\n");
-        } catch (const std::exception& e) {
-            Err("search failed: %s\n", e.what());
-        }
-        PostMessageW(g_wnd, WM_SEARCH_DONE, (WPARAM)rc, 0);
-    });
-}
-
-static bool LooksLikeRoute(const std::string& s) {
-    if (s.size() < 2 || !std::isalpha((unsigned char)s[0])) return false;
-    for (char c : s)
-        if (!std::isdigit((unsigned char)c) && std::string("ndweaSqWR").find(c) == std::string::npos) return false;
-    return true;
-}
-
 // ------------------------------------------------------------------ the mod's keys
 static uint8_t HeldCode() { return tas::KeysToCode(g_heldL || g_tapL, g_heldU || g_tapU, g_heldR || g_tapR); }
 static void ClearTaps() { g_tapL = g_tapU = g_tapR = false; }
@@ -1412,7 +1308,7 @@ static bool TasKey(UINT msg, WPARAM wp, LPARAM lp) {
             case VK_RETURN: s.BruteApply(); break;
             default: return true;
         }
-        ShowTab(4);
+        ShowTab(3);
         RefreshAll();
         return true;
     }
@@ -1540,7 +1436,7 @@ static bool TasKey(UINT msg, WPARAM wp, LPARAM lp) {
                 return true;
             case 'B':
                 if (runningPlayback) break;
-                if (shift) s.BruteEnd(), ShowTab(4);
+                if (shift) s.BruteEnd(), ShowTab(3);
                 else s.BruteStart(HeldCode());
                 RefreshAll();
                 return true;
@@ -1571,27 +1467,10 @@ static bool TasKey(UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 // ------------------------------------------------------------------ layout
-// The Search tab shows the settings of the chosen mode only, with a short explanation.
-static void ShowSearchMode() {
-    const bool beam = SendMessageW(g_sMode, CB_GETCURSEL, 0, 0) == 1;
-    SetWindowTextW(g_sHelp,
-                   beam ? L"Plays every key combination on every frame from the shown frame on, keeps the most promising "
-                          L"states (Beam width) until one takes the flag, then improves that route for Polish seconds. "
-                          L"The route up to the shown frame is kept. A wider beam finds better routes but takes longer "
-                          L"(time grows with the width): start with Quick or Normal."
-                        : L"Tries small random edits to the whole route (a jump a frame earlier, a key held a frame longer, "
-                          L"...) and keeps every edit that takes the flag sooner. Needs a route that reaches the flag; runs "
-                          L"for Time seconds. Good after a beam search or on a TAS.");
-    if (TabCtrl_GetCurSel(g_tabs) != 3) return;
-    for (HWND h : {g_lblSMem, g_sMem, g_lblSPolish, g_sPolish, g_lblSMaxF, g_sMaxF}) ShowWindow(h, beam ? SW_SHOW : SW_HIDE);
-    for (HWND h : {g_lblSTime, g_sTime}) ShowWindow(h, beam ? SW_HIDE : SW_SHOW);
-}
-
 static void ShowTab(int t) {
     TabCtrl_SetCurSel(g_tabs, t);
     for (int i = 0; i < NPAGES; ++i)
         for (HWND h : g_pages[i]) ShowWindow(h, i == t ? SW_SHOW : SW_HIDE);
-    ShowSearchMode();
 }
 
 static void Layout() {
@@ -1679,32 +1558,6 @@ static void Layout() {
         int yy = py;
         MoveWindow(g_gInfo, px, yy, pw, S(90), TRUE), yy += S(96);
         for (HWND b : {g_gCur, g_gPaste, g_gOpen, g_gClear}) MoveWindow(b, px, yy, pw, rowH, TRUE), yy += rowH + S(4);
-    }
-    {  // Search
-        int yy = py;
-        MoveWindow(g_sMode, px, yy, pw, S(200), TRUE), yy += rowH + S(4);
-        MoveWindow(g_sHelp, px, yy, pw, S(84), TRUE), yy += S(88);
-        const int lw = S(84), ew = pw / 2 - lw - S(6);
-        // optimize: Time | Threads; beam: Beam width (whole row), then Polish | Threads, Max frames
-        MoveWindow(g_lblSTime, px, yy + S(4), lw, S(20), TRUE), MoveWindow(g_sTime, px + lw, yy, ew, rowH, TRUE);
-        MoveWindow(g_lblSMem, px, yy + S(4), lw, S(20), TRUE), MoveWindow(g_sMem, px + lw, yy, pw - lw, S(200), TRUE);
-        const bool beamMode = SendMessageW(g_sMode, CB_GETCURSEL, 0, 0) == 1;
-        if (beamMode) yy += rowH + S(4);
-        MoveWindow(g_lblSPolish, px, yy + S(4), lw, S(20), TRUE), MoveWindow(g_sPolish, px + lw, yy, ew, rowH, TRUE);
-        MoveWindow(g_lblSThreads, px + pw / 2, yy + S(4), lw, S(20), TRUE), MoveWindow(g_sThreads, px + pw / 2 + lw, yy, ew, rowH, TRUE);
-        yy += rowH + S(4);
-        if (beamMode) {
-            MoveWindow(g_lblSMaxF, px, yy + S(4), lw, S(20), TRUE), MoveWindow(g_sMaxF, px + lw, yy, ew, rowH, TRUE);
-            yy += rowH + S(4);
-        }
-        yy += S(2);
-        const int bw3 = (pw - 2 * S(4)) / 3;
-        MoveWindow(g_sStart, px, yy, bw3, rowH, TRUE);
-        MoveWindow(g_sStop, px + bw3 + S(4), yy, bw3, rowH, TRUE);
-        MoveWindow(g_sLoad, px + 2 * (bw3 + S(4)), yy, bw3, rowH, TRUE);
-        yy += rowH + S(4);
-        MoveWindow(g_sStatus, px, yy, pw, S(36), TRUE), yy += S(38);
-        MoveWindow(g_sLog, px, yy, pw, py + ph - yy, TRUE);
     }
     {  // Brute force
         int yy = py;
@@ -1840,7 +1693,7 @@ static void FillWarpFields() {
 }
 
 static void OnCommand(int id, int code, HWND ctl) {
-    const bool isCombo = id == ID_LEVEL || id == ID_CHECKPOINT || id == ID_SPIKES || id == ID_SCALE || id == ID_SMODE || id == ID_SMEM;
+    const bool isCombo = id == ID_LEVEL || id == ID_CHECKPOINT || id == ID_SPIKES || id == ID_SCALE;
     if (id == ID_WINDOW) {
         if (code == CBN_SELCHANGE) {
             const int sel = (int)SendMessageW(g_window, CB_GETCURSEL, 0, 0);
@@ -1858,17 +1711,9 @@ static void OnCommand(int id, int code, HWND ctl) {
         return;
     }
     if (isCombo && code != CBN_SELCHANGE) return;
-    if ((id == ID_EVENTS || id == ID_SLOTS || id == ID_NAMED || id == ID_BACKUPS || id == ID_BLIST || id == ID_SLOG) && code != LBN_SELCHANGE &&
-        code != LBN_DBLCLK)
+    if ((id == ID_EVENTS || id == ID_SLOTS || id == ID_NAMED || id == ID_BACKUPS || id == ID_BLIST) && code != LBN_SELCHANGE && code != LBN_DBLCLK)
         return;
-    if (id == ID_INPUTS || id == IDC_CMD || id == ID_STIME || id == ID_STHREADS || id == ID_SPOLISH || id == ID_SMAXF) return;
-    if (id == ID_SMEM) return;
-    if (id == ID_SMODE) {
-        ShowSearchMode();
-        Layout();
-        RedrawWindow(g_wnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
-        return;
-    }
+    if (id == ID_INPUTS || id == IDC_CMD) return;
     tas::Session& s = g_s;
     bool keepFocus = false;
     switch (id) {
@@ -1939,16 +1784,11 @@ static void OnCommand(int id, int code, HWND ctl) {
         case ID_TRAIL: g_trail_on = Checked(g_trail); break;
         case ID_HUD: g_hud = Checked(g_hudBox); break;
         case IDC_CMDRUN: {
-            const std::string line = Narrow(GetText(g_cmd));
-            if (line.find("mathspikes") != std::string::npos && g_searchRunning) {
-                s.feedback = "Stop the search before changing the spike rule";
-            } else {
-                const tas::CommandResult r = tas::RunCommand(s, line, g_decimals);
-                if (r.remapReset) std::fill(g_remap, g_remap + 256, 0);
-                if (r.remapFrom > 0 && r.remapFrom < 256 && r.remapTo > 0 && r.remapTo < 256) g_remap[r.remapFrom] = r.remapTo;
-                if (r.displayChanged) s.Load(s.route(), s.pos);
-                if (!r.feedback.empty()) s.feedback = r.feedback;
-            }
+            const tas::CommandResult r = tas::RunCommand(s, Narrow(GetText(g_cmd)), g_decimals);
+            if (r.remapReset) std::fill(g_remap, g_remap + 256, 0);
+            if (r.remapFrom > 0 && r.remapFrom < 256 && r.remapTo > 0 && r.remapTo < 256) g_remap[r.remapFrom] = r.remapTo;
+            if (r.displayChanged) s.Load(s.route(), s.pos);
+            if (!r.feedback.empty()) s.feedback = r.feedback;
             SetWindowTextW(g_cmd, L"");
             break;
         }
@@ -2056,20 +1896,6 @@ static void OnCommand(int id, int code, HWND ctl) {
             g_ghostOn = false;
             RefreshGhostInfo();
             break;
-        case ID_SSTART: StartSearch(); keepFocus = true; break;
-        case ID_SSTOP: g_searchCancel = true; keepFocus = true; break;
-        case ID_SLOAD:
-            if (!g_searchBest.empty()) {
-                tas::Route r = g_searchBase;
-                r.in = DecodeInputs(g_searchBest);
-                // the searches play "no input" after the end of a route: add those frames up to the flag
-                tas::Timeline t;
-                t.Build(r);
-                for (int k = 0; k < 600 && t.winIndex() < 0; ++k) t.Append(IN_NONE);
-                if (t.winIndex() >= 0) r.in = t.route().in;
-                LoadRouteObject(r, false);
-            }
-            break;
         case ID_BUP: s.brute.Adjust(1, s.tl); break;
         case ID_BDOWN: s.brute.Adjust(-1, s.tl); break;
         case ID_BNEXT:
@@ -2081,7 +1907,6 @@ static void OnCommand(int id, int code, HWND ctl) {
             s.brute.choice = std::max(0, (int)SendMessageW(g_bList, LB_GETCURSEL, 0, 0));
             if (code == LBN_DBLCLK) s.BruteApply();
             break;
-        case ID_SLOG: return;
         default: return;
     }
     const bool dropped = isCombo && ctl && SendMessageW(ctl, CB_GETDROPPEDSTATE, 0, 0);
@@ -2147,37 +1972,37 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             g_speedLbl = MakeCtl(L"STATIC", L"1x", 0, 0);
             g_follow = MakeCtl(L"BUTTON", L"Follow camera", BS_AUTOCHECKBOX, ID_FOLLOW);
             // Options tab: everything the mod does with keys or commands, as controls
-            g_grpPlay = MakeCtl(L"BUTTON", L"Playback", BS_GROUPBOX, 0, 0, 5);
-            g_realtime = MakeCtl(L"BUTTON", L"Loading a state plays it back in real time (U)", BS_AUTOCHECKBOX, ID_REALTIME, 0, 5);
-            g_fast = MakeCtl(L"BUTTON", L"Fast playback, 64 frames per frame (Shift+U)", BS_AUTOCHECKBOX, ID_OFAST, 0, 5);
-            g_lblEnd = MakeCtl(L"STATIC", L"When a playback reaches the end of the route:", 0, 0, 0, 5);
-            g_pauseEnd = MakeCtl(L"BUTTON", L"pause there", BS_AUTORADIOBUTTON | WS_GROUP, ID_OPAUSEEND, 0, 5);
-            g_keepEnd = MakeCtl(L"BUTTON", L"keep running and record my keys (like the mod)", BS_AUTORADIOBUTTON, ID_OKEEPEND, 0, 5);
-            g_lblFlag = MakeCtl(L"STATIC", L"(After the flag the run is over: the clock always stops there.)", 0, 0, 0, 5);
-            g_grpView = MakeCtl(L"BUTTON", L"Display", BS_GROUPBOX, 0, 0, 5);
-            g_hudBox = MakeCtl(L"BUTTON", L"HUD: the mod's numbers and keys (H)", BS_AUTOCHECKBOX, ID_HUD, 0, 5);
-            g_marksBox = MakeCtl(L"BUTTON", L"Graphics marks: spike hitboxes and the ball's control points (Shift+H)", BS_AUTOCHECKBOX, ID_OMARKS, 0, 5);
-            g_polysBox = MakeCtl(L"BUTTON", L"Physics outlines and the ball's 16 control points (J)", BS_AUTOCHECKBOX, ID_OPOLYS, 0, 5);
-            g_probesBox = MakeCtl(L"BUTTON", L"Jump probes: the 3 ground tests under the ball, green = touching (Shift+J)", BS_AUTOCHECKBOX, ID_OPROBES, 0, 5);
-            g_trail = MakeCtl(L"BUTTON", L"Show the path", BS_AUTOCHECKBOX, ID_TRAIL, 0, 5);
-            g_lblDec = MakeCtl(L"STATIC", L"HUD decimals: 4", 0, 0, 0, 5);
-            g_dec = MakeCtl(TRACKBAR_CLASSW, L"", TBS_HORZ | TBS_AUTOTICKS, ID_ODEC, 0, 5);
+            g_grpPlay = MakeCtl(L"BUTTON", L"Playback", BS_GROUPBOX, 0, 0, 4);
+            g_realtime = MakeCtl(L"BUTTON", L"Loading a state plays it back in real time (U)", BS_AUTOCHECKBOX, ID_REALTIME, 0, 4);
+            g_fast = MakeCtl(L"BUTTON", L"Fast playback, 64 frames per frame (Shift+U)", BS_AUTOCHECKBOX, ID_OFAST, 0, 4);
+            g_lblEnd = MakeCtl(L"STATIC", L"When a playback reaches the end of the route:", 0, 0, 0, 4);
+            g_pauseEnd = MakeCtl(L"BUTTON", L"pause there", BS_AUTORADIOBUTTON | WS_GROUP, ID_OPAUSEEND, 0, 4);
+            g_keepEnd = MakeCtl(L"BUTTON", L"keep running and record my keys (like the mod)", BS_AUTORADIOBUTTON, ID_OKEEPEND, 0, 4);
+            g_lblFlag = MakeCtl(L"STATIC", L"(After the flag the run is over: the clock always stops there.)", 0, 0, 0, 4);
+            g_grpView = MakeCtl(L"BUTTON", L"Display", BS_GROUPBOX, 0, 0, 4);
+            g_hudBox = MakeCtl(L"BUTTON", L"HUD: the mod's numbers and keys (H)", BS_AUTOCHECKBOX, ID_HUD, 0, 4);
+            g_marksBox = MakeCtl(L"BUTTON", L"Graphics marks: spike hitboxes and the ball's control points (Shift+H)", BS_AUTOCHECKBOX, ID_OMARKS, 0, 4);
+            g_polysBox = MakeCtl(L"BUTTON", L"Physics outlines and the ball's 16 control points (J)", BS_AUTOCHECKBOX, ID_OPOLYS, 0, 4);
+            g_probesBox = MakeCtl(L"BUTTON", L"Jump probes: the 3 ground tests under the ball, green = touching (Shift+J)", BS_AUTOCHECKBOX, ID_OPROBES, 0, 4);
+            g_trail = MakeCtl(L"BUTTON", L"Show the path", BS_AUTOCHECKBOX, ID_TRAIL, 0, 4);
+            g_lblDec = MakeCtl(L"STATIC", L"HUD decimals: 4", 0, 0, 0, 4);
+            g_dec = MakeCtl(TRACKBAR_CLASSW, L"", TBS_HORZ | TBS_AUTOTICKS, ID_ODEC, 0, 4);
             SendMessageW(g_dec, TBM_SETRANGE, TRUE, MAKELPARAM(0, 10));
-            g_grpWarp = MakeCtl(L"BUTTON", L"Warp the ball (the mod's /set)", BS_GROUPBOX, 0, 0, 5);
-            g_lblWarp = MakeCtl(L"STATIC", L"Replaces the ball at the shown frame. The warp stays in the route (rbview replays it, the game cannot).", 0, 0, 0, 5);
+            g_grpWarp = MakeCtl(L"BUTTON", L"Warp the ball (the mod's /set)", BS_GROUPBOX, 0, 0, 4);
+            g_lblWarp = MakeCtl(L"STATIC", L"Replaces the ball at the shown frame. The warp stays in the route (rbview replays it, the game cannot).", 0, 0, 0, 4);
             {
                 const wchar_t* wl[5] = {L"vx (m/s)", L"vy (m/s)", L"vrot (HUD)", L"x (m)", L"y (m)"};
                 for (int i = 0; i < 5; ++i) {
-                    g_wLbl[i] = MakeCtl(L"STATIC", wl[i], 0, 0, 0, 5);
-                    g_wEdit[i] = MakeCtl(L"EDIT", L"0", ES_AUTOHSCROLL, 0, WS_EX_CLIENTEDGE, 5);
+                    g_wLbl[i] = MakeCtl(L"STATIC", wl[i], 0, 0, 0, 4);
+                    g_wEdit[i] = MakeCtl(L"EDIT", L"0", ES_AUTOHSCROLL, 0, WS_EX_CLIENTEDGE, 4);
                 }
             }
-            g_wFill = MakeCtl(L"BUTTON", L"Take the ball's values", BS_PUSHBUTTON, ID_WFILL, 0, 5);
-            g_wApply = MakeCtl(L"BUTTON", L"Warp at this frame", BS_PUSHBUTTON, ID_WAPPLY, 0, 5);
-            g_wClear = MakeCtl(L"BUTTON", L"Remove all warps", BS_PUSHBUTTON, ID_WCLEAR, 0, 5);
-            g_grpKeys = MakeCtl(L"BUTTON", L"Keys", BS_GROUPBOX, 0, 0, 5);
-            g_lblKeys = MakeCtl(L"STATIC", L"Every key of the mod, and remapping (the mod's /remap):", 0, 0, 0, 5);
-            g_oKeys = MakeCtl(L"BUTTON", L"Keys and remapping...", BS_PUSHBUTTON, ID_OKEYS, 0, 5);
+            g_wFill = MakeCtl(L"BUTTON", L"Take the ball's values", BS_PUSHBUTTON, ID_WFILL, 0, 4);
+            g_wApply = MakeCtl(L"BUTTON", L"Warp at this frame", BS_PUSHBUTTON, ID_WAPPLY, 0, 4);
+            g_wClear = MakeCtl(L"BUTTON", L"Remove all warps", BS_PUSHBUTTON, ID_WCLEAR, 0, 4);
+            g_grpKeys = MakeCtl(L"BUTTON", L"Keys", BS_GROUPBOX, 0, 0, 4);
+            g_lblKeys = MakeCtl(L"STATIC", L"Every key of the mod, and remapping (the mod's /remap):", 0, 0, 0, 4);
+            g_oKeys = MakeCtl(L"BUTTON", L"Keys and remapping...", BS_PUSHBUTTON, ID_OKEYS, 0, 4);
             g_slider = MakeCtl(TRACKBAR_CLASSW, L"", TBS_HORZ | TBS_NOTICKS, ID_SLIDER);
             // row 4
             g_cmd = MakeCtl(L"EDIT", L"", ES_AUTOHSCROLL | WS_TABSTOP, IDC_CMD, WS_EX_CLIENTEDGE);
@@ -2189,7 +2014,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             g_canvas = CreateWindowExW(WS_EX_CLIENTEDGE, L"RbCanvas", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 10, 10, h, (HMENU)ID_CANVAS,
                                        GetModuleHandleW(nullptr), nullptr);
             g_tabs = MakeCtl(WC_TABCONTROLW, L"", WS_CLIPSIBLINGS, ID_TABS);
-            const wchar_t* tabNames[NPAGES] = {L"Events", L"States", L"Ghost", L"Search", L"Brute force", L"Options"};
+            const wchar_t* tabNames[NPAGES] = {L"Events", L"States", L"Ghost", L"Brute force", L"Options"};
             for (int i = 0; i < NPAGES; ++i) {
                 TCITEMW ti = {};
                 ti.mask = TCIF_TEXT;
@@ -2221,39 +2046,14 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             g_gPaste = MakeCtl(L"BUTTON", L"Paste a route as ghost", BS_PUSHBUTTON, ID_GPASTE, 0, 2);
             g_gOpen = MakeCtl(L"BUTTON", L"Open a route or log as ghost...", BS_PUSHBUTTON, ID_GOPEN, 0, 2);
             g_gClear = MakeCtl(L"BUTTON", L"No ghost", BS_PUSHBUTTON, ID_GCLEAR, 0, 2);
-            g_sMode = MakeCtl(L"COMBOBOX", L"", CBS_DROPDOWNLIST, ID_SMODE, 0, 3);
-            SendMessageW(g_sMode, CB_ADDSTRING, 0, (LPARAM)L"Improve the current route (optimize)");
-            SendMessageW(g_sMode, CB_ADDSTRING, 0, (LPARAM)L"Find a route from the shown frame (beam search)");
-            SendMessageW(g_sMode, CB_SETCURSEL, 0, 0);
-            g_sHelp = MakeCtl(L"STATIC", L"", 0, 0, 0, 3);
-            g_lblSTime = MakeCtl(L"STATIC", L"Time (s)", 0, 0, 0, 3);
-            g_sTime = MakeCtl(L"EDIT", L"60", ES_AUTOHSCROLL, ID_STIME, WS_EX_CLIENTEDGE, 3);
-            g_lblSThreads = MakeCtl(L"STATIC", L"Threads", 0, 0, 0, 3);
-            g_sThreads = MakeCtl(L"EDIT", std::to_wstring(std::max(1u, std::thread::hardware_concurrency() - 1)).c_str(), ES_AUTOHSCROLL, ID_STHREADS,
-                                 WS_EX_CLIENTEDGE, 3);
-            g_lblSMem = MakeCtl(L"STATIC", L"Beam width", 0, 0, 0, 3);
-            g_sMem = MakeCtl(L"COMBOBOX", L"", CBS_DROPDOWNLIST, ID_SMEM, 0, 3);
-            for (const wchar_t* t : {L"Quick: 2,000 states", L"Normal: 20,000 states", L"Deep: 100,000 states", L"Huge: 500,000 states"})
-                SendMessageW(g_sMem, CB_ADDSTRING, 0, (LPARAM)t);
-            SendMessageW(g_sMem, CB_SETCURSEL, 1, 0);
-            g_lblSPolish = MakeCtl(L"STATIC", L"Polish (s)", 0, 0, 0, 3);
-            g_sPolish = MakeCtl(L"EDIT", L"60", ES_AUTOHSCROLL, ID_SPOLISH, WS_EX_CLIENTEDGE, 3);
-            g_lblSMaxF = MakeCtl(L"STATIC", L"Max frames", 0, 0, 0, 3);
-            g_sMaxF = MakeCtl(L"EDIT", L"3000", ES_AUTOHSCROLL, ID_SMAXF, WS_EX_CLIENTEDGE, 3);
-            g_sStart = MakeCtl(L"BUTTON", L"Start", BS_PUSHBUTTON, ID_SSTART, 0, 3);
-            g_sStop = MakeCtl(L"BUTTON", L"Stop", BS_PUSHBUTTON | WS_DISABLED, ID_SSTOP, 0, 3);
-            g_sLoad = MakeCtl(L"BUTTON", L"Load result", BS_PUSHBUTTON | WS_DISABLED, ID_SLOAD, 0, 3);
-            g_sStatus = MakeCtl(L"STATIC", L"Searches use the level, start, glitchless and spike settings above.", 0, ID_SSTATUS, 0, 3);
-            g_sLog = MakeCtl(L"LISTBOX", L"", WS_VSCROLL | WS_HSCROLL | LBS_NOINTEGRALHEIGHT | LBS_NOTIFY, ID_SLOG, WS_EX_CLIENTEDGE, 3);
-            SendMessageW(g_sLog, LB_SETHORIZONTALEXTENT, (WPARAM)S(2400), 0);
             SendMessageW(g_backups, LB_SETHORIZONTALEXTENT, (WPARAM)S(1200), 0);
-            g_bInfo = MakeCtl(L"STATIC", L"", 0, ID_BINFO, 0, 4);
-            g_bUp = MakeCtl(L"BUTTON", L"Higher (W)", BS_PUSHBUTTON, ID_BUP, 0, 4);
-            g_bDown = MakeCtl(L"BUTTON", L"Lower (S)", BS_PUSHBUTTON, ID_BDOWN, 0, 4);
-            g_bNext = MakeCtl(L"BUTTON", L"Next (Space)", BS_PUSHBUTTON, ID_BNEXT, 0, 4);
-            g_bApply = MakeCtl(L"BUTTON", L"Load (Enter)", BS_PUSHBUTTON, ID_BAPPLY, 0, 4);
-            g_bLeave = MakeCtl(L"BUTTON", L"Leave (Esc)", BS_PUSHBUTTON, ID_BLEAVE, 0, 4);
-            g_bList = MakeCtl(L"LISTBOX", L"", WS_VSCROLL | WS_HSCROLL | LBS_NOINTEGRALHEIGHT | LBS_NOTIFY, ID_BLIST, WS_EX_CLIENTEDGE, 4);
+            g_bInfo = MakeCtl(L"STATIC", L"", 0, ID_BINFO, 0, 3);
+            g_bUp = MakeCtl(L"BUTTON", L"Higher (W)", BS_PUSHBUTTON, ID_BUP, 0, 3);
+            g_bDown = MakeCtl(L"BUTTON", L"Lower (S)", BS_PUSHBUTTON, ID_BDOWN, 0, 3);
+            g_bNext = MakeCtl(L"BUTTON", L"Next (Space)", BS_PUSHBUTTON, ID_BNEXT, 0, 3);
+            g_bApply = MakeCtl(L"BUTTON", L"Load (Enter)", BS_PUSHBUTTON, ID_BAPPLY, 0, 3);
+            g_bLeave = MakeCtl(L"BUTTON", L"Leave (Esc)", BS_PUSHBUTTON, ID_BLEAVE, 0, 3);
+            g_bList = MakeCtl(L"LISTBOX", L"", WS_VSCROLL | WS_HSCROLL | LBS_NOINTEGRALHEIGHT | LBS_NOTIFY, ID_BLIST, WS_EX_CLIENTEDGE, 3);
             SendMessageW(g_bList, LB_SETHORIZONTALEXTENT, (WPARAM)S(1600), 0);
             for (int p = 0; p < NPAGES; ++p)
                 for (HWND c : g_pages[p]) SetWindowPos(c, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
@@ -2426,53 +2226,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             if (nm->hwndFrom == g_tabs && nm->code == TCN_SELCHANGE) {
                 ShowTab(TabCtrl_GetCurSel(g_tabs));
                 RefreshStates();
-                if (TabCtrl_GetCurSel(g_tabs) == 5) FillWarpFields();
+                if (TabCtrl_GetCurSel(g_tabs) == 4) FillWarpFields();
             }
             return 0;
         }
-        case WM_SEARCH_LINE: {
-            std::string* s = (std::string*)lp;
-            const int i = (int)SendMessageW(g_sLog, LB_ADDSTRING, 0, (LPARAM)Widen(*s).c_str());
-            SendMessageW(g_sLog, LB_SETTOPINDEX, (WPARAM)std::max(0, i - 6), 0);
-            // an improvement ("  frame N, margin ...  RLE") or the final route line
-            std::string t = *s;
-            while (!t.empty() && t.back() == ' ') t.pop_back();
-            const size_t sp = t.find_last_of(' ');
-            const std::string last = sp == std::string::npos ? t : t.substr(sp + 1);
-            // beam progress: "frame N  width W  best distance D px  no flag yet | flag on frame F  ..."
-            if (t.rfind("frame ", 0) == 0 && t.find("best distance") != std::string::npos) {
-                int fr = 0, wd = 0;
-                double dist = 0;
-                char flag[64] = "";
-                if (std::sscanf(t.c_str(), "frame %d width %d best distance %lf px %63[^0-9]", &fr, &wd, &dist, flag) >= 3) {
-                    const size_t f = t.find("flag on frame ");
-                    std::wstring st = L"searching: frame " + std::to_wstring(fr) + L", " + std::to_wstring(wd) + L" states; closest " +
-                                      std::to_wstring((int)dist) + L" px from the flag";
-                    st += f != std::string::npos ? L"; " + Widen(t.substr(f, t.find("  ", f) - f)) + L" so far" : L"; no flag yet";
-                    SetText(g_sStatus, st);
-                }
-            } else if (t.rfind("polishing", 0) == 0) {
-                SetText(g_sStatus, L"route found: polishing it (optimize)...");
-            }
-            if (LooksLikeRoute(last)) {
-                g_searchBest = last;
-                EnableWindow(g_sLoad, TRUE);
-                std::string head = t.substr(0, t.size() - last.size());
-                while (!head.empty() && head.back() == ' ') head.pop_back();
-                SetText(g_sStatus, Widen("best so far: " + (head.empty() ? std::to_string(DecodeInputs(last).size()) + " frames" : head)));
-            }
-            delete s;
-            return 0;
-        }
-        case WM_SEARCH_DONE:
-            if (g_searchThread.joinable()) g_searchThread.join();
-            g_outSink = nullptr;
-            g_searchRunning = false;
-            EnableWindow(g_sStart, TRUE);
-            EnableWindow(g_sStop, FALSE);
-            SetText(g_sStatus, g_searchBest.empty() ? L"finished without a route." : L"finished. Load result puts the best route in the editor.");
-            SetDisplayControls();
-            return 0;
         case WM_COMMAND:
             OnCommand(LOWORD(wp), HIWORD(wp), (HWND)lp);
             return 0;
@@ -2484,12 +2241,6 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             }
             break;
         case WM_CLOSE:
-            if (g_searchRunning) {
-                g_searchCancel = true;
-                if (g_searchThread.joinable()) g_searchThread.join();
-                g_outSink = nullptr;
-                g_searchRunning = false;
-            }
             DestroyWindow(h);
             return 0;
         case WM_DESTROY:

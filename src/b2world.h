@@ -4,7 +4,7 @@
 // Design:
 //   * All mutable simulation state lives inside `World` in fixed arrays linked
 //     by int indices (-1 = null). Copying a World (memcpy / operator=) is a
-//     complete snapshot, which is what the search needs.
+//     complete snapshot (rbsim smartforce branches by copying it).
 //   * Immutable shape geometry (polygon vertices, normals, OBB...) lives in a
 //     shared GeomTable that snapshots merely point at.
 //   * Per-step scratch (islands, contact constraints) is thread_local and never
@@ -148,6 +148,10 @@ struct Contact {
     int32_t manifoldCount = 0;
     Manifold manifold;
     int32_t nextFree = -1;
+    // speed-up (not in Box2DFlash): the bodies' transforms when CollideAll last evaluated this contact; while both
+    // are unchanged a new evaluation would reproduce the stored manifold exactly, so it is skipped
+    bool evalValid = false;
+    XForm evalXf1, evalXf2;
 };
 
 // ----------------------------------------------------------------- joints

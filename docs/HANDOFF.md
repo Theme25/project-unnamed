@@ -46,8 +46,7 @@ recorded in README.md ("Verification status") and below.
 | real-game spikes (`MATHSPIKES 0`, Tournament Edition) | exact at any window size / scale mode (`--mathspikes 0 --window WxH [--noscale]`, `src/flashpix.*`, `docs/RESOLUTION.md`): still sweeps (E8c 240,000, E11 1,172,010), per-frame edge scans (390 / 390) and 28 real-time playbacks at 7 window setups, bit-exact to the death frame. Recorded under Wine (team's 11.4 projector); one real-Windows log still to compare. MATHSPIKES 1/2 do not depend on the window (team's dumps at 5 sizes) |
 | death / death warp | exact: ball body destroyed, full `Update` keeps running (world, machinery), unguarded goal/checkpoint/switch tests; 5 logged warps verified (incl. L9 death 358 / flag 359, L11 onto the moving flag 1110 / 1117). Debris (random) not simulated |
 | Windows | MinGW-w64 build; checked under Wine 9: all tests, logs, calibrations identical. `rbview.exe` (viewer/, `make viewer`): double-click route viewer, tested under Wine + Xvfb with screenshots |
-| `rbsim optimize` | local search from a known route (works; does not beat the team's TASes in short runs) |
-| `rbsim beam` | beam search from any start, resumable, deterministic; quality limited by its score (section 7) |
+| `rbsim smartforce` | simulates every string of a hand-written input pattern, reports those meeting conditions (README) |
 
 Self-tests: `./rbsim test` → 95 tests, `ALL PASSED` (also under Wine).
 
@@ -65,8 +64,7 @@ Self-tests: `./rbsim test` → 95 tests, `ALL PASSED` (also under Wine).
 | `src/snapshot.cpp/.h` | compact snapshots (diff vs level start, ~6 KB, byte-exact, portable) |
 | `src/verify.cpp` | `rbsim verify`: replays stats logs, compares every field |
 | `src/calib.cpp` | `rbsim calib`: checks calibration dumps |
-| `src/search.cpp` | `rbsim optimize` |
-| `src/beam.cpp` | `rbsim beam` |
+| `src/smartforce.cpp` | `rbsim smartforce` |
 | `src/rbsim.cpp` | CLI, self-tests, bench |
 | `docs/STATS_LOGGING.md` | the logging mod spec (§3.0 is the current per-level format) and every calibration result |
 | `docs/WINDOWS.md` | end-user guide for `rbsim.exe` |
@@ -170,38 +168,19 @@ authoritative. Cross-check field writes for any newly ported engine code. Never 
   Exact (E8c 30,000/30,000). Only translated and quarter-turned spikes are calibrated.
 - `TextField` x/y include a 2 px text margin (irrelevant: never bodies).
 
-## 7. Search tools
+## 7. rbsim smartforce
 
-**`rbsim optimize --level N --inputs RLE`** (src/search.cpp): random local edits of a known route,
-replay from cached snapshots, score = flag frame then flag overlap depth, death-warp rule,
-`--threads`, `--evals N` (reproducible). Recovers deliberately slowed routes; no gains on the
-team's TASes in short runs.
+`rbsim smartforce` (src/smartforce.cpp) enumerates a hand-written input pattern (README). It replaces `rbsim optimize`,
+`rbsim beam` and the viewer's Search tab (in the git history up to 7a21128). Two engine fixes from that work stay:
+MinGW's `thread_local` destructor crashed threads at exit (the physics scratch buffers are fiber-local storage on
+Windows), and Level 4's drop platform ran out of body slots (dead slots are reused, only when full).
 
-**`rbsim beam --level N [--checkpoint C] [--prefix RLE] --memory 10G`** (src/beam.cpp):
-- Layer = frame; each state x 8 inputs; children that win are solutions; dying children are
-  played through the death-warp window immediately; exact duplicates merged (hash of the compact
-  encoding).
-- Score = navigation distance to the flag (Dijkstra on a 10 px grid of static geometry, built from
-  the start state) at the position `--lookahead` frames ahead (default 6). Moving bodies ignored.
-- Selection `--select mixed` (default: half by score with per-bucket `--diversity`, half coverage
-  first), `score`, `coverage`. `--seed-route RLE` keeps a known route in the beam. `--explain RLE`
-  prints a route's scores.
-- Width from `--memory` (default 4 GB) or `--width`; links per frame in `DIR/links`, beam saved to
-  `DIR/beam.bin` every `--save-every` minutes, `--resume`. Route rebuilt and replay-checked.
-- **Deterministic** across thread counts, kill -9 + resume, and Windows vs Linux (candidates are
-  ordered by score, parent, input; the hash covers struct padding so it must never be used for
-  ordering; `sqrt` not `hypot`).
-- Results (one core, small widths): Level 2 unseeded 191-215 (TAS 186), seeded 186; Level 4
-  mixed finds a death warp by itself (flag 353; TAS 274), `score` alone dies out at the crushers.
-- **Main limitation:** the score. On Level 2 a 20,000-wide beam was no better than 2,000-wide;
-  `--explain` showed the TAS line is behind the beam's best mid-level and overtakes late.
-- **Later session (beam review):** the Windows crash was MinGW's `thread_local` destructor at thread exit (the
-  physics scratch buffers; now fiber-local storage on Windows); "body capacity exceeded" on Level 4 (the drop
-  platform is re-created every frame the ball touches it) is fixed by reusing dead body slots, only when full;
-  duplicates are merged by a field hash (2x faster; the snapshot hash was 60% of the time); `--seed-route` now
-  coasts past the end of a route; `--diversity` defaults to width / 8 (the fixed 16 cut the TASes in their first
-  25 frames, `--trace`); `--polish SEC` (default 60) runs `optimize --keep <prefix>` on the result. Width 2,000, two
-  threads: Level 2 218 -> 191, Level 4 412 -> 282, Level 8 559 -> 533 (TASes 186, 274, 405).
+Its speed-ups keep every result: states are hashed and copied only where they can differ (bodies, shapes, contact
+slots and joints are only appended); each option resumes from the input prefix it shares with the previous one,
+repeating skipped merge checks from stored keys; threads take ranges of options; `--stochastic` keeps the states
+after the leading parts and, shared between threads, after 8/12/16 inputs of the next part. Engine: GJK support
+resolved at compile time, the position solver skips sin/cos for unchanged angles, islands without contacts skip the
+contact solver. Full 175,032-byte states matched the previous engine on all levels and checkpoints.
 
 Measured: compact state ~1.4 KB (L2) to ~9 KB avg / 17 KB worst (L8); encode ~10 us, decode ~5 us;
 sim speed per thread ~450k frames/s (L2), ~140k (L12 idle), ~36-60k (L8 with the car). Exhaustive
@@ -210,14 +189,13 @@ search grows ~2x per frame even with merging (prototype: last 16 frames of L8 ~2
 
 ## 8. Next steps
 
-The bruteforcer (beam/optimize work in section 7) is someone else's task. **The simulator is finished: all 17
+The search tools were removed (section 7). **The simulator is finished: all 17
 levels are bit-exact against Flash logs.** What follows records how the last seven got there.
 
 **Red Ball TAS (latest chat).** `rbview.exe` is now the Practice Hack's TAS mode on the simulator: the mod's keys
 and behaviour (Game.as KeyDownHandler, ported key by key into `viewer/tas.cpp`), plus:
 - unlimited named states and backups (`rbview_states.txt`);
 - a ghost route;
-- optimize/beam inside the program (the search code prints through `rb::Out`; `rb::g_searchCancel` stops it);
 - the BruteForcer.as jump tool, with every candidate simulated;
 - `/remap`, `/set` warps (`Sim::Warp`) and invincibility (`Sim::invincible`).
 
@@ -239,7 +217,7 @@ Both are in the model, and self-tests 21-22 lock them. Tooling: `tools/framescan
 
 **Scripted from the AS3 (chat before last):** levels 9, 10, 11, 13, 15, 16, 17 (`Level_N.as` of the
 Practice Hack SWF). Bodies and joints in AS3 order; polygons from `src/level_polys.h`. `LevelVerified()` /
-`WarnIfUnverified()` make run, optimize and beam on an unverified level print a warning. AS3 quirks
+`WarnIfUnverified()` make run, log and smartforce on an unverified level print a warning. AS3 quirks
 reproduced: Level 17 `movePlatform2BodyDirection` never initialised (0) and `movePlatform1` direction set
 twice; Level 16 `wrongWay` resetting `lastCheckNum` (alive or dead); Level 15 `luk` only at
 `lastCheckNum == 0`; no-op repeated `DestroyBody`; Level 11's `levelAim` is a **dynamic body**
@@ -335,10 +313,6 @@ win 338. Not logged: `movePlatform2` (direction starts at 0, reproduced).
 
 Every idle prediction made before the logs arrived (Levels 9, 10, 11, 13, 15, 16, 17) matched Flash.
 
-**Search-side next steps** (for whoever takes the bruteforcer): better beam score (moving platforms /
-timing, calibrate with `--explain` against L2 186, L4 274, L8 405); exhaustive window proofs and endgame
-proofs; physics profiling for contact-heavy levels (must stay bit-exact).
-
 ## 9. Environment setup (fresh sandbox)
 
 ```bash
@@ -377,7 +351,6 @@ Symbol ids: `Levels.Level_1` 401, `_2` 355, `_3` 575, `_4` 561, `_5` 125, `_6` 4
 - Tool calls time out at 300 s: run long jobs detached
   (`setsid nohup sh -c '... > log 2>&1' &`) and poll the log. Kill with `pkill -x rbsim`
   (`pkill -f` can match and kill your own shell).
-- Two runs writing the same beam `--dir`/log corrupt each other.
 
 ## 10. Verification and delivery workflow
 

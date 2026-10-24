@@ -80,7 +80,7 @@ Existing logs and routes on plain-spike levels (3, 6, 7, 8, 12, 13, 14, 16) are 
 On 9, 10, 11, 15 and 17, a route that relied on a lucky rounding at the reference resolution may need
 re-checking.
 
-**Simulator:** `./rbsim <cmd> --mathspikes 2 ...` (search, verify, run, calib). `verify` also switches
+**Simulator:** `./rbsim <cmd> --mathspikes 2 ...` (smartforce, verify, run, calib). `verify` also switches
 automatically when a log's `# config` line says `mathspikes 2`. The C++ (`BallHitsSpikeMath` in
 `src/redball.cpp`) mirrors the AS3 operation for operation, so MATHSPIKES 2 decisions should match Flash
 bit for bit. Confirmed by the team's MATHSPIKES 2 dumps (§2).

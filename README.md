@@ -3,7 +3,7 @@
 A C++17 port of the Box2DFlash 2.0.x engine embedded in *Red Ball 1* (practice-hack / tournament
 SWFs; their Box2D code is byte-identical), plus all of the game-side logic: the 17 level scripts,
 display-layer hit tests, camera, standardized spikes, death and death warps. It is the foundation
-for brute-force route search.
+for TAS route work.
 
 **Reference:** Flash Player **11.4.402.287** with the Practice Hack, `MATHSPIKES = 1`, spike glitch
 on (`isGless` off; glitchless mode is supported too). "Bit-exact" means every logged value of every
@@ -17,9 +17,9 @@ frame matches that Flash Player to the last bit.
 | display layer | ported from Flash Player 11.4 itself (decompiled, `docs/FLASH_PLAYER_RE.md`) and checked against every dump: rotation matrices, hit-test boxes, camera, plain spikes (E8c 30,000/30,000), turned/scaled spikes (E11 390,670/390,670), the turned Level 11 flag (E12 148,074/148,074) |
 | real-game spikes | the original game's / Tournament Edition's pixel spike test (`--mathspikes 0`) at any window size and scale mode, including the moving-camera spike glitch: 28 real-time Flash playbacks bit-exact to the death frame (`docs/RESOLUTION.md`) |
 | death | death warps (onto checkpoints, flags, a moving flag, the Level 16 wrong-way trigger) and real-game pause timing |
-| platforms | Linux and Windows (x86-64), identical results; `rbview.exe`: the Practice Hack's TAS mode for Windows (same keys) with savestates, ghost, search and route viewer |
-| search | `rbsim beam` (finds routes from any start, resumable), `rbsim optimize` (improves a known route) |
-| tests | `rbsim test`: 95 self-tests; `make tastest`: the TAS core of the viewer |
+| platforms | Linux and Windows (x86-64), identical results; `rbview.exe`: the Practice Hack's TAS mode for Windows (same keys) with savestates, ghost and route viewer |
+| smartforce | `rbsim smartforce`: simulates every string of an input pattern and reports those meeting conditions |
+| tests | `rbsim test`: 97 self-tests; `make tastest`: the TAS core of the viewer |
 
 ## Red Ball TAS / route viewer (Windows, no command line)
 
@@ -34,7 +34,6 @@ Backspace rewind, R/F restarts, G invincibility, Shift+G glitchless, H/J overlay
 - savestates without a limit, with names, kept in a file, plus backups of every route a restart, rewind or load
   replaced;
 - a ghost route to race against;
-- rbsim's optimize/beam searches inside the program;
 - the jump brute-forcer's candidates actually simulated;
 - remappable keys that stay out of the way while you type;
 - the route viewer: seek any frame, events list, death-warp ghost, path, HUD, Flash's spike test at any window size.
@@ -45,7 +44,7 @@ To publish a new version: create a GitHub release (new tag, e.g. `v1.1`) and att
 exactly `rbview.exe`, so the download link above keeps pointing at the newest one
 (`gh release create v1.1 rbview.exe --title "..." --notes "..."` does the same from the command line).
 
-![rbview: Level 2, an optimized route against a slower ghost, with the HUD and the path](docs/rbview.png)
+![rbview: Level 2, a route against a slower ghost, with the HUD and the path](docs/rbview.png)
 
 ## Build & run
 
@@ -60,8 +59,7 @@ make                 # see "Build flags" below; do not change them
 ./rbsim bench [--frames N]                # throughput
 ./rbsim verify rb1_stats.tsv [--verbose N] [--ignore sr,...] [--gless 0|1] [--trig intel|glibc]
 ./rbsim calib rb1_calib.tsv                # checks a calibration dump (docs/STATS_LOGGING.md)
-./rbsim optimize --level N --inputs RLE    # improve a known route, see below
-./rbsim beam --level N --memory 10G        # find a route from any start, see below
+./rbsim smartforce --level N --inputs PATTERN --report CONDITIONS   # try many routes at once, see below
 # any command: --mathspikes 1|2 picks the spike rule (docs/MATHSPIKES_RESOLUTION.md);
 #   --mathspikes 0 --window WxH [--noscale]: the original game / Tournament Edition at that window (docs/RESOLUTION.md)
 make framescan && tools/framescan rb1_stats.tsv      # checks the frame-scan mod's edge scans (docs/RESOLUTION.md)
@@ -98,111 +96,111 @@ to preserve the registers the Windows x64 calling convention requires. The simul
 on the host's math library (it only uses exact functions: `sqrt`, `fmod`, `floor`, `trunc`).
 
 Checked under Wine 9 after every change: all self-tests, the calibration dumps and the stats logs give
-the same results as Linux. Seeded `optimize` and `beam` runs were checked to print identical routes
-when those commands were added.
+the same results as Linux.
 
 **Build flags:** use the Makefile's (`-O2 -ffp-contract=off -fno-fast-math
 -fexcess-precision=standard`, `-pthread`). `-O3 -march=native` breaks bit-exactness on Levels 3, 8
 and 12 and is not faster. Never add fast-math, FMA contraction or `-march` flags.
 
-## Searching for faster routes: `rbsim optimize`
+## Trying many routes at once: `rbsim smartforce`
 
 ```
-rbsim optimize --level N --inputs RLE [--checkpoint C] [--time SEC] [--threads N]
-               [--seed S] [--sideways P] [--evals N] [--gless] [--quiet]
+rbsim smartforce --level N --inputs PATTERN [--report CONDITIONS] [--checkpoint C] [--gless] [--pad N]
+                 [--threads N] [--top N] [--list] [--names] [--idle-up] [--hardfilter [--tolerance T]]
+                 [--merge-report] [--maxmem GB] [--stochastic [--time SEC] [--samples N] [--seed S]]
+                 [--sortby [-]Q] [--save [FILE]]
 ```
 
-Starts from an existing route (one attempt, no `R`) and searches for edits that collect the flag
-earlier. Each thread repeatedly applies a random edit to the current best route (flip a frame,
-move a run boundary by 1-3 frames, delete or insert a frame, overwrite a 2-8 frame block, or two
-of these), replays it from a cached snapshot taken just before the first changed frame, and stops
-as soon as it can no longer match the best.
+`--save` writes the result rows to a file when the search ends (also after Ctrl+C): all rows kept, not
+just `--top`, after comment lines with the command, the start time and (`--stochastic`) the seed; each row's
+inputs are on an indented line of their own, so long strings wrap without breaking the columns. The file is
+`smartforce-L8-2026-10-24-153207.txt` in the current folder by default, or `--save FILE` (a name ending in
+`/` or `\` is a folder for the automatic name; folders are created). It is created when the search starts,
+so a bad path is reported at once. An existing file is never overwritten: `-2`, `-3`, ... is added before
+the extension.
 
-- **Score:** the flag frame; ties are broken by how deep the ball is inside the flag's box on that
-  frame (deeper = closer to the next frame). Equal routes are accepted sideways with probability
-  `--sideways` (default 0.05) to cross plateaus.
-- **Death warps** count only if usable in a real run (flag no later than death + 38 frames); the
-  output gives the pause/unpause frames.
-- **Output:** each improvement as it is found, then the best route as an RLE string. If any hit test
-  on the route was within a rounding unit of flipping, it says so: check that route in Flash.
-- Defaults: mathspikes 1, spike glitch on (`--gless` for glitchless), all hardware threads, 30 s.
-  Multi-thread runs are not reproducible run to run (threads race); `--threads 1 --seed S --evals N`
-  is identical on any machine and OS.
-- It is a local search: it improves a known route but proves nothing.
+Rows come by frame, then flag. `--sortby Q` (`frame px py vx vy flag`) orders them, the `--stochastic` best
+10 and which rows are kept when memory runs short by that column instead, highest first; `--sortby -Q` lowest
+first. Ties go by frame, then flag; for `px py vx vy` dead rows come last.
 
-One thread simulates about 450,000 frames/s on Level 2 and about 60,000 on Level 8 (the car adds up
-to 53 contacts). Tested by slowing known routes: Level 8 424 -> 405 frames in 60 s, Level 2 200 ->
-189 in 30 s. The team's Level 2, 4 and 8 TASes are not improved by short runs.
+Simulates every string a pattern expands to and lists those that meet all the conditions. Meant for
+routes worked out by hand: fix what is understood, enumerate the rest.
 
-## Finding routes from any start: `rbsim beam`
-
-```
-rbsim beam --level N [--checkpoint C] [--prefix RLE] [--memory 10G | --width W] [--threads N]
-           [--max-frames F] [--diversity K] [--lookahead T] [--select mixed|score|coverage]
-           [--seed-route RLE] [--explain RLE] [--trace RLE] [--polish SEC] [--spin S] [--spin-bucket W]
-           [--dir DIR] [--save-every MIN] [--resume] [--gless]
-```
-
-A breadth-first beam search: starting from the level start, a checkpoint, or the state after
-`--prefix` inputs, it keeps up to W states after every frame, expanding each with all 8 inputs. It
-does not need a known route.
-
-- **Score:** distance to the flag along the level's static geometry (a navigation grid built once
-  from the start state), measured from where the ball would be `--lookahead` frames ahead (default
-  6). Moving bodies are not part of the grid.
-- **Per frame:** children that collect the flag are solutions; children that die are played through
-  the death-warp window at once and kept only if they warp to the flag in time for a real run.
-  Duplicate states are merged (a hash of every moving body, the camera and the level scripts' state;
-  checked on all 17 levels: merged states never diverge).
-- **Selection** (`--select`): `score` keeps the best scores (at most `--diversity` per
-  region/velocity bucket; default: width / 8, at least 16); `coverage` keeps the best state of every
-  bucket first, so lines that are behind now but ahead later (waiting for a crusher, timing a
-  platform) survive; `mixed` (default) fills half the beam each way.
-- **`--polish SEC`** (default 60, 0 = off): once the beam has a route, `optimize` improves it for SEC
-  seconds, keeping the `--prefix` inputs. Moving single frames and run boundaries is what a beam
-  cannot afford to explore; this is where most of the time comes from (table below).
-- **`--seed-route RLE`:** keeps a known route in the beam, so the result can only match or beat it.
-  **`--explain RLE`:** prints the score a known route gets every 10 frames (no search).
-  **`--trace RLE`:** runs the search and reports on which frame and why a known route drops out of the
-  beam (its rank, score and bucket against the states kept).
-- **`--spin S`, `--spin-bucket W`** (experimental, off): count spin (which becomes rolling speed on
-  landing) in the look-ahead / split buckets by angular velocity. No clear gain yet.
-- **Width:** `--memory` (default 4 GB) sets W from the measured state sizes; `--width` fixes it.
-- **Stops** when no state can reach the flag before the best solution, at `--max-frames` (default
-  3000), or if the beam empties. The route is rebuilt and re-checked by a replay from scratch.
-- **Long runs:** saved to `DIR/beam.bin` every `--save-every` minutes (default 10) and at the end;
-  `--resume` continues an interrupted run. `DIR` defaults to `beam_L<level>`.
-- **Deterministic** across thread counts, interruptions (`kill -9` + resume) and OS.
-
-Results with the current defaults (width 2,000, two threads; the TASes are 186, 274 and 405):
-
-| level | beam | + 60 s polish | time |
-|---|---|---|---|
-| 2 | 218 | 191 | 1.4 min |
-| 4 | 294 (death warp; 412 with the old fixed `--diversity 16`) | 282 (death warp) | 2.1 min |
-| 8 | 559 | 533 | 4.1 min |
-
-`--trace` on the TASes shows where the beam loses them: in the first 20-30 frames, among thousands of
-near-identical jumps a few pixels apart (the TAS line pays off ~100 frames later, e.g. with a
-spin-boosted landing). Wider beams keep them longer (Level 2 at width 20,000: 203 before the polish).
-
-Older results (one core, small widths, fixed `--diversity 16`):
-
-| run | result |
+| pattern | means |
 |---|---|
-| Level 2, width 400-20,000 | flag on frame 191-215 (varies with width and tie-breaking) |
-| Level 2, width 2,000, `--seed-route` TAS | frame 186 (TAS matched, deeper flag overlap) |
-| Level 4, width 2,000, `score` | beam dies out at frame 126 (all states walk into the crushers) |
-| Level 4, width 2,000, `coverage` | **finds a death warp by itself**: flag on frame 371 |
-| Level 4, width 2,000, `mixed` | death warp, flag on frame 353 |
+| `d18 n3` | runs as in a TAS string (a letter without a count is 1 frame) |
+| `d4..7` | every count from 4 to 7 (`d0..3`: the run may be absent) |
+| `(A\|B\|C)` | alternatives, each a sub-pattern (they nest) |
+| `(...)=6`, `(...)=4..6` | only the group's expansions that are 6 (4 to 6) frames long |
+| `<BASE:a3>` | every way to overwrite 3 single frames of BASE (any sub-pattern) with `a`: `<n20:a3>`, `<d18e3:n2>` |
+| `<BASE+a3>` | the same, but `a` is added to the keys already held there: `<d20+a1>` puts one `S` (left+right) into `d20` |
+| `<BASE:a1..3>`, `<BASE+a0..2>` | every tap count in the range, for either form; 0 includes BASE unchanged |
+| `<BASE:a1,w1>`, `<n20:a1..2,w0..1>` | several tap kinds, each with its own count or range, always on different frames (`<<BASE:a1>:w1>` instead lets the `w` overwrite the `a`) |
 
-A beam's quality depends mostly on its score: on Level 2 a 20,000-wide beam did no better than a
-2,000-wide one, because the TAS line is *behind* the beam's best states mid-level and only overtakes
-them near the end.
+`d18(e1..6d0..5)=6<n4:a1>(d4..7e7..10)=14` is 6 x 4 x 4 = 96 strings (`--list` prints them). `R` is not
+allowed.
 
-Memory per state (average along real routes): Level 2 ~1.4 KB, Level 4 ~3.3 KB, Level 12 ~6 KB,
-Level 8 ~9 KB (compact snapshots, `src/snapshot.h`: the 8-byte blocks that differ from the freshly
-loaded level; byte-identical round trip, portable between processes).
+Strings come shortest first, then in written order (alternatives left to right; in a sequence the first
+part changes slowest; a placement's base before its taps). Each part of the pattern counts its strings by
+length, so string number i can be built directly from i (unranking). Every part is expanded in memory, with
+repeated strings removed, if its predicted size fits in `--maxmem GB` (default 4; about 72 bytes + 1 per
+frame per string). A part that does not fit is generated one string at a time in the same order instead:
+no size limit (counts up to 4.6e18), but repeated strings (`a1,a1`, or a tap that changes nothing) are
+kept and played twice unless `--hardfilter` merges them. The header marks generated parts with `*`.
+The `--hardfilter` table (at most 48 bytes per state), the result rows and the game states kept for shared
+prefixes (below) also stay within `--maxmem`: when their share is used up, new states are no longer added to
+the table, only the best rows are kept (the output says so) and fewer prefixes are kept.
+`--maxmem` may not exceed the PC's memory, the threads' game states (about 175 KB per pattern part per
+thread) must fit in it, and the counting tables count towards it too. Patterns that would take more than
+400 million steps just to count, or brackets nested more than 200 deep, are refused with a message, and
+running out of memory stops the search with the results so far instead of crashing.
+
+Conditions (`--report`, comma-separated, all must hold; default `win`): `win`, `dead`, `alive`, `ground`
+(a jump probe touches), `contact`, `contact=NAME` (`--names` lists a level's bodies), and comparisons
+`Q<V Q<=V Q>V Q>=V Q=V` with Q one of `px py vx vy vr` (the Practice Hack HUD's and `/set`'s units: metres, m/s,
+`vr` = 0.35 x the angular velocity; `px py` are `run`'s x and y), `pr` (rotation in degrees as the HUD shows it: `run`'s angle x 180/pi, fmod 360,
+so negative after turning backwards) and `flag` (distance from the ball's box to the flag's box in twips:
+the larger of the x and y gaps; <= 0 means touching, minus the overlap depth). Each may have a frame window:
+`@F`, `@A..B`, `@..B`, `@A..`. Frames are the game's (the flag frame is the one the game's timer shows).
+
+- Strings that share a prefix share its simulation (the state is copied where the pattern branches),
+  also inside a part: each option of a part starts from the state at the longest run of inputs it shares
+  with the option before it (`<d76+w2>`: from where its taps first differ). The work is split
+  over all threads, each taking a range of options. With `--stochastic`, the states after the first parts
+  are kept once per choice of them (up to 256 per thread), so a sample plays only the rest. None of this
+  changes a result: the same strings are played and merged, only faster.
+- A string is decided on the frame all conditions hold; the rest of it is not played. It is dropped as
+  soon as a window has passed, or when the ball is dead and no condition can still hold. Strings that
+  agree up to the deciding frame are listed once, with their count.
+- Up held on a frame where it does nothing is written as the same keys without Up: the ball is awake,
+  does not jump (a jump needs a contact and a foot probe) and gets no lift (that needs vy < 0), so the game
+  plays both byte-identically. `--idle-up` keeps the strings as written.
+- `--hardfilter` merges strings that are in the same game state at the same point of the pattern with the
+  same inputs still to play, however different their pasts (inputs that cancel out lead back to the same
+  state): only the first is played on and listed, the rest are counted as merged. The check runs between
+  the parts of the pattern and every `--merge-every N` frames inside a part (default 32; 0: only between
+  parts; 32 found nearly all of 16's extra merges at no extra cost on the Level 8 tests). States are compared without what the game
+  never reads again (freed contact slots, manifold points past `pointCount`, the normal of an empty
+  manifold, the two speed-up caches, scratch arrays past their counts, the probe and `upIdle` flags), and
+  doubles count as equal within `--tolerance T` (default 1e-10, rounded to a grid of that size; `0` =
+  bit-exact). With a tolerance the merge is a heuristic, since a 1e-10 difference can grow; on the test
+  patterns the merged runs reached the same positions as the unmerged ones. `--merge-report` lists what
+  still differs between states whose bodies agree to 1e-7 but that were not merged (`--raw-states`: compare
+  the full state, to see what the cleaning gains).
+- A string ends where the pattern ends: `--pad N` plays N more `n` frames after it (for example to let
+  the ball roll on to the flag).
+- Output: the matches by deciding frame (then by distance to the flag), with px, py, vx, vy and the distance
+  to the flag on that frame.
+- `--stochastic` plays the strings in a uniformly random order without repeats and without storing them:
+  string number c is mapped through a keyed bijection of [0, N) (an 8-round Feistel network with
+  cycle-walking), so every string is equally likely at every step and a run that finishes has played each
+  string exactly once. It runs until every string is played or Ctrl+C, or for `--time SEC` or `--samples N`,
+  and every `--update SEC` (default 60, 0: off) prints the time, how many strings it has played and how
+  fast (overall and since the last update), then the 10 best strings so far; nothing else is printed while
+  it runs. `--seed S` repeats a run (the seed is printed). Above 4.6e18
+  strings it picks each part independently at random instead (repeats then possible but vanishingly rare).
+  `--hardfilter` works here too: a sample is merged when its state and its remaining inputs match an earlier
+  one's. Ctrl+C stops any search and prints the results so far.
 
 ## Architecture
 
@@ -219,7 +217,7 @@ loaded level; byte-identical round trip, portable between processes).
 | `src/display_data.h` | bounds of every named object and every spike, per level (`tools/gen_display_data.py`, `tools/swf_geom.py`) |
 | `src/flash_sintab.h` | Flash's fixed-point sine table (`tools/gen_flash_sintab.py`; identical to the player's) |
 | `src/snapshot.cpp` / `snapshot.h` | compact, portable, byte-exact snapshots |
-| `src/search.cpp` / `src/beam.cpp` | `rbsim optimize` / `rbsim beam` |
+| `src/smartforce.cpp` | `rbsim smartforce` |
 | `src/verify.cpp` / `src/calib.cpp` | stats-log replay / calibration-dump checks |
 | `src/rbsim.cpp` | CLI, self-tests, benchmark |
 | `tools/deathcause.cpp` | replays inputs and prints each death's cause (contacts or spike row) and the win |
@@ -352,11 +350,8 @@ section/symbol directives adapted; ARM (incl. Apple Silicon) cannot run the Inte
 
 ## Roadmap
 
-1. **Search:** a better beam score (moving platforms and timing; calibrate against the known TASes
-   with `--explain`); resumable, splittable window proofs; endgame proofs; physics profiling for
-   contact-heavy levels.
-2. **Viewer:** `rbview.exe` is the TAS tool (the mod's keys) plus viewer, states, ghost, search. Possible next:
+1. **Viewer:** `rbview.exe` is the TAS tool (the mod's keys) plus viewer, states, ghost. Possible next:
    an input piano roll (edit frames by clicking), a real-Windows check of the keyboard timing.
-3. **Simulator:** complete; the display layer is the player's own arithmetic, including the real game's
+2. **Simulator:** complete; the display layer is the player's own arithmetic, including the real game's
    shape spike test at any window size (`MATHSPIKES 0`, `docs/RESOLUTION.md`). Open: confirm it with one stats
    log recorded on real Windows; the Tournament Edition's Level 15 money tween (0.3 s of real time).
