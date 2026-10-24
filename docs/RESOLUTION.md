@@ -8,7 +8,7 @@ moves, on the previous frame's redraw. rbsim now models it bit-exactly:
 ```
 ./rbsim run    --level 3 --inputs RLE --mathspikes 0 --window 935x925            # showAll (the default)
 ./rbsim verify rb1_stats.tsv                                                      # window/scale from the #ENV line
-./rbsim beam   --level 3 --mathspikes 0 --window 1280x720 --noscale ...           # any command takes the three options
+./rbsim smartforce --level 3 --mathspikes 0 --window 1280x720 --noscale ...       # any command takes the three options
 ```
 
 In `rbview.exe`, use the **Spikes**, **Window** and **Scale** boxes on the top row. A stats log opened in the
@@ -120,7 +120,7 @@ padding was found this way and then located in the player's code.
 ## 4. Using it
 
 - **CLI:** `--mathspikes 0 --window WxH` (showAll) or `--mathspikes 0 --window WxH --noscale`. This works on
-  every command (`run`, `log`, `verify`, `calib`, `optimize`, `beam`, `bench`).
+  every command (`run`, `log`, `verify`, `calib`, `smartforce`, `bench`).
   - `verify` and `calib` take `mathspikes`, `window` and `scaleMode` from the log's `#ENV` line.
   - On the death row the logger writes input 0 (OutControl). `verify` replays that row with whichever input
     reproduces Flash's row: usually the previous tick's, but a route can change keys on exactly that frame.
@@ -129,8 +129,8 @@ padding was found this way and then located in the player's code.
   With the graphics marks on (Shift+H), each spike's hit area is drawn as the exact window pixels that kill this
   frame (`SpikeKillPixels`), next to the ball's control points (`BallControlPoints`); self-test 24 checks that a
   control point in a kill pixel is exactly a spike death (7,200 random cases, 6 window setups, plain and turned spikes).
-- **Search:** routes found with `--mathspikes 0` are only valid for that window setup. Under `--mathspikes 0`,
-  `beam` and `optimize` cost a little more per frame: each tick redraws the spike cache.
+- **Smartforce:** routes found with `--mathspikes 0` are only valid for that window setup. Under `--mathspikes 0`,
+  `smartforce` costs a little more per frame: each tick redraws the spike cache.
 
 ## 5. Recording a playback in Flash (how the evidence was made)
 

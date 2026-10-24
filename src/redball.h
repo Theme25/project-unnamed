@@ -7,7 +7,6 @@
 #include "display_data.h"
 #include "flash_sintab.h"
 #include <map>
-#include <atomic>
 #include <string>
 #include <vector>
 
@@ -124,11 +123,11 @@ struct LevelScript {
 };
 const LevelScript& GetLevelScript(int32_t id);
 // True for the levels whose scripts reproduce Flash logs bit-for-bit (README "Verification status"). The others are
-// ported from the AS3 only: runs, searches and routes on them must be re-checked in Flash.
+// ported from the AS3 only: runs, smartforce results and routes on them must be re-checked in Flash.
 bool LevelVerified(int32_t id);
 // Debug hook for tools (not part of the simulated state): called by PlayerDie before the ball's body is destroyed.
 extern void (*g_playerDieHook)(const Sim&);
-// Prints a one-line warning on stderr when the level is scripted but not verified (run/log/optimize/beam).
+// Prints a one-line warning on stderr when the level is scripted but not verified (run/log/smartforce).
 void WarnIfUnverified(int32_t id);
 
 // Immutable per-level data shared by every simulation instance (and snapshot).
@@ -221,6 +220,7 @@ struct Sim {
     int32_t aimBody = -1;
     // last-frame diagnostics
     bool probeC = false, probeL = false, probeR = false;
+    bool upIdle = false;  // Up was held but changed nothing
 
     // keepStatics: AS3 static level flags survive (R / F restart via SetLevel(id, true) and log segments
     // that follow one); a fresh level load clears them.
@@ -261,19 +261,6 @@ struct Sim {
 };
 
 // Game.as DecodeInRLE / EncodeOutRLE (TAS string format)
-// Text output of the search commands (optimize, beam). Without a sink: stdout / stderr. The viewer installs a sink to
-// show the lines in its Search tab; the sink may be called from worker threads.
-extern void (*g_outSink)(const char* text, bool isError);
-#ifdef __MINGW32__
-#define RB_PRINTF_FMT gnu_printf
-#else
-#define RB_PRINTF_FMT printf
-#endif
-void Out(const char* fmt, ...) __attribute__((format(RB_PRINTF_FMT, 1, 2)));
-void Err(const char* fmt, ...) __attribute__((format(RB_PRINTF_FMT, 1, 2)));
-// Set to stop a running optimize / beam early (they then report the best route found so far).
-extern std::atomic<bool> g_searchCancel;
-
 std::vector<uint8_t> DecodeInputs(const std::string& s);
 std::string EncodeInputsRLE(const std::vector<uint8_t>& in);
 

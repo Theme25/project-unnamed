@@ -2,7 +2,6 @@
 // Game.UpdateHandler) driving the Box2D port.
 #include "redball.h"
 
-#include <cstdarg>
 #include "level_polys.h"
 #include "flashpix.h"
 #include <cmath>
@@ -671,29 +670,6 @@ int32_t Sim::CreateCircleBody(const char* name, double density, double friction,
     return b;
 }
 
-void (*g_outSink)(const char*, bool) = nullptr;
-std::atomic<bool> g_searchCancel{false};
-static void OutV(bool err, const char* fmt, va_list ap) {
-    if (!g_outSink) {
-        std::vfprintf(err ? stderr : stdout, fmt, ap);
-        return;
-    }
-    char buf[8192];
-    std::vsnprintf(buf, sizeof buf, fmt, ap);
-    g_outSink(buf, err);
-}
-void Out(const char* fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    OutV(false, fmt, ap);
-    va_end(ap);
-}
-void Err(const char* fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    OutV(true, fmt, ap);
-    va_end(ap);
-}
 void (*g_playerDieHook)(const Sim&) = nullptr;
 // PlayerBox(x, y, world, sprite): the ball at sprite position (x, y) px, and the camera centred on it.
 void Sim::CreatePlayer(double px, double py) {
@@ -2156,14 +2132,17 @@ void Sim::LevelUpdate(bool left, bool up, bool right) {
             b.linearVelocity = Vec2(b.linearVelocity.x + 0.25, b.linearVelocity.y);
         }
     }
+    upIdle = false;
     if (up) {
+        unsigned char before[sizeof(Body)];
+        std::memcpy(before, static_cast<const void*>(&b), sizeof(Body));
         b.WakeUp();
         if (world.listener.count > 0 && grounded) {
             world.ApplyForce(playerBody, Vec2(0, -65), world.bodies[playerBody].sweep.c);
         } else if (b.linearVelocity.y < 0) {
             world.ApplyForce(playerBody, Vec2(0, -1), world.bodies[playerBody].sweep.c);
         }
-    }
+        upIdle = !std::memcmp(before, static_cast<const void*>(&b), sizeof(Body));    }
     // Tweener.addTween(m_sprite, {x: scaleX * (-playerBox.x + stageWidth / 2), y: ..., useFrames, time 31,
     // easeOutExpo}); overwrites the previous camera tween. scaleX/scaleY stay 1 (scaleTimer never runs).
     camTargetX = 1.0 * (-spriteX[playerBody] + 550.0 / 2);

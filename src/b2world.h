@@ -4,7 +4,7 @@
 // Design:
 //   * All mutable simulation state lives inside `World` in fixed arrays linked
 //     by int indices (-1 = null). Copying a World (memcpy / operator=) is a
-//     complete snapshot, which is what the search needs.
+//     complete snapshot (rbsim smartforce branches by copying it).
 //   * Immutable shape geometry (polygon vertices, normals, OBB...) lives in a
 //     shared GeomTable that snapshots merely point at.
 //   * Per-step scratch (islands, contact constraints) is thread_local and never

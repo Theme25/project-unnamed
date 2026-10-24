@@ -65,15 +65,6 @@ digits typed into the route do not save states. Click the level view to play aga
     R, a rewind or a load replaced (the last 500). All of it is kept in `rbview_states.txt` next to the exe.
   - **Ghost:** a second route drawn as a blue ball on the same frame: the current route (as it is now), a pasted
     string, a file, or a saved state. The tab compares the flag frames.
-  - **Search:** rbsim's searches inside the program; the tab explains the chosen mode.
-    - *Improve the current route (optimize):* random small edits to the whole route for *Time* seconds; keeps every
-      edit that takes the flag sooner. Needs a route that reaches the flag.
-    - *Find a route from the shown frame (beam search):* plays every key combination on every frame from the shown
-      frame on, keeps the most promising states (*Beam width*: Quick 2,000 to Huge 500,000) until one takes the
-      flag, then polishes that route for *Polish* seconds. The route up to the shown frame is kept. Start with Quick
-      or Normal: the time grows with the width (Quick on Level 2: about a minute on two cores).
-    - The status line shows the progress (frame, how close to the flag, the best flag frame). Stop ends early.
-      **Load result** puts the best route found in the editor (the old one goes to the backups).
   - **Options:** every setting the mod has as a key or a command, as checkboxes and sliders.
     - *Playback:* real-time state loads (U), fast playback (Shift+U), and what happens when a playback reaches the
       end of the route: pause there, or keep running and record your keys (the mod's behaviour). After the flag the
@@ -92,7 +83,7 @@ digits typed into the route do not save states. Click the level view to play aga
 - Glitchless and invincibility apply to the whole route: changing them re-simulates it. In the mod they switch at
   the moment you press the key.
 - `/set` warps are stored in the route, so states with a warp replay correctly in rbview. The game cannot replay
-  them. Routes with warps or invincibility are marked (`[tool]`, and on the HUD) and the search refuses them.
+  them. Routes with warps or invincibility are marked (`[tool]`, and on the HUD).
 - Space while the game runs pauses it (the mod ignores it). The end of a playback keeps your game speed (the mod
   resets it to 1x), and you can choose to pause there.
 - R, F, I, O, Backspace and B also work while paused in the middle of a playback. They act at the shown frame;
@@ -106,7 +97,7 @@ box = flag, blue/green/red boxes = switches (filled once pressed), orange box = 
 
 ## Command-line tool: `rbsim.exe`
 
-The rest of this guide is for running the simulator and the route search from a command prompt.
+The rest of this guide is for running the simulator from a command prompt.
 You do not need to build anything if you have the ready-made `rbsim.exe`. To build it yourself,
 see the end of this page.
 
@@ -132,65 +123,50 @@ tools; if yours deletes or quarantines `rbsim.exe` or `rbview.exe`, add the fold
 **"'rbsim.exe' is not recognized":** the Command Prompt is not in the folder containing the exe.
 Use `cd C:\rbsim` first, or give the full path: `C:\rbsim\rbsim.exe test`.
 
-Typing `rbsim.exe` alone lists the commands; `rbsim.exe optimize` alone lists its options.
+Typing `rbsim.exe` alone lists the commands; `rbsim.exe smartforce` alone lists its options.
 
-## 2. Searching for a faster route
-
-```
-rbsim.exe optimize --level 8 --inputs "d19a3n1a1n12d1a1n21d15e1d1e1d3e22d7e5d30e1d20e7d3e1d9n1d76e2d14a1n1a1n18a3n10a1n18w9n65" --time 600
-```
-
-- `--level N`: the level (1-17).
-- `--inputs "..."`: the route to improve, in the TAS hack's string format (`n d w e a S q W`
-  plus counts). It must collect the flag. Remove any `R` (one attempt only).
-- `--time SEC`: how long to search, in seconds (default 30). `--time 3600` is an hour.
-- `--threads N`: how many CPU threads to use (default: all of them). Use fewer if you want to
-  keep using the PC while it runs, for example `--threads 4`.
-- `--checkpoint C`: start from checkpoint C instead of the level start.
-- `--gless`: glitchless mode (no spike glitch). Leave it out for the normal TAS rules.
-- `--mathspikes 0 --window WxH` (add `--noscale` for the Practice Hack's default scale mode): optimize for the
-  original game's / Tournament Edition's spikes at that window size. The result is only valid there.
-
-While it runs, every improvement is printed as soon as it is found, for example:
+## 2. Trying many routes at once
 
 ```
-  frame 403, margin 12 twips  d19a3n1...
+rbsim.exe smartforce --level 2 --inputs "d18(e1..6d0..5)=6<n4:a1>(d4..7e7..10)=14" --report "contact=kickBall@40..60"
 ```
 
-At the end it prints a summary and the best route as a string you can paste back into the TAS
-hack. Frame counts are converted to seconds at 31 fps.
+- `--inputs "..."`: a pattern. Plain runs as in the TAS string, plus `d4..7` (every count from 4 to 7),
+  `(A|B)` (alternatives), `(...)=6` (only the group's expansions that are 6 frames long), `<BASE:a3>`
+  (every way to overwrite 3 single frames of BASE with `a`; BASE can be any pattern, e.g. `<n20:a3>` or
+  `<d18e3:n2>`) and `<BASE+a3>` (the same, but `a` is added to the keys held there: `<d20+a1>` puts one
+  `S` into `d20`). A range such as `<n20:a1..3>` or `<d20+a0..2>` tries every tap count in it, and
+  `<n20:a1,w1>` places one `a` and one `w` on two different frames. Any part of the pattern can be as
+  large as you like: parts that fit in `--maxmem` gigabytes (default 4) are kept in memory, larger ones are
+  built one string at a time. The example is 6 x 4 x 4 = 96 strings; add `--list` to print them without simulating.
+- `--report "..."`: what a string must do, comma-separated: `win`, `dead`, `ground`, `contact=NAME`
+  (`rbsim.exe smartforce --level 2 --names` lists the names), or `px>=12.5`-style comparisons on
+  `px py pr vx vy vr flag` (in the HUD's units, as `/set` takes them; `pr` = rotation in degrees; `flag` = distance to the flag in twips, 0 or less
+  means touching). Add `@F` or `@A..B` for a frame window. Default: `win`.
+- `--pad N`: N extra frames of no input after each string (the pattern's end is the string's end).
+- Up held where it does nothing (in the air and falling, or on the ground without a jump) is shown as the
+  same keys without Up, since the game plays both the same. `--idle-up` keeps the strings as written.
+- `--hardfilter`: strings that end up in the same game state are only played once; the output says how many
+  were merged. Numbers closer than `--tolerance` (default 0.0000000001) count as equal; `--tolerance 0`
+  merges only exact copies. States are compared between the parts of the pattern and every 32 frames
+  inside a part (`--merge-every N` to change, 0 = only between parts).
+- `--stochastic`: for patterns too big to play in full. Plays the strings in random order (never the same
+  one twice) until all are played or you press Ctrl+C (or for `--time SEC` / `--samples N`).
+  Every minute (`--update SEC` to change, 0 = off) it prints how many strings it has played and how fast,
+  then the 10 best strings so far, so a long search can be checked while it runs. `--seed S` repeats a run.
+- `--save` writes all the matching strings and their data to a new file at the end
+  (`smartforce-L8-2026-10-24-153207.txt`), or `--save mysearch.txt` to choose the name. Nothing is
+  overwritten: a second `mysearch.txt` becomes `mysearch-2.txt`. The file also records the exact command,
+  so the search can be repeated.
+- `--sortby px` lists the matches (and the best 10 of `--stochastic`) by px, highest first; `--sortby -px`
+  lowest first. Also `frame py vx vy flag`. The default is earliest frame, then smallest flag distance.
+- `--checkpoint C`, `--gless`, `--threads N`, `--top N` (how many matches to print, 0 = all). Ctrl+C stops
+  a search and prints what it found so far.
 
-- **Stopping early:** press `Ctrl+C`. The summary is not printed then, but every improvement was
-  already printed above, so copy the last `frame ...` line.
-- **Death warps:** if the best route finishes with a death warp, the output also gives the frame
-  by which you must pause and the frame on which to unpause in a real run.
-- **"check this route in Flash":** printed when a hit test on the route was within one rounding
-  unit of going the other way. Play that route in Flash before trusting it.
-- **Same result on any PC:** with `--threads 1 --seed 5 --evals 200000` (stop after a fixed number
-  of candidates instead of a time) the output is identical on every machine, Windows or Linux.
-  Useful for comparing results or reporting a problem.
+It prints the matching strings sorted by the frame on which the conditions were met, with the ball's
+position, speed and distance to the flag on that frame. Frames are the game's, as on the game's timer.
 
-Save the output to a file by adding `> result.txt` at the end of the command.
-
-## 3. Finding a route without a known one (beam search)
-
-```
-rbsim.exe beam --level 4 --width 20000
-```
-
-Keeps the best states after every frame and expands them with all inputs, starting from the
-level start (`--checkpoint C`: a checkpoint; `--prefix "..."`: after some inputs). It prints a
-progress line every few seconds and the route at the end, then improves that route with
-`optimize` for a minute (`--polish 60`; `--polish 0` turns it off). `--width` is the number of
-states kept per frame (time grows with it); `--memory 10G` instead picks the width from the RAM it
-may use (default 4G); leave room for Windows. `--seed-route "..."` keeps a known route in the beam
-so the result can only match or beat it.
-
-Long runs save progress to a folder (`beam_L4` here) every 10 minutes. If the PC restarts or
-you press `Ctrl+C`, run the same command again with `--resume` added to continue. The result is
-the same as an uninterrupted run, on any PC.
-
-## 4. Checking a recording against the simulator
+## 3. Checking a recording against the simulator
 
 If you recorded a stats log or calibration dump with the logging mod (`docs/STATS_LOGGING.md`):
 
@@ -205,7 +181,7 @@ simulator matches Flash exactly. `calib` ends with `CALIB OK` or `CALIB MISMATCH
 
 If a path contains spaces, put it in quotes: `rbsim.exe verify "C:\My Logs\run 1.tsv"`.
 
-## 5. Other commands
+## 4. Other commands
 
 ```
 rbsim.exe run --level 2 --inputs "d18e1w1n1w5" --every 10
@@ -227,7 +203,7 @@ Saving output with `>`: in Command Prompt it just works. Windows PowerShell 5.1 
 built into Windows) writes `>` files as UTF-16, which `rbsim.exe verify` cannot read back. For
 files you will feed to rbsim again (like `log` output), either use Command Prompt or write
 `| Out-File -Encoding ascii sim_log.tsv` instead of `> sim_log.tsv`. Text you only read
-(`optimize` results) is fine either way.
+(`smartforce` results) is fine either way.
 
 ## Building it yourself (optional)
 

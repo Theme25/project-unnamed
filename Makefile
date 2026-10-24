@@ -14,7 +14,7 @@ ifeq ($(OS),Windows_NT)
   EXE      := .exe
   CXXFLAGS += $(WINFLAGS)
 endif
-SRC = src/libm_intel.S src/b2collision.cpp src/b2world.cpp src/b2joints.cpp src/redball.cpp src/flashpix.cpp src/rbsim.cpp src/verify.cpp src/calib.cpp src/search.cpp src/snapshot.cpp src/beam.cpp
+SRC = src/libm_intel.S src/b2collision.cpp src/b2world.cpp src/b2joints.cpp src/redball.cpp src/flashpix.cpp src/rbsim.cpp src/verify.cpp src/calib.cpp src/snapshot.cpp src/smartforce.cpp
 HDR = src/b2math.h src/b2world.h src/redball.h src/levels_data.h src/display_data.h src/flash_sintab.h src/snapshot.h src/flashpix.h
 
 rbsim$(EXE): $(SRC) $(HDR)
@@ -32,7 +32,7 @@ SIM_SRC := src/libm_intel.S src/b2collision.cpp src/b2world.cpp src/b2joints.cpp
 viewer: rbview.exe
 viewer/rbview.res.o: viewer/rbview.rc viewer/rbview.ico viewer/rbview.manifest
 	$(MINGW_WINDRES) -O coff -o $@ viewer/rbview.rc
-VIEW_SRC := viewer/rbview.cpp viewer/tas.cpp src/search.cpp src/beam.cpp src/snapshot.cpp
+VIEW_SRC := viewer/rbview.cpp viewer/tas.cpp src/snapshot.cpp
 rbview.exe: $(VIEW_SRC) viewer/tas.h viewer/rbview.res.o $(SIM_SRC) $(HDR)
 	$(MINGW_CXX) -O2 $(filter-out -O2 -g,$(CXXFLAGS)) $(WINFLAGS) -municode -mwindows -o $@ $(VIEW_SRC) $(SIM_SRC) viewer/rbview.res.o \
 		-lgdiplus -lcomctl32 -lcomdlg32 -lgdi32 -luser32 -lole32
