@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 
 namespace rb {
 
@@ -1978,6 +1979,19 @@ const LevelScript& GetLevelScript(int32_t id) {
 // ---------------------------------------------------------------- construction
 
 void Sim::Load(LevelTemplate* t, int32_t checkpoint, bool keepStatics) {
+    if (!t->frozen) {
+        // The template learns body names and geometry from the first construction, then freezes. Some bodies exist
+        // only from some starts (Level 15's "luk" only from the level start), so a template first built from a later
+        // checkpoint aborted on a later load from the start ("new body name after template freeze"; in rbview:
+        // Level 15 from checkpoint 1, then from the start). Construct every start once, level start first.
+        const int32_t n = std::max<int32_t>(1, t->CheckpointCount());
+        for (int32_t c = 0; c < n; ++c) {
+            auto scratch = std::make_unique<Sim>();
+            scratch->tpl = t;
+            scratch->lastCheckNum = c;
+            scratch->Restart();
+        }
+    }
     if (!keepStatics)
         for (bool& f : staticFlag) f = false;
     tpl = t;
