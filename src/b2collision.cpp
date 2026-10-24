@@ -666,24 +666,21 @@ void CollidePolygons(Manifold& m, const Geom& polyA, const XForm& xfA, const Geo
 // GJK distance (b2Distance.as)
 // ======================================================================
 
-// Minimal "shape-like" adaptor: a polygon (core vertices) or a single point.
-struct SupportShape {
-    const Geom* poly = nullptr;  // null -> point
-    Vec2 point;
+// Polygon or point support, resolved at compile time.
+struct PolygonSupport {
+    const Geom& poly;
     Vec2 GetFirstVertex(const XForm& xf) const {
-        if (!poly) return point;
-        return b2MulX(xf, poly->coreVertices[0]);
+        return b2MulX(xf, poly.coreVertices[0]);
     }
     Vec2 Support(const XForm& xf, double dX, double dY) const {
-        if (!poly) return point;
         const Mat22* R = &xf.R;
         double dLocalX = dX * R->col1.x + dY * R->col1.y;
         double dLocalY = dX * R->col2.x + dY * R->col2.y;
         int bestIndex = 0;
-        const Vec2* t = &poly->coreVertices[0];
+        const Vec2* t = &poly.coreVertices[0];
         double bestValue = t->x * dLocalX + t->y * dLocalY;
-        for (int i = 1; i < poly->vertexCount; ++i) {
-            t = &poly->coreVertices[i];
+        for (int i = 1; i < poly.vertexCount; ++i) {
+            t = &poly.coreVertices[i];
             double value = t->x * dLocalX + t->y * dLocalY;
             if (value > bestValue) {
                 bestIndex = i;
@@ -691,10 +688,16 @@ struct SupportShape {
             }
         }
         R = &xf.R;
-        t = &poly->coreVertices[bestIndex];
+        t = &poly.coreVertices[bestIndex];
         return Vec2(xf.position.x + (R->col1.x * t->x + R->col2.x * t->y),
                     xf.position.y + (R->col1.y * t->x + R->col2.y * t->y));
     }
+};
+
+struct PointSupport {
+    Vec2 point;
+    Vec2 GetFirstVertex(const XForm&) const { return point; }
+    Vec2 Support(const XForm&, double, double) const { return point; }
 };
 
 static int ProcessTwo(Vec2& x1, Vec2& x2, Vec2 p1s[3], Vec2 p2s[3], Vec2 points[3]) {
@@ -798,8 +801,9 @@ static int ProcessThree(Vec2& x1, Vec2& x2, Vec2 p1s[3], Vec2 p2s[3], Vec2 point
     return 3;
 }
 
-static double DistanceGeneric(Vec2& x1, Vec2& x2, const SupportShape& shape1, const XForm& xf1,
-                              const SupportShape& shape2, const XForm& xf2) {
+template <class Shape1, class Shape2>
+static double DistanceGeneric(Vec2& x1, Vec2& x2, const Shape1& shape1, const XForm& xf1,
+                              const Shape2& shape2, const XForm& xf2) {
     Vec2 p1s[3], p2s[3], points[3];
     int pointCount = 0;
     x1.SetV(shape1.GetFirstVertex(xf1));
@@ -909,13 +913,12 @@ static double DistanceCC(Vec2& x1, Vec2& x2, const Geom& circle1, const XForm& x
 
 static double DistancePC(Vec2& x1, Vec2& x2, const Geom& polygon, const XForm& xf1, const Geom& circle,
                          const XForm& xf2) {
-    SupportShape point;
+    PointSupport point;
     const Vec2* t = &circle.localPosition;
     const Mat22* R = &xf2.R;
     point.point.x = xf2.position.x + (R->col1.x * t->x + R->col2.x * t->y);
     point.point.y = xf2.position.y + (R->col1.y * t->x + R->col2.y * t->y);
-    SupportShape poly;
-    poly.poly = &polygon;
+    const PolygonSupport poly{polygon};
     XForm identity;
     identity.SetIdentity();  // b2Math.b2XForm_identity
     double distance = DistanceGeneric(x1, x2, poly, xf1, point, identity);
@@ -942,9 +945,7 @@ static double Distance(Vec2& x1, Vec2& x2, const Geom& g1, const XForm& xf1, con
     if (g1.type == e_polygonShape && g2.type == e_circleShape) return DistancePC(x1, x2, g1, xf1, g2, xf2);
     if (g1.type == e_circleShape && g2.type == e_polygonShape) return DistancePC(x2, x1, g2, xf2, g1, xf1);
     if (g1.type == e_polygonShape && g2.type == e_polygonShape) {
-        SupportShape a, b;
-        a.poly = &g1;
-        b.poly = &g2;
+        const PolygonSupport a{g1}, b{g2};
         return DistanceGeneric(x1, x2, a, xf1, b, xf2);
     }
     return 0;

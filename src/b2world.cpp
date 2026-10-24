@@ -4,6 +4,7 @@
 // behaviour differs from stock Box2D 2.0 C++.
 #include "b2world.h"
 #include <cstring>
+#include <optional>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
@@ -1027,13 +1028,28 @@ bool World::IsConnected(int32_t b, int32_t other) const {
     return false;
 }
 
-void World::SynchronizeTransform(int32_t b) {
-    Body& body = bodies[b];
-    body.xf.R.Set(body.sweep.a);
+static inline void SynchronizePosition(Body& body) {
     const Mat22& R = body.xf.R;
     const Vec2& lc = body.sweep.localCenter;
     body.xf.position.x = body.sweep.c.x - (R.col1.x * lc.x + R.col2.x * lc.y);
     body.xf.position.y = body.sweep.c.y - (R.col1.y * lc.x + R.col2.y * lc.y);
+}
+
+void World::SynchronizeTransform(int32_t b) {
+    Body& body = bodies[b];
+    body.xf.R.Set(body.sweep.a);
+    SynchronizePosition(body);
+}
+
+// An unchanged angle keeps its rotation (always set from it), so only the position is recomputed.
+static inline void SynchronizeAfterAngle(World& world, int32_t b, double angle) {
+    Body& body = world.bodies[b];
+    const bool same = !std::memcmp(&body.sweep.a, &angle, sizeof angle);
+    body.sweep.a = angle;
+    if (same && !g_sinHook && !g_cosHook)
+        SynchronizePosition(body);
+    else
+        world.SynchronizeTransform(b);
 }
 
 bool World::SynchronizeShapes(int32_t b) {
@@ -1336,13 +1352,11 @@ struct ContactSolver {
                 b1_c.x -= invMass1 * impulseX;
                 b1_c.y -= invMass1 * impulseY;
                 b1_a -= invI1 * (r1X * impulseY - r1Y * impulseX);
-                b1.sweep.a = b1_a;
-                w.SynchronizeTransform(b1i);
+                SynchronizeAfterAngle(w, b1i, b1_a);
                 b2_c.x += invMass2 * impulseX;
                 b2_c.y += invMass2 * impulseY;
                 b2_a += invI2 * (r2X * impulseY - r2Y * impulseX);
-                b2.sweep.a = b2_a;
-                w.SynchronizeTransform(b2i);
+                SynchronizeAfterAngle(w, b2i, b2_a);
             }
         }
         return minSeparation >= -1.5 * settings::linearSlop;
@@ -1356,7 +1370,7 @@ struct Scratch {
 };
 #ifdef _WIN32
 // MinGW's thread_local objects with destructors can crash at thread exit (the destructor ran on freed TLS memory:
-// beam search, many short-lived worker threads). Fiber-local storage hands its cleanup callback the right pointer.
+// many short-lived worker threads). Fiber-local storage hands its cleanup callback the right pointer.
 void WINAPI FreeScratch(void* p) { delete static_cast<Scratch*>(p); }
 Scratch& GetScratch() {
     static const DWORD slot = FlsAlloc(FreeScratch);
@@ -1433,14 +1447,19 @@ struct Island {
                     b.angularVelocity = settings::maxAngularVelocity;
             }
         }
-        ContactSolver contactSolver(w, step, contacts, contactCount, GetScratch().constraints);
-        contactSolver.InitVelocityConstraints(step);
-        for (int32_t i = 0; i < jointCount; ++i) w.JointInitVelocityConstraints(joints[i], step);
-        for (int32_t i = 0; i < step.maxIterations; ++i) {
-            contactSolver.SolveVelocityConstraints();
-            for (int32_t k = 0; k < jointCount; ++k) w.JointSolveVelocityConstraints(joints[k], step);
+        std::optional<ContactSolver> contactSolver;
+        if (contactCount != 0) {
+            contactSolver.emplace(w, step, contacts, contactCount, GetScratch().constraints);
+            contactSolver->InitVelocityConstraints(step);
         }
-        contactSolver.FinalizeVelocityConstraints();
+        for (int32_t i = 0; i < jointCount; ++i) w.JointInitVelocityConstraints(joints[i], step);
+        if (contactCount != 0 || jointCount != 0) {
+            for (int32_t i = 0; i < step.maxIterations; ++i) {
+                if (contactSolver) contactSolver->SolveVelocityConstraints();
+                for (int32_t k = 0; k < jointCount; ++k) w.JointSolveVelocityConstraints(joints[k], step);
+            }
+        }
+        if (contactSolver) contactSolver->FinalizeVelocityConstraints();
         for (int32_t i = 0; i < bodyCount; ++i) {
             int32_t bi = bodies[i];
             Body& b = w.bodies[bi];
@@ -1455,7 +1474,7 @@ struct Island {
         if (correctPositions) {
             // b2Joint.InitPositionConstraints is a no-op for every joint type
             for (positionIterationCount = 0; positionIterationCount < step.maxIterations; ++positionIterationCount) {
-                bool contactsOkay = contactSolver.SolvePositionConstraints(settings::contactBaumgarte);
+                bool contactsOkay = !contactSolver || contactSolver->SolvePositionConstraints(settings::contactBaumgarte);
                 bool jointsOkay = true;
                 for (int32_t k = 0; k < jointCount; ++k) {
                     bool jointOkay = w.JointSolvePositionConstraints(joints[k]);  // always evaluated
