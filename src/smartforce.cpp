@@ -1,27 +1,36 @@
 // smartforce.cpp - `rbsim smartforce`: this is basically red ball regex
 #include "redball.h"
+#include "jumpbrute.h"
+#include "search_offset.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <condition_variable>
 #include <csignal>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <exception>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <list>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <random>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #if defined(__SSE2__)
 #include <emmintrin.h>
@@ -52,6 +61,12 @@ double Bytes(const Options& o) {
     return b;
 }
 
+struct JumpSummary {
+    size_t position;
+    std::string minimum, maximum;
+    bool stateDependent = false;
+};
+
 struct Parser {
     static constexpr int MAX_DEPTH = 200;
     static constexpr double MAX_WORK = 4e8;
@@ -60,6 +75,7 @@ struct Parser {
     std::string err;
     double budget = 4e9, used = 0, work = 0;
     int depth = 0;
+    std::vector<JumpSummary> jumps;
     void Fail(const std::string& m) {
         if (err.empty()) err = m + " at position " + std::to_string(i + 1);
     }
@@ -220,11 +236,63 @@ void PlaceTaps(const std::vector<Tap>& taps, size_t i, bool add, Seq& q, std::ve
     }
 }
 
+// Placements of k presses on L frames whose reverse indices (L - frame) sum to k(L - k) + 1 consecutive values.
+uint64_t JumpWays(long L, long lo, long hi) {
+    const __int128 a = lo, b = std::min<long>(hi, L);
+    if (b < a) return 0;
+    const __int128 s1 = (b * (b + 1) - (a - 1) * a) / 2, s2 = (b * (b + 1) * (2 * b + 1) - (a - 1) * a * (2 * a - 1)) / 6;
+    const __int128 w = (__int128)L * s1 - s2 + (b - a + 1);
+    return w >= (__int128)SAT ? SAT : (uint64_t)w;
+}
+
+// Reverse indices are 1..L. The highest allowed press count also has the highest sum.
+uint64_t JumpMaxSum(long L, long k) {
+    return (uint64_t)k * (uint64_t)(2 * L - k + 1) / 2;
+}
+
+uint64_t JumpCap(long L, long hi, long percent) {
+    return JumpMaxSum(L, std::min(hi, L)) * (uint64_t)percent / 100;
+}
+
+uint64_t JumpFloor(long L, long hi, long percent) {
+    return (JumpMaxSum(L, std::min(hi, L)) * (uint64_t)percent + 99) / 100;
+}
+
+// The old ordering starts at the highest sum. Skip its prefix above the cap.
+uint64_t JumpSkip(long L, long k, uint64_t cap) {
+    const uint64_t highest = JumpMaxSum(L, k);
+    return highest > cap ? highest - cap : 0;
+}
+
+uint64_t RangedJumpWays(long L, long k, uint64_t floor, uint64_t cap) {
+    const uint64_t low = std::max(floor, (uint64_t)k * (uint64_t)(k + 1) / 2);
+    const uint64_t high = std::min(cap, JumpMaxSum(L, k));
+    return low <= high ? high - low + 1 : 0;
+}
+
+// The jump brute-forcer's placement (BruteForcer.as) for the sum d below the highest: a block from the first frame,
+// one press in between, a block at the end.
+template <class F>
+void JumpPresses(long L, long k, uint64_t d, F&& press) {
+    if (k == 0) return;
+    if (k == L) {
+        for (long i = 0; i < L; ++i) press(i);
+        return;
+    }
+    const long shift = L - k, end = (long)(d / (uint64_t)shift), mid = (long)(d % (uint64_t)shift), first = k - end - 1;
+    for (long i = 0; i < first; ++i) press(i);
+    if (end < k) press(first + mid);
+    for (long i = L - end; i < L; ++i) press(i);
+}
+
 // Strings are ordered by length, then as written; cnt[L] = strings of length L.
 struct Node {
-    enum Kind { RUN, SEQ, ALT, PLACE } kind = RUN;
+    enum Kind { RUN, SEQ, ALT, PLACE, JUMP, REDUCED, BRUTE, LIST } kind = RUN;
     uint8_t code = 0;
     long lo = 0, hi = 0;
+    long jumpPercentLo = 0, jumpPercentHi = 100;
+    long bruteLo = 1, bruteHi = 1;
+    size_t position = 0;
     bool filtered = false;
     long flo = 0, fhi = LONG_MAX;
     std::vector<std::unique_ptr<Node>> kids;
@@ -241,7 +309,7 @@ struct Node {
     void Restrict(long a, long b) {
         filtered = true;
         flo = std::max(flo, a), fhi = std::min(fhi, b);
-        if (kind == ALT || kind == PLACE)
+        if (kind == ALT || kind == PLACE || kind == JUMP || kind == REDUCED)
             for (auto& k : kids) k->Restrict(a, b);
     }
 
@@ -301,6 +369,47 @@ struct Node {
                     if (!p.Spend((double)(k - taps[t].lo + 1))) return false;
                 }
             for (size_t L = 0; L <= maxLen; ++L) cnt[L] = SatMul(cnt[L], ways[0][L]);
+        } else if (kind == LIST) {
+            Options o;
+            o.swap(list);
+            if (!stored) {
+                DedupeKeepOrder(o);
+                std::stable_sort(o.begin(), o.end(), [](const Seq& a, const Seq& b) { return a.size() < b.size(); });
+            }
+            if (filtered) o.erase(std::remove_if(o.begin(), o.end(), [&](const Seq& q) { return (long)q.size() < flo || (long)q.size() > fhi; }), o.end());
+            SetList(std::move(o));
+        } else if (kind == BRUTE) {
+            // Fixed slots give deterministic task splitting and a shuffled domain
+            // without repeats. The actual, state-dependent choices occupy the
+            // beginning of each (base, duration) slot group; skip its unused tail.
+            cnt = kids[0]->cnt;
+            const long last = std::min(bruteHi, (long)cnt.size() - 1);
+            ways.assign(2, {});
+            ways[0].resize(cnt.size());
+            ways[1].resize((size_t)last + 2);
+            if (!p.Spend((double)last + cnt.size())) return false;
+            for (long b = 1; b <= last; ++b)
+                ways[1][(size_t)b + 1] = SatAdd(ways[1][(size_t)b], b >= bruteLo ? JumpWays(b - 1, lo, hi) : 0);
+            for (size_t L = 0; L < cnt.size(); ++L) {
+                ways[0][L] = ways[1][std::min(L, (size_t)last) + 1];
+                cnt[L] = SatMul(cnt[L], ways[0][L]);
+            }
+        } else if (kind == JUMP || kind == REDUCED) {
+            cnt = kids[0]->cnt;
+            ways.assign(1, std::vector<uint64_t>(cnt.size(), 0));
+            for (size_t L = 0; L < cnt.size(); ++L) {
+                if (!cnt[L]) continue;
+                uint64_t w = 0;
+                if (jumpPercentLo == 0 && jumpPercentHi == 100) w = JumpWays((long)L, lo, hi);
+                else {
+                    const long last = std::min(hi, (long)L);
+                    if (!p.Spend((double)std::max(0L, last - lo + 1))) return false;
+                    const uint64_t floor = JumpFloor((long)L, hi, jumpPercentLo);
+                    const uint64_t cap = JumpCap((long)L, hi, jumpPercentHi);
+                    for (long k = lo; k <= last; ++k) w = SatAdd(w, RangedJumpWays((long)L, k, floor, cap));
+                }
+                cnt[L] = SatMul(cnt[L], ways[0][L] = w);
+            }
         } else {
             for (const auto& k : kids) {
                 if (k->cnt.size() > cnt.size()) cnt.resize(k->cnt.size(), 0);
@@ -354,6 +463,25 @@ struct Node {
                 }
                 r -= c;
             }
+        } else if (kind == JUMP || kind == REDUCED) {
+            const uint64_t w = ways[0][(size_t)L];
+            const size_t start = out.size();
+            kids[0]->GetByLen(L, r / w, out, sc);
+            r %= w;
+            const uint64_t floor = JumpFloor(L, hi, jumpPercentLo);
+            const uint64_t cap = JumpCap(L, hi, jumpPercentHi);
+            for (long k = lo; k <= std::min(hi, L); ++k) {
+                const uint64_t c = RangedJumpWays(L, k, floor, cap);
+                if (r >= c) {
+                    r -= c;
+                    continue;
+                }
+                JumpPresses(L, k, r + JumpSkip(L, k, cap), [&](long i) {
+                    uint8_t& x = out[start + (size_t)i];
+                    x = add ? (uint8_t)(x | code) : code;
+                });
+                break;
+            }
         } else {
             const uint64_t w = ways[0][(size_t)L];
             const size_t start = out.size();
@@ -393,14 +521,19 @@ struct Node {
         }
     }
 
-    void Get(uint64_t i, Seq& out, Scratch& sc) const {
-        out.clear();
+    void Append(uint64_t i, Seq& out, Scratch& sc) const {
         if (stored) {
-            out = list[(size_t)i];
+            const Seq& q = list[(size_t)i];
+            out.insert(out.end(), q.begin(), q.end());
             return;
         }
         const long L = (long)(std::upper_bound(cum.begin(), cum.end(), i) - cum.begin()) - 1;
         GetByLen(L, i - cum[(size_t)L], out, sc);
+    }
+
+    void Get(uint64_t i, Seq& out, Scratch& sc) const {
+        out.clear();
+        Append(i, out, sc);
     }
 
     bool KidsStored() const {
@@ -470,10 +603,76 @@ struct Node {
         p.used += charged + tableBytes;
     }
 
+    bool SummarizeJump(Parser& p) const {
+        struct Witness {
+            bool found = false;
+            long length = 0, presses = 0;
+            uint64_t sum = 0;
+        } minimum, maximum;
+        for (size_t length = 0; length < cnt.size(); ++length) {
+            if (!cnt[length]) continue;
+            const long L = (long)length, last = std::min(hi, L);
+            const uint64_t floor = JumpFloor(L, hi, jumpPercentLo), cap = JumpCap(L, hi, jumpPercentHi);
+            if (last < lo || floor > cap) continue;
+            // Both extreme sums grow with press count. Locate the feasible counts without enumerating strings.
+            long a = lo, b = last + 1;
+            while (a < b) {
+                const long mid = a + (b - a) / 2;
+                if (JumpMaxSum(L, mid) < floor) a = mid + 1;
+                else b = mid;
+            }
+            const long first = a;
+            a = lo, b = last + 1;
+            while (a < b) {
+                const long mid = a + (b - a) / 2;
+                if ((uint64_t)mid * (uint64_t)(mid + 1) / 2 <= cap) a = mid + 1;
+                else b = mid;
+            }
+            const long final = a - 1;
+            if (first > final) continue;
+            const uint64_t low = std::max(floor, (uint64_t)first * (uint64_t)(first + 1) / 2);
+            const uint64_t high = std::min(cap, JumpMaxSum(L, final));
+            if (!minimum.found || low < minimum.sum) minimum = {true, L, first, low};
+            if (!maximum.found || high > maximum.sum) maximum = {true, L, final, high};
+        }
+        auto route = [&](const Witness& w) {
+            if (!w.found) return std::string("none");
+            Seq q;
+            Scratch scratch;
+            kids[0]->GetByLen(w.length, 0, q, scratch);
+            JumpPresses(w.length, w.presses, JumpMaxSum(w.length, w.presses) - w.sum, [&](long i) {
+                uint8_t& x = q[(size_t)i];
+                x = add ? (uint8_t)(x | IN_U) : (uint8_t)IN_U;
+            });
+            return q.empty() ? std::string("n0") : EncodeInputsRLE(q);
+        };
+        JumpSummary summary{position, route(minimum), route(maximum)};
+        if (!p.Charge(2 * StringBytes(0) + (double)(summary.minimum.size() + summary.maximum.size()))) return false;
+        p.jumps.push_back(std::move(summary));
+        return true;
+    }
+
     bool Build(Parser& p) {
         for (auto& k : kids)
             if (!k->Build(p)) return false;
+        for (const auto& k : kids)
+            if (k->kind == BRUTE) {
+                p.Fail("a +b block must be a separate part of the pattern, not nested inside another block or alternative");
+                return false;
+            }
         if (!Count(p)) return false;
+        if (kind == BRUTE) {
+            p.jumps.push_back({position, {}, {}, true});
+            return true; // requires a real incoming Sim; never materialize statically
+        }
+        // Capture witnesses while the child's lookup tables still exist; materialization may release them.
+        if (kind == JUMP && !SummarizeJump(p)) return false;
+        if (kind == LIST) {
+            Recharge(p);
+            if (p.used <= p.budget) return true;
+            p.Fail("the results file needs more than --maxmem");
+            return false;
+        }
         if (total == 0) return true;
         double need = 0;
         if (!Steals())
@@ -487,7 +686,96 @@ struct Node {
     }
 };
 
+// Pure candidate arithmetic shared by prepared and on-demand generation.
+// The caller supplies the single BruteStart velocity measurement.
+template <class F>
+uint64_t BruteRows(const Node& n, int frames, double vy, F&& row) {
+    const JumpBrute model(frames, vy);
+    int last = (int)std::min<long>(n.hi, model.MaxCount());
+    while (last >= n.lo && model.Window(last) < last) --last;
+    uint64_t count = 0;
+    if (last >= n.lo) {
+        const uint64_t maximum = model.Maximum(last);
+        const uint64_t floor = (maximum * (uint64_t)n.jumpPercentLo + 99) / 100;
+        const uint64_t cap = maximum * (uint64_t)n.jumpPercentHi / 100;
+        for (int k = (int)n.lo; k <= last; ++k) {
+            if (model.Window(k) < k) continue;
+            const uint64_t low = std::max(floor, model.Minimum(k)), high = std::min(cap, model.Maximum(k));
+            if (low <= high) {
+                count += high - low + 1;
+                row(k, low, high, count);
+            }
+        }
+    }
+    return count;
+}
+
+// One group at a time, per worker and pattern part. No game states are retained
+// here. Reset whenever the incoming prefix changes; the caller owns the Sim.
+struct BruteChoices {
+    struct Row { uint64_t end, low, high; int count; };
+    std::vector<Row> rows;
+    Seq base;
+    uint64_t begin = 0, end = 0, count = 0;
+    unsigned vyKnown = 0;
+    double velocities[8] = {}, vy = 0;
+    int frames = 0;
+
+    void Reset() { begin = end = count = 0; vyKnown = 0; rows.clear(); }
+
+    bool Get(const Node& n, uint64_t index, const Sim& incoming, Sim& probe,
+             Seq& out, Scratch& scratch, uint64_t& skip) {
+        if (index < begin || index >= end) {
+            const size_t L = (size_t)(std::upper_bound(n.cum.begin(), n.cum.end(), index) - n.cum.begin() - 1);
+            uint64_t rank = index - n.cum[L];
+            const uint64_t width = n.ways[0][L], baseIndex = rank / width;
+            rank %= width;
+            frames = (int)(std::upper_bound(n.ways[1].begin(), n.ways[1].end(), rank) - n.ways[1].begin() - 1);
+            begin = n.cum[L] + baseIndex * width + n.ways[1][(size_t)frames];
+            end = n.cum[L] + baseIndex * width + n.ways[1][(size_t)frames + 1];
+            base.clear();
+            n.kids[0]->GetByLen((long)L, baseIndex, base, scratch);
+            const unsigned direction = base[0] & 5;
+            if (!(vyKnown & (1u << direction))) {
+                std::memcpy(&probe, &incoming, sizeof probe);
+                probe.Tick((uint8_t)direction); // BruteStart's one-tick lookahead
+                velocities[direction] = probe.world.bodies[probe.playerBody].linearVelocity.y;
+                vyKnown |= 1u << direction;
+            }
+            vy = velocities[direction];
+            rows.clear();
+            count = BruteRows(n, frames, vy, [&](int k, uint64_t low, uint64_t high, uint64_t end) {
+                rows.push_back({end, low, high, k});
+            });
+        }
+        skip = end;
+        uint64_t rank = index - begin;
+        if (rank >= count) return false;
+        const auto row = std::upper_bound(rows.begin(), rows.end(), rank,
+            [](uint64_t r, const Row& x) { return r < x.end; });
+        if (row != rows.begin()) rank -= (row - 1)->end;
+        out = base;
+        // Like BruteEnv, replace Up within the marked window and retain L/R.
+        // Inputs after the window, including any Up, remain exactly as written.
+        for (int i = 0; i < frames; ++i) out[(size_t)i] &= 5;
+        JumpBrute(frames, vy).Place(row->count, row->high - rank, [&](int i) { out[(size_t)i] |= IN_U; });
+        return true;
+    }
+};
+
 std::unique_ptr<Node> ParseSeq(Parser& p, const char* stops);
+
+void ParseJumpPercent(Parser& p, Node& n) {
+    if (!p.Int(n.jumpPercentHi)) p.Fail("reverse-index sum percentage expected");
+    p.Skip();
+    if (p.err.empty() && p.s.compare(p.i, 2, "..") == 0) {
+        p.i += 2;
+        n.jumpPercentLo = n.jumpPercentHi;
+        if (!p.Int(n.jumpPercentHi)) p.Fail("percentage expected after ..");
+    }
+    if (p.err.empty() && (n.jumpPercentHi > 100 || n.jumpPercentLo > n.jumpPercentHi || !p.Eat('%')))
+        p.Fail("reverse-index sum range must be i..j% with integers 0 <= i <= j <= 100 (x% means 0..x%)");
+}
 
 std::unique_ptr<Node> ParseItem(Parser& p) {
     auto n = std::make_unique<Node>();
@@ -522,14 +810,55 @@ std::unique_ptr<Node> ParseItem(Parser& p) {
     }
     if (p.Eat('<')) {
         n->kind = Node::PLACE;
+        n->position = p.i - 1;
         n->kids.push_back(ParseSeq(p, ")|>:+"));
         if (!p.err.empty()) return n;
         n->add = p.Eat('+');
         if (!n->add && !p.Eat(':')) {
-            p.Fail("expected the form <BASE:a3>, <BASE:a1..3,w1> or <BASE+a3>");
+            p.Fail("expected the form <BASE:a3>, <BASE:a1..3,w1>, <BASE+a3> or <BASE+j>");
+            return n;
+        }
+        if (p.Eat('b')) {
+            n->kind = Node::BRUTE;
+            if (!n->add) p.Fail("use +b to retain the base string's Left/Right inputs");
+            p.Range(n->bruteLo, n->bruteHi, -1);
+            if (n->bruteLo < 1 || n->bruteHi > 100000) p.Fail("b needs a frame count or range between 1 and 100000");
+            n->lo = 0, n->hi = LONG_MAX;
+            if (p.err.empty() && p.Eat(',')) {
+                if (p.Eat('j')) {
+                    p.Range(n->lo, n->hi, -1);
+                    if (n->lo < 0) n->lo = 0, n->hi = LONG_MAX;
+                    if (p.err.empty() && p.Eat(',')) ParseJumpPercent(p, *n);
+                } else ParseJumpPercent(p, *n);
+            }
+            if (p.err.empty() && !p.Eat('>')) p.Fail("expected <BASE+b10..20, j5..6, 30..40%>");
+            return n;
+        }
+        if (p.Eat('j')) {
+            n->kind = Node::JUMP;
+            n->code = IN_U;
+            p.Range(n->lo, n->hi, -1);
+            if (n->lo < 0) n->lo = 0, n->hi = LONG_MAX;
+            if (p.err.empty() && p.Eat(',')) ParseJumpPercent(p, *n);
+            if (p.err.empty() && !p.Eat('>')) p.Fail("'>' expected after jump count or percentage cap");
             return n;
         }
         do {
+            if (p.Eat('r')) {
+                if (n->taps.size() != 1) {
+                    p.Fail("r requires exactly one tap kind; use nested blocks for separate reductions");
+                    return n;
+                }
+                // The same static count/sum representatives as j, for the
+                // requested input code. No game state or vy test is involved.
+                n->kind = Node::REDUCED;
+                n->code = n->taps[0].code;
+                n->lo = n->taps[0].lo, n->hi = n->taps[0].hi;
+                n->taps.clear();
+                if (p.Eat(',')) ParseJumpPercent(p, *n);
+                if (p.err.empty() && !p.Eat('>')) p.Fail("expected <BASE+a1..5, r> or <BASE+a1..5, r, 30..40%>");
+                return n;
+            }
             Tap t;
             if (!p.Code(t.code)) {
                 p.Fail("tap letter expected");
@@ -539,6 +868,61 @@ std::unique_ptr<Node> ParseItem(Parser& p) {
             n->taps.push_back(t);
         } while (p.err.empty() && p.Eat(','));
         if (p.err.empty() && !p.Eat('>')) p.Fail("'>' expected");
+        return n;
+    }
+    if (p.Eat('{')) {
+        const size_t close = p.s.find('}', p.i);
+        if (close == std::string::npos) {
+            p.Fail("'}' expected after the file name");
+            return n;
+        }
+        std::string name = p.s.substr(p.i, close - p.i);
+        p.i = close + 1;
+        long top = LONG_MAX;
+        const size_t colon = name.find_last_of(':');
+        if (colon != std::string::npos && colon + 1 < name.size() && name.find_first_not_of("0123456789 ", colon + 1) == std::string::npos)
+            top = std::atol(name.c_str() + colon + 1), name.resize(colon);
+        name.erase(0, name.find_first_not_of(" \t")), name.erase(name.find_last_not_of(" \t") + 1);
+        std::ifstream f(name);
+        if (!f) {
+            p.Fail("cannot read " + name);
+            return n;
+        }
+        // Every line that is a whole route (letters with counts: a --save file's input lines, --list output).
+        auto isRoute = [](const std::string& t) {
+            if (t.empty() || !std::strchr("ndweaSqW", t[0])) return false;
+            for (size_t k = 0; k < t.size(); ++k)
+                if (std::isdigit((unsigned char)t[k]) ? false : !std::strchr("ndweaSqW", t[k]) || k + 1 == t.size() || !std::isdigit((unsigned char)t[k + 1]))
+                    return false;
+            return true;
+        };
+        n->kind = Node::LIST;
+        for (std::string line; (long)n->list.size() < top && std::getline(f, line);) {
+            line.erase(0, line.find_first_not_of(" \t")), line.erase(line.find_last_not_of(" \t\r") + 1);
+            if (isRoute(line)) n->list.push_back(DecodeInputs(line));
+        }
+        if (n->list.empty()) p.Fail("no routes in " + name);
+        while (p.err.empty() && p.Eat('[')) {
+            const bool pad = p.Eat('+');
+            if (!pad && !p.Eat('-')) {
+                p.Fail("file suffix must be [+N] or [-N]");
+                break;
+            }
+            long frames;
+            if (!p.Int(frames) || !p.Eat(']')) {
+                p.Fail("frame count followed by ']' expected in file suffix");
+                break;
+            }
+            for (Seq& q : n->list) {
+                if (pad) {
+                    if ((size_t)frames > MAX_LEN || q.size() > MAX_LEN - (size_t)frames) {
+                        p.Fail("padded file string longer than 1,000,000 frames");
+                        break;
+                    }
+                    q.resize(q.size() + (size_t)frames, 0);
+                } else q.resize(q.size() - std::min(q.size(), (size_t)frames));
+            }
+        }
         return n;
     }
     if (p.Eat('R')) p.Fail("R (restart) is not supported");
@@ -554,14 +938,63 @@ std::unique_ptr<Node> ParseSeq(Parser& p, const char* stops) {
     return n;
 }
 
+struct PreparedBrute;
 struct Segment {
     std::unique_ptr<Node> node;
-    uint64_t size() const { return node->total; }
-    bool generated() const { return !node->stored; }
-    void Get(uint64_t i, Seq& out, Scratch& sc) const { node->Get(i, out, sc); }
+    std::shared_ptr<const PreparedBrute> prepared;
+    uint64_t preparedSize = 0;
+    uint64_t size() const { return prepared ? preparedSize : node->total; }
+    bool generated() const { return prepared || !node->stored; }
+    bool needsState() const { return node->kind == Node::BRUTE && !prepared; }
+    void Append(uint64_t i, Seq& out, Scratch& sc, size_t* prefixEnd = nullptr) const;
+    void Get(uint64_t i, Seq& out, Scratch& sc, size_t* prefixEnd = nullptr) const {
+        out.clear(); Append(i, out, sc, prefixEnd);
+    }
 };
 
-std::vector<Segment> ParsePattern(const std::string& s, double budget, double& usedBytes, std::string& err) {
+// A dense, immutable generator: each entry is one prefix/base/window group.
+// It retains only an endpoint and a probed velocity, never a game savestate.
+struct PreparedBrute {
+    struct Group { uint64_t base; int frames; unsigned direction; };
+    struct Entry { uint64_t end = 0; double vy = 0; };
+    std::vector<Segment> prefix;
+    std::vector<uint64_t> strides;
+    std::vector<Group> groups;
+    std::vector<Entry> entries;
+
+    void Append(const Node& n, uint64_t index, Seq& out, Scratch& scratch, size_t* prefixEnd) const {
+        const auto entry = std::upper_bound(entries.begin(), entries.end(), index,
+            [](uint64_t k, const Entry& e) { return k < e.end; });
+        const size_t slot = (size_t)(entry - entries.begin());
+        const uint64_t prefixIndex = slot / groups.size();
+        const Group& group = groups[slot % groups.size()];
+        uint64_t rank = index - (slot ? entries[slot - 1].end : 0);
+        for (size_t i = 0; i < prefix.size(); ++i)
+            prefix[i].Append(prefixIndex / strides[i] % prefix[i].size(), out, scratch);
+        const size_t start = out.size();
+        if (prefixEnd) *prefixEnd = start;
+        n.kids[0]->Append(group.base, out, scratch);
+        for (int i = 0; i < group.frames; ++i) out[start + (size_t)i] &= 5;
+        bool placed = false;
+        BruteRows(n, group.frames, entry->vy, [&](int k, uint64_t low, uint64_t high, uint64_t) {
+            if (placed) return;
+            const uint64_t count = high - low + 1;
+            if (rank >= count) { rank -= count; return; }
+            JumpBrute(group.frames, entry->vy).Place(k, high - rank,
+                [&](int i) { out[start + (size_t)i] |= IN_U; });
+            placed = true;
+        });
+    }
+};
+
+void Segment::Append(uint64_t i, Seq& out, Scratch& sc, size_t* prefixEnd) const {
+    if (prefixEnd) *prefixEnd = 0;
+    if (prepared) prepared->Append(*node, i, out, sc, prefixEnd);
+    else node->Append(i, out, sc);
+}
+
+std::vector<Segment> ParsePattern(const std::string& s, double budget, double& usedBytes, std::string& err,
+                                std::vector<JumpSummary>& jumps) {
     Parser p;
     p.s = s;
     p.budget = budget;
@@ -595,6 +1028,8 @@ std::vector<Segment> ParsePattern(const std::string& s, double budget, double& u
     }
     err = p.err;
     usedBytes = p.used;
+    std::sort(p.jumps.begin(), p.jumps.end(), [](const JumpSummary& a, const JumpSummary& b) { return a.position < b.position; });
+    jumps = std::move(p.jumps);
     return segs;
 }
 
@@ -1150,6 +1585,179 @@ void OnInterrupt(int) {
     std::signal(SIGINT, SIG_DFL);
 }
 
+enum class PrepareResult { Skipped, Ready, Empty, Stopped };
+
+// Turn the first remaining state-dependent block and its prefix into a static
+// generator. Sampling can then shuffle actual candidates instead of replaying
+// a prefix merely to discover that its slot was excluded by vy or percentage.
+PrepareResult PrepareBrute(std::vector<Segment>& segs, const Sim& origin, int threads,
+                           double budget, double& storedBytes, double timeLimit,
+                           double& seconds, bool& timedOut, std::vector<JumpSummary>* summaries = nullptr) {
+    size_t at = 0;
+    while (at < segs.size() && !segs[at].needsState()) ++at;
+    if (at == segs.size()) return PrepareResult::Skipped;
+    const Node& n = *segs[at].node;
+    uint64_t prefixes = 1;
+    std::vector<uint64_t> strides(at);
+    for (size_t i = at; i-- > 0;) {
+        strides[i] = prefixes;
+        if (segs[i].size() >= SAT / prefixes) return PrepareResult::Skipped;
+        prefixes *= segs[i].size();
+    }
+    const long first = std::max(n.bruteLo, n.lo >= 100000 ? 100001L : n.lo + 1);
+    uint64_t groupCount = 0;
+    double rowWork = 0;
+    const Node& child = *n.kids[0];
+    for (size_t L = 0; L < child.cnt.size(); ++L) if (child.cnt[L]) {
+        const long last = std::min<long>(n.bruteHi, (long)L);
+        if (last < first) continue;
+        groupCount = SatAdd(groupCount, SatMul(child.cnt[L], (uint64_t)(last - first + 1)));
+        rowWork += (double)child.cnt[L] * (last - first + 1) * (std::min(n.hi, last - 1) - n.lo + 1);
+    }
+    const double tableBytes = (double)prefixes * groupCount * sizeof(PreparedBrute::Entry) +
+                             (double)groupCount * sizeof(PreparedBrute::Group) +
+                             (double)at * (sizeof(Segment) + sizeof(uint64_t)) + sizeof(PreparedBrute);
+    const int workers = (int)std::min<uint64_t>((uint64_t)threads, prefixes);
+    // Bound both retained scalar tables and temporary probing states. A large
+    // dependent tree keeps the existing on-demand path instead of expanding it.
+    if (!groupCount || tableBytes + 2.0 * workers * sizeof(Sim) > std::max(0.0, budget - storedBytes) * 0.15 ||
+        rowWork * prefixes > Parser::MAX_WORK) return PrepareResult::Skipped;
+
+    auto plan = std::make_shared<PreparedBrute>();
+    plan->strides = std::move(strides);
+    plan->groups.reserve((size_t)groupCount);
+    unsigned directions = 0;
+    {
+        Seq base;
+        Scratch scratch;
+        for (uint64_t b = 0; b < child.total; ++b) {
+            child.Get(b, base, scratch);
+            for (long frames = first; frames <= std::min<long>(n.bruteHi, (long)base.size()); ++frames) {
+                const unsigned direction = base[0] & 5;
+                plan->groups.push_back({b, (int)frames, direction});
+                directions |= 1u << direction;
+            }
+        }
+    }
+    plan->entries.resize((size_t)prefixes * plan->groups.size());
+    Say("b: probing %llu prefixes once before candidate generation\n", (unsigned long long)prefixes);
+    const auto started = std::chrono::steady_clock::now();
+    const auto elapsed = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count(); };
+    std::atomic<uint64_t> next{0}, completed{0};
+    std::atomic<int> running{workers};
+    std::atomic<bool> expired{false}, failed{false};
+    const auto stop = [&] {
+        if (g_stop.load(std::memory_order_relaxed) || failed.load(std::memory_order_relaxed)) return true;
+        if (timeLimit > 0 && seconds + elapsed() >= timeLimit) expired = true;
+        return expired.load(std::memory_order_relaxed);
+    };
+    std::vector<std::exception_ptr> errors((size_t)workers);
+    struct Witness { bool found = false; size_t slot = 0; int presses = 0; uint64_t sum = 0; };
+    struct Extremes { Witness minimum, maximum; };
+    std::vector<Extremes> extremes((size_t)workers);
+    const auto offer = [](Witness& saved, size_t slot, int presses, uint64_t sum, bool maximum) {
+        if (!saved.found || (maximum ? sum > saved.sum : sum < saved.sum) ||
+            (sum == saved.sum && std::make_pair(slot, presses) < std::make_pair(saved.slot, saved.presses)))
+            saved = {true, slot, presses, sum};
+    };
+    std::vector<std::thread> pool;
+    struct SignalGuard {
+        void (*previous)(int);
+        ~SignalGuard() { std::signal(SIGINT, previous); }
+    } signal{std::signal(SIGINT, OnInterrupt)};
+    try { for (int worker = 0; worker < workers; ++worker) pool.emplace_back([&, worker] {
+        try {
+            auto state = std::make_unique<Sim>(), probe = std::make_unique<Sim>();
+            Seq inputs;
+            Scratch scratch;
+            for (uint64_t p; !stop() && (p = next.fetch_add(1)) < prefixes;) {
+                CopySim(*state, origin);
+                inputs.clear();
+                for (size_t i = 0; i < at; ++i)
+                    segs[i].Append(p / plan->strides[i] % segs[i].size(), inputs, scratch);
+                for (size_t i = 0; i < inputs.size(); ++i) {
+                    if ((i & 63) == 0 && stop()) break;
+                    state->Tick(inputs[i]);
+                }
+                if (stop()) break;
+                double vy[8] = {};
+                for (unsigned direction : {0u, 1u, 4u, 5u}) if (directions & (1u << direction)) {
+                    CopySim(*probe, *state);
+                    probe->Tick((uint8_t)direction);
+                    vy[direction] = probe->world.bodies[probe->playerBody].linearVelocity.y;
+                }
+                for (size_t i = 0; i < plan->groups.size(); ++i) {
+                    if ((i & 63) == 0 && stop()) break;
+                    const auto& group = plan->groups[i];
+                    const size_t slot = (size_t)p * plan->groups.size() + i;
+                    auto& entry = plan->entries[slot];
+                    entry.vy = vy[group.direction];
+                    entry.end = BruteRows(n, group.frames, entry.vy, [&](int k, uint64_t low, uint64_t high, uint64_t) {
+                        offer(extremes[(size_t)worker].minimum, slot, k, low, false);
+                        offer(extremes[(size_t)worker].maximum, slot, k, high, true);
+                    });
+                }
+                if (!stop()) ++completed;
+            }
+        } catch (...) { errors[(size_t)worker] = std::current_exception(); failed = true; }
+        --running;
+    }); } catch (...) {
+        failed = true;
+        for (auto& thread : pool) thread.join();
+        throw;
+    }
+    double nextUpdate = 5;
+    while (running.load() > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        if (elapsed() >= nextUpdate) {
+            Say("b: probed %llu / %llu prefixes\n", (unsigned long long)completed.load(), (unsigned long long)prefixes);
+            nextUpdate += 5;
+        }
+    }
+    for (auto& thread : pool) thread.join();
+    const double duration = elapsed();
+    seconds += duration;
+    for (const auto& error : errors) if (error) std::rethrow_exception(error);
+    timedOut = expired.load();
+    if (g_stop || timedOut) return PrepareResult::Stopped;
+    uint64_t count = 0;
+    for (auto& entry : plan->entries) entry.end = count = SatAdd(count, entry.end);
+    if (count >= SAT) return PrepareResult::Skipped;
+    if (summaries) {
+        Extremes all;
+        for (const auto& e : extremes) {
+            if (e.minimum.found) offer(all.minimum, e.minimum.slot, e.minimum.presses, e.minimum.sum, false);
+            if (e.maximum.found) offer(all.maximum, e.maximum.slot, e.maximum.presses, e.maximum.sum, true);
+        }
+        const auto route = [&](const Witness& w) {
+            if (!w.found) return std::string("none");
+            const auto& group = plan->groups[w.slot % plan->groups.size()];
+            Seq input;
+            Scratch scratch;
+            child.Get(group.base, input, scratch);
+            for (int i = 0; i < group.frames; ++i) input[(size_t)i] &= 5;
+            JumpBrute(group.frames, plan->entries[w.slot].vy).Place(w.presses, w.sum,
+                [&](int i) { input[(size_t)i] |= IN_U; });
+            return EncodeInputsRLE(input);
+        };
+        for (auto& summary : *summaries) if (summary.position == n.position)
+            summary.minimum = route(all.minimum), summary.maximum = route(all.maximum), summary.stateDependent = false;
+    }
+    Say("b: %llu allowed choices, %.2f s preparation; generation now uses only cached velocities and counts\n",
+        (unsigned long long)count, duration);
+    if (!count) return PrepareResult::Empty;
+
+    plan->prefix.reserve(at);
+    for (size_t i = 0; i < at; ++i) plan->prefix.push_back(std::move(segs[i]));
+    Segment combined = std::move(segs[at]);
+    combined.prepared = std::move(plan);
+    combined.preparedSize = count;
+    segs.erase(segs.begin(), segs.begin() + at + 1);
+    segs.insert(segs.begin(), std::move(combined));
+    storedBytes += tableBytes;
+    return PrepareResult::Ready;
+}
+
 constexpr double SEEN_ENTRY_BYTES = 48, ROW_BYTES = 320;
 
 // Claimed state keys: 64 locked open-addressing shards.
@@ -1220,8 +1828,174 @@ bool Before(const Match& a, const Match& b) {
     return a.frame != b.frame ? a.frame < b.frame : a.flag != b.flag ? a.flag < b.flag : a.route < b.route;
 }
 
+struct SaveError : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+// Each search owns a new directory beside its output. Workers use separate files;
+// only allocating a file name is shared. Failed saves leave their runs recoverable.
+struct ResultScratch {
+    std::string folder;
+    std::atomic<uint64_t> next{0};
+    bool clean = false;
+
+    explicit ResultScratch(const std::string& output) {
+        const std::string base = output + ".parts";
+        for (uint64_t n = 0;; ++n) {
+            folder = base + (n ? "-" + std::to_string(n + 1) : "");
+            std::error_code ec;
+            if (std::filesystem::create_directory(folder, ec)) break;
+            if (ec && ec != std::errc::file_exists) throw SaveError("cannot create temporary results in " + folder + ": " + ec.message());
+        }
+    }
+    ~ResultScratch() {
+        if (clean) {
+            std::error_code ec;
+            std::filesystem::remove(folder, ec);
+        } else std::fprintf(stderr, "--save: temporary results retained in %s\n", folder.c_str());
+    }
+    std::string NewPath() { return folder + "/" + std::to_string(next.fetch_add(1)) + ".bin"; }
+};
+
+struct ResultRun {
+    ResultScratch& scratch;
+    std::string path;
+    uint64_t rows = 0;
+    explicit ResultRun(ResultScratch& s) : scratch(s), path(s.NewPath()) {}
+    void Discard() {
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+        path.clear();
+    }
+    ~ResultRun() { if (scratch.clean && !path.empty()) Discard(); }
+};
+using Run = std::unique_ptr<ResultRun>;
+
+struct ResultFile {
+    FILE* f;
+    std::string path;
+    struct Header {
+        uint64_t length;
+        int frame, alive;
+        double x, y, vx, vy, flag, count;
+    };
+    ResultFile(const std::string& p, const char* mode) : f(std::fopen(p.c_str(), mode)), path(p) {
+        if (!f) throw SaveError("cannot open temporary results " + path);
+    }
+    ~ResultFile() { if (f) std::fclose(f); }
+    void Close() {
+        FILE* old = f;
+        f = nullptr;
+        if (std::fclose(old)) throw SaveError("cannot close temporary results " + path);
+    }
+    void Write(const Match& m) {
+        const Header h{(uint64_t)m.route.size(), m.frame, m.alive, m.x, m.y, m.vx, m.vy, m.flag, m.count};
+        if (std::fwrite(&h, 1, sizeof h, f) != sizeof h || std::fwrite(m.route.data(), 1, m.route.size(), f) != m.route.size())
+            throw SaveError("cannot write temporary results " + path);
+    }
+    bool Read(Match& m) {
+        Header h{};
+        const size_t got = std::fread(&h, 1, sizeof h, f);
+        if (!got && !std::ferror(f)) return false;
+        if (got != sizeof h || h.length > m.route.max_size()) throw SaveError("cannot read temporary results " + path);
+        m.route.resize((size_t)h.length);
+        if (std::fread(m.route.data(), 1, m.route.size(), f) != m.route.size()) throw SaveError("incomplete temporary results " + path);
+        m.frame = h.frame, m.alive = h.alive != 0;
+        m.x = h.x, m.y = h.y, m.vx = h.vx, m.vy = h.vy, m.flag = h.flag, m.count = h.count;
+        return true;
+    }
+};
+
+// Binary carries merge equal-sized batches, so the number of run descriptors is
+// logarithmic and a merge needs just two readers and one writer, however many rows.
+struct ResultRuns {
+    ResultScratch& scratch;
+    bool byRoute;
+    std::vector<Run> levels;
+    ResultRuns(ResultScratch& s, bool routes) : scratch(s), byRoute(routes) {}
+
+    Run Merge(Run a, Run b) {
+        auto out = std::make_unique<ResultRun>(scratch);
+        ResultFile left(a->path, "rb"), right(b->path, "rb"), dest(out->path, "wb");
+        Match x, y, pending;
+        bool hasX = left.Read(x), hasY = right.Read(y), havePending = false;
+        auto write = [&]() { dest.Write(pending); ++out->rows; };
+        while (hasX || hasY) {
+            const bool takeX = !hasY || (hasX && (byRoute ? x.route <= y.route : !Before(y, x)));
+            Match& m = takeX ? x : y;
+            if (havePending && pending.route == m.route) pending.count += m.count;
+            else {
+                if (havePending) write();
+                pending = std::move(m), havePending = true;
+            }
+            if (takeX) hasX = left.Read(x);
+            else hasY = right.Read(y);
+        }
+        if (havePending) write();
+        dest.Close(), left.Close(), right.Close();
+        a->Discard(), b->Discard();
+        return out;
+    }
+    void AddRun(Run run, size_t level = 0) {
+        for (;;) {
+            if (levels.size() <= level) levels.resize(level + 1);
+            if (!levels[level]) { levels[level] = std::move(run); return; }
+            run = Merge(std::move(levels[level]), std::move(run));
+            ++level;
+        }
+    }
+    template<class Fill> void AddBlock(Fill fill) {
+        auto run = std::make_unique<ResultRun>(scratch);
+        ResultFile dest(run->path, "wb");
+        fill([&](const Match& m) { dest.Write(m); ++run->rows; });
+        dest.Close();
+        AddRun(std::move(run));
+    }
+    void Take(ResultRuns& other) {
+        for (size_t i = 0; i < other.levels.size(); ++i)
+            if (other.levels[i]) AddRun(std::move(other.levels[i]), i);
+    }
+    Run Finish() {
+        Run result;
+        for (Run& run : levels)
+            if (run) result = result ? Merge(std::move(result), std::move(run)) : std::move(run);
+        return result;
+    }
+};
+
+// Aggregate by the exact route first, then sort the unique results by --sortby.
+// Neither phase retains the complete result set in RAM.
+Run SortSavedResults(ResultRuns& routes, size_t batchSize, size_t byteCap = SIZE_MAX) {
+    Run input = routes.Finish();
+    if (!input) return nullptr;
+    ResultRuns sorted(routes.scratch, false);
+    ResultFile source(input->path, "rb");
+    std::vector<Match> batch;
+    size_t bytes = 0;
+    auto flush = [&]() {
+        std::sort(batch.begin(), batch.end(), Before);
+        sorted.AddBlock([&](auto write) { for (const Match& m : batch) write(m); });
+        batch.clear();
+        bytes = 0;
+    };
+    Match m;
+    while (source.Read(m)) {
+        const size_t cost = 2 * sizeof(Match) + m.route.capacity();
+        if (!batch.empty() && cost > byteCap - std::min(byteCap, bytes)) flush();
+        batch.push_back(std::move(m));
+        bytes += cost;
+        if (batch.size() >= batchSize || bytes >= byteCap) flush();
+    }
+    if (!batch.empty()) flush();
+    source.Close();
+    input->Discard();
+    return sorted.Finish();
+}
+
 struct Rows {
     size_t cap = SIZE_MAX;
+    size_t byteCap = SIZE_MAX, bytes = 0;
+    ResultRuns* spill = nullptr;
     bool evicted = false;
     double matched = 0;
     std::map<std::string, Match> byRoute;
@@ -1230,6 +2004,13 @@ struct Rows {
     };
     std::set<const Match*, Ord> order;
 
+    void Flush() {
+        if (byRoute.empty()) return;
+        spill->AddBlock([&](auto write) { for (const auto& kv : byRoute) write(kv.second); });
+        order.clear();
+        byRoute.clear();
+        bytes = 0;
+    }
     void Add(Match&& m, bool count = true) {
         if (count) matched += m.count;
         auto it = byRoute.find(m.route);
@@ -1237,12 +2018,22 @@ struct Rows {
             it->second.count += m.count;
             return;
         }
+        const size_t cost = (size_t)ROW_BYTES + 2 * m.route.capacity();
+        if (spill) {
+            if (!byRoute.empty() && (byRoute.size() >= cap || cost > byteCap - std::min(byteCap, bytes))) Flush();
+            if (cost > byteCap) {
+                spill->AddBlock([&](auto write) { write(m); });
+                return;
+            }
+            bytes += cost;
+        }
         if (byRoute.size() >= cap && !order.empty() && !Before(m, **order.rbegin())) {
             evicted = true;
             return;
         }
         const std::string key = m.route;
         auto res = byRoute.emplace(key, std::move(m));
+        if (spill) return;
         order.insert(&res.first->second);
         if (byRoute.size() > cap) {
             const std::string worst = (*std::prev(order.end()))->route;
@@ -1280,18 +2071,79 @@ std::string RowText(const Match& m, bool withCount, bool ownLine = false) {
     return s + "\n      " + m.route + "\n";
 }
 
+void SaveText(FILE* f, const std::string& text, const std::string& path) {
+    if (std::fwrite(text.data(), 1, text.size(), f) != text.size()) throw SaveError("writing " + path + " failed");
+}
+
+void CloseSaved(FILE*& f, const std::string& path) {
+    const bool good = !std::ferror(f);
+    FILE* old = f;
+    f = nullptr;
+    const int closed = std::fclose(old);
+    if (!good || closed) throw SaveError("writing " + path + " failed");
+}
+
 
 struct SharedPrefixes;
+struct DeterministicPrefixes;
+constexpr double PREFIX_MIN_SUFFIXES = 10;
+
+// Complete input strings, compared byte-for-byte after decoding RLE. No prefix
+// or game-state equivalence is implied, and no hash collision can exclude a route.
+struct ExcludedStrings {
+    std::unordered_set<std::string> strings;
+    double bytes = 0;
+    size_t longest = 0;
+    bool Load(const std::string& path, double budget, std::string& error) {
+        std::ifstream file(path);
+        if (!file) { error = "cannot read " + path; return false; }
+        for (std::string line; std::getline(file, line);) {
+            const std::string text = Trim(line);
+            size_t at = 0, length = 0;
+            bool route = !text.empty();
+            while (route && at < text.size()) {
+                if (!std::strchr("ndweaSqW", text[at++]) || at == text.size() ||
+                    !std::isdigit((unsigned char)text[at])) { route = false; break; }
+                size_t count = 0;
+                while (at < text.size() && std::isdigit((unsigned char)text[at]))
+                    count = std::min(MAX_LEN + 1, count * 10 + (size_t)(text[at++] - '0'));
+                length += count;
+                if (length > MAX_LEN) { error = "excluded string longer than 1,000,000 frames"; return false; }
+            }
+            if (!route) continue; // saved-result headings and numeric rows
+            if (bytes + StringBytes(length) + 32 > budget) { error = "excluded strings exceed --maxmem"; return false; }
+            const Seq decoded = DecodeInputs(text);
+            if (strings.emplace(decoded.begin(), decoded.end()).second) {
+                bytes += StringBytes(length) + 32;
+                longest = std::max(longest, decoded.size());
+            }
+        }
+        if (file.bad()) { error = "reading " + path + " failed"; return false; }
+        if (strings.empty()) { error = "no routes in " + path; return false; }
+        return true;
+    }
+};
 
 struct Force {
     std::vector<Segment> segs;
     std::vector<Cond> conds;
+    struct Group {
+        size_t a, b;     // conds[a, b): all on one frame
+        int hi;          // last frame they can hold
+        bool deadLater;  // this group and every later one can still be met with the ball dead
+    };
+    std::vector<Group> groups;  // met in order (--report "A, B; C"), each on a later frame
     std::vector<double> rest;
     int pad = 0;
     size_t split = 0;
     bool idleUp = false, rawStates = false, sampling = false;
+    bool stateDependent = false;
+    size_t lastBrute = 0;
+    const Sim* origin = nullptr;
     double tol = 1e-10;
     size_t rowCap = SIZE_MAX;
+    size_t rowByteCap = SIZE_MAX;
+    ResultScratch* saved = nullptr;
     int mergeEvery = 32;
     Seen* seen = nullptr;
     Report* report = nullptr;
@@ -1303,10 +2155,12 @@ struct Force {
     size_t lead = 0;  // --stochastic: leading parts kept
     uint64_t leadStates = 0;
     SharedPrefixes* prefixes = nullptr;  // shared --stochastic prefixes
+    DeterministicPrefixes* deterministicPrefixes = nullptr;  // exact task prefixes, shared by all workers
+    const ExcludedStrings* excluded = nullptr;
 
     // Random samples can only merge once few continuations are left.
     bool WorthClaim(size_t nextSeg) const { return !sampling || rest[nextSeg] <= (double)played->load(std::memory_order_relaxed) + 1; }
-    bool MidClaims(size_t seg) const { return seen && mergeEvery > 0 && WorthClaim(seg + 1); }
+    bool MidClaims(size_t seg) const { return seen && mergeEvery > 0 && WorthClaim(seg + 1) && (!stateDependent || seg >= lastBrute); }
 };
 
 struct State {
@@ -1457,6 +2311,95 @@ struct SharedPrefixes {
 
 enum Status { GOING, MATCH, FAIL, MERGED };
 
+// A deterministic task fixes every option before split-1. Several tasks can have
+// the same fixed prefix but different suffix ranges; do its physics only once.
+// The key includes ALL earlier choices, not just a file row or its input text.
+struct DeterministicPrefixes {
+    using Id = std::pair<size_t, uint64_t>;  // segment, mixed-radix prefix index
+    struct Entry {
+        State state;
+        std::vector<Key> midKeys;  // state keys only; the remaining-input hash belongs to each task
+        Status result = GOING;
+        size_t stopAt = 0, cost = 0;
+        std::list<Id>::iterator age;
+        std::mutex mutex;
+        std::condition_variable ready;
+        bool complete = false;
+        std::exception_ptr failure;
+    };
+    const size_t capacity, entryLimit;
+    std::mutex mutex;
+    std::map<Id, std::shared_ptr<Entry>> entries;
+    std::list<Id> ages;
+    size_t used = 0, peakEntries = 0;
+    uint64_t built = 0, reused = 0, evicted = 0;
+
+    DeterministicPrefixes(size_t budget, size_t threads)
+        : capacity(budget > sizeof(DeterministicPrefixes) ? budget - sizeof(DeterministicPrefixes) : 0), entryLimit(threads) {}
+
+    static size_t Cost(size_t played, size_t keys) {
+        // Includes the shared ownership block, tree/list nodes and allocation overhead.
+        const size_t fixed = sizeof(Entry) + 256;
+        if (played > SIZE_MAX - fixed || keys > (SIZE_MAX - fixed - played) / sizeof(Key)) return SIZE_MAX;
+        return fixed + played + keys * sizeof(Key);
+    }
+
+    template<class Fill>
+    std::shared_ptr<const Entry> Get(const Id& id, size_t cost, Fill&& fill) {
+        std::shared_ptr<Entry> entry;
+        bool owner = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            const auto found = entries.find(id);
+            if (found != entries.end()) {
+                entry = found->second;
+                ages.splice(ages.end(), ages, entry->age);
+                ++reused;
+            } else {
+                if (entryLimit == 0 || cost > capacity) return {};
+                // Keep in-use entries pinned, including one still being calculated.
+                // Both ready and in-progress entries count toward the thread cap.
+                // Evict before allocating a replacement, so even transient entries
+                // cannot exceed it. If all slots are pinned, replay normally.
+                const auto full = [&] { return entries.size() >= entryLimit || cost > capacity - used; };
+                for (auto age = ages.begin(); full() && age != ages.end();) {
+                    auto old = entries.find(*age);
+                    if (old->second.use_count() != 1) { ++age; continue; }
+                    used -= old->second->cost;
+                    entries.erase(old);
+                    age = ages.erase(age);
+                    ++evicted;
+                }
+                if (full()) return {};
+                entry = std::make_shared<Entry>();
+                entry->cost = cost;
+                entries.emplace(id, entry);
+                try { ages.push_back(id); }
+                catch (...) { entries.erase(id); throw; }
+                entry->age = std::prev(ages.end());
+                used += cost;
+                peakEntries = std::max(peakEntries, entries.size());
+                ++built;
+                owner = true;
+            }
+        }
+        if (owner) {
+            try { fill(*entry); }
+            catch (...) { entry->failure = std::current_exception(); }
+            {
+                std::lock_guard<std::mutex> lock(entry->mutex);
+                entry->complete = true;
+            }
+            entry->ready.notify_all();
+        } else {
+            std::unique_lock<std::mutex> lock(entry->mutex);
+            entry->ready.wait(lock, [&] { return entry->complete; });
+        }
+        if (entry->failure) std::rethrow_exception(entry->failure);
+        return entry;
+    }
+};
+
 // The previous option's checkpoints, state keys at merge points and fail point.
 struct Resume {
     std::vector<std::unique_ptr<State>> cp;
@@ -1479,9 +2422,12 @@ struct Walker {
     const Force& sc;
     std::vector<std::unique_ptr<State>> pool;
     std::vector<Resume> resume;
+    std::unique_ptr<ResultRuns> saved;
     Rows rows;
     std::unique_ptr<Sim> canon = std::make_unique<Sim>();
+    std::unique_ptr<Sim> decidedState;  // replay an early match held pending a later b block
     std::vector<Seq> buf, look;
+    std::vector<BruteChoices> brute;
     Scratch scratch;
     double merged = 0;
     size_t cpLeft, stopAt = 0;
@@ -1489,12 +2435,20 @@ struct Walker {
     std::vector<std::unique_ptr<State>> lead;
     std::vector<uint8_t> leadAt;
     uint64_t sampleLead = 0;
+    uint64_t excludedCount = 0;
+    std::string excludedInput;
+    std::vector<size_t> preparedPrefixEnds;
+    bool optionsReady = false;
 
     explicit Walker(const Force& s) : sc(s), resume(s.segs.size()), cpLeft(s.checkpoints) {
         for (size_t i = 0; i <= s.segs.size(); ++i) pool.push_back(std::make_unique<State>());
         buf.resize(s.segs.size() + 1);
         look.resize(2 * s.segs.size());
+        brute.resize(s.segs.size());
+        if (s.excluded) preparedPrefixEnds.resize(s.segs.size());
         rows.cap = s.rowCap;
+        rows.byteCap = s.rowByteCap;
+        if (s.saved) saved = std::make_unique<ResultRuns>(*s.saved, true), rows.spill = saved.get();
     }
 
     const Sim& Canon(const State& st) {
@@ -1505,6 +2459,9 @@ struct Walker {
 
     bool Claim(State& st, size_t seg, uint64_t rest = 0, Key* stateKey = nullptr) {
         if (!sc.seen) return true;
+        // A completed report is waiting for a later b block. Its earlier output
+        // state may differ even if these continuation states converge.
+        if (sc.stateDependent && st.met[sc.groups.size() - 1]) return true;
         const Sim& c = Canon(st);
         const Key s = StateKey(c, *sc.keyBase, st.met, sc.conds.size(), sc.tol);
         if (stateKey) *stateKey = s;
@@ -1515,38 +2472,53 @@ struct Walker {
         return fresh;
     }
 
-    Status Step(State& st, uint8_t in) {
+    Status Step(State& st, uint8_t in, bool awaitBrute = false) {
         Sim& s = st.sim;
-        if (!s.playerAlive && s.frameCount >= s.deathFrame + RESPAWN_LAST_PAUSE_FRAMES) return FAIL;
+        const bool complete = st.met[sc.groups.size() - 1] != 0;
+        if (complete && !awaitBrute) return MATCH;
+        if (!complete && !s.playerAlive && s.frameCount >= s.deathFrame + RESPAWN_LAST_PAUSE_FRAMES) return FAIL;
         const int f = s.frameCount + 1;
         const bool alive = s.playerAlive;
         s.Tick(in);
         st.played.push_back(!sc.idleUp && alive && s.upIdle ? (uint8_t)(in & ~2) : in);
         const bool won = s.isTimeStop && DeathWarpFinishValid(s.deathFrame, s.winFrame);
-        bool all = true, deadHope = false;
-        for (size_t j = 0; j < sc.conds.size(); ++j) {
-            if (st.met[j]) continue;
+        size_t g = 0;
+        while (g < sc.groups.size() && st.met[g]) ++g;
+        if (g == sc.groups.size()) return awaitBrute ? GOING : MATCH;
+        bool holds = true;
+        for (size_t j = sc.groups[g].a; j < sc.groups[g].b && holds; ++j) {
             const Cond& c = sc.conds[j];
-            if (f >= c.lo && f <= c.hi && Holds(c, s, won)) {
-                st.met[j] = f;
-                continue;
-            }
-            if (f >= c.hi) return FAIL;
-            all = false;
-            deadHope |= CanHoldDead(c);
+            holds = f >= c.lo && f <= c.hi && Holds(c, s, won);
         }
-        if (all) return MATCH;
-        if (s.isTimeStop || (!s.playerAlive && !deadHope)) return FAIL;
+        if (holds) {
+            st.met[g] = f;
+            if (++g == sc.groups.size()) return awaitBrute ? GOING : MATCH;
+        }
+        for (size_t h = g; h < sc.groups.size(); ++h)
+            if (f >= sc.groups[h].hi) return FAIL;
+        if (s.isTimeStop || (!s.playerAlive && !sc.groups[g].deadLater)) return FAIL;
         return GOING;
     }
 
-    const Seq& Option(size_t seg, uint64_t k, Seq& out) {
-        const Node& n = *sc.segs[seg].node;
-        if (n.stored) return n.list[(size_t)k];
+    const Seq* Option(const State& st, size_t seg, uint64_t k, Seq& out, uint64_t& skip, size_t* prefixEnd = nullptr) {
+        const Segment& part = sc.segs[seg];
+        const Node& n = *part.node;
+        if (part.prepared) { part.Get(k, out, scratch, prefixEnd); return &out; }
+        if (n.kind == Node::BRUTE)
+            return brute[seg].Get(n, k, st.sim, *canon, out, scratch, skip) ? &out : nullptr;
+        if (n.stored) return &n.list[(size_t)k];
         n.Get(k, out, scratch);
-        return out;
+        return &out;
     }
-    const Seq& Option(size_t seg, uint64_t k) { return Option(seg, k, buf[seg]); }
+
+    const Seq* NextOption(const State& st, size_t seg, uint64_t& k, uint64_t hi, Seq& out) {
+        while (k < hi && !g_stop.load(std::memory_order_relaxed)) {
+            uint64_t skip = k + 1;
+            if (const Seq* q = Option(st, seg, k, out, skip)) return q;
+            k = skip;
+        }
+        return nullptr;
+    }
 
     static uint64_t RestOf(const Seq& in, size_t c, uint64_t later) {
         Hasher h(0x6A09E667F3BCC909ULL ^ later);
@@ -1570,7 +2542,8 @@ struct Walker {
     }
 
     // Plays an option from input `from`; with --hardfilter also merges every mergeEvery frames.
-    Status Play(State& st, const Seq& in, size_t seg, uint64_t later, size_t from = 0, Resume* keep = nullptr, size_t mark = 0) {
+    Status Play(State& st, const Seq& in, size_t seg, uint64_t later, size_t from = 0, Resume* keep = nullptr, size_t mark = 0,
+                size_t prefixEnd = 0) {
         const bool check = sc.MidClaims(seg);
         const size_t every = (size_t)sc.mergeEvery;
         // Shared prefixes only where no merge check falls inside them.
@@ -1580,7 +2553,8 @@ struct Walker {
             uint64_t inputs = 0;
             size_t at = 0;
             for (size_t depth : SharedPrefixes::depths) {
-                if (depth >= in.size() || (check && every <= depth) || !sc.prefixes->Supports(depth)) break;
+                if (depth >= in.size() || (check && (every <= depth || (prefixEnd && prefixEnd <= depth))) ||
+                    !sc.prefixes->Supports(depth)) break;
                 while (at < depth) inputs |= (uint64_t)in[at] << (3 * at), ++at;
                 prefixKey[cacheCount++] = {sampleLead, inputs | (1ULL << (3 * depth))};
             }
@@ -1593,13 +2567,16 @@ struct Walker {
             }
         }
         for (size_t j = from; j < in.size(); ++j) {
-            const Status r = Step(st, in[j]);
+            const Status r = Step(st, in[j], sc.stateDependent && seg < sc.lastBrute);
             stopAt = j + 1;
             if (r != GOING) return r;
             for (size_t i = 0; i < cacheCount; ++i)
                 if (j + 1 == SharedPrefixes::depths[i]) sc.prefixes->Insert(prefixKey[i], st, j + 1);
             if (keep && j + 1 == mark) Push(*keep, st, mark);
-            if (check && j + 1 < in.size() && (j + 1) % every == 0) {
+            // Prepared random choices contain their old prefix and jump in one
+            // sequence. Keep the merge at their boundary, before replaying the
+            // jump, and count its internal merge interval from that boundary.
+            if (check && j + 1 < in.size() && j + 1 >= prefixEnd && (j + 1 - prefixEnd) % every == 0) {
                 Key* slot = nullptr;
                 if (keep) {
                     if (keep->key.size() < (j + 1) / every) keep->key.resize((j + 1) / every);
@@ -1613,15 +2590,51 @@ struct Walker {
 
     void Record(State& st, double count) {
         Match m;
-        Sim& s = st.sim;
         for (size_t j = 0; j < sc.conds.size(); ++j) m.frame = std::max(m.frame, st.met[j]);
+        Sim* decided = &st.sim;
+        size_t length = st.played.size();
+        if (sc.stateDependent && (st.sim.frameCount != m.frame ||
+            st.played.size() > (size_t)std::max(0, m.frame - sc.origin->frameCount))) {
+            // The match was held pending while later state-dependent choices
+            // were validated. Recover its original row without retaining a
+            // second savestate for every branch or changing its deciding frame.
+            if (!decidedState) decidedState = std::make_unique<Sim>();
+            CopySim(*decidedState, *sc.origin);
+            length = 0;
+            while (length < st.played.size() && decidedState->frameCount < m.frame) decidedState->Tick(st.played[length++]);
+            decided = decidedState.get();
+        }
+        Sim& s = *decided;
+        if (sc.seen) {
+            // MATCH returns before the ordinary boundary claim. Deduplicate
+            // its actual saved endpoint, including early matches and padding.
+            // No continuation or intermediate report history remains relevant.
+            const Sim* keyState = &s;
+            if (!sc.rawStates) {
+                Canonicalize(s, *canon, sc.report != nullptr);
+                keyState = canon.get();
+            }
+            const Key stateKey = StateKey(*keyState, *sc.keyBase, &m.frame, 1, sc.tol);
+            // An extra boundary separates completed results from live branches.
+            const uint64_t at = Place(sc.segs.size() + 1, 0);
+            const Key key = PlaceKey(stateKey, at);
+            if (!sc.seen->Claim(key)) {
+                merged += sc.stateDependent ? 1 : count;
+                return;
+            }
+            if (sc.report) sc.report->Check(*keyState, key,
+                CoarseKey(*keyState, at, &m.frame, 1), sc.tol);
+        }
         m.alive = s.playerAlive;
         if (m.alive) {
             m.x = Value(s, Q_X), m.y = Value(s, Q_Y), m.vx = Value(s, Q_VX), m.vy = Value(s, Q_VY);
         }
         m.flag = Value(s, Q_FLAG);
-        m.count = count;
-        m.route = EncodeInputsRLE(st.played);
+        // Future b blocks have not been expanded yet. Do not multiply this
+        // early match by their static upper bounds and call it an exact count.
+        m.count = sc.stateDependent ? 1 : count;
+        if (length == st.played.size()) m.route = EncodeInputsRLE(st.played);
+        else m.route = EncodeInputsRLE(Seq(st.played.begin(), st.played.begin() + length));
         if (sc.best) {
             std::lock_guard<std::mutex> g(sc.best->m);
             sc.best->Offer(m);
@@ -1647,12 +2660,17 @@ struct Walker {
         const bool check = sc.MidClaims(seg);
         const size_t every = (size_t)sc.mergeEvery;
         R.depth = R.failAt = 0;
-        const Seq* opt = &Option(seg, lo, look[2 * seg + (lo & 1)]);
-        for (uint64_t k = lo; k < hi && !g_stop.load(std::memory_order_relaxed); ++k) {
-            const Seq* next = k + 1 < hi ? &Option(seg, k + 1, look[2 * seg + ((k + 1) & 1)]) : nullptr;
+        brute[seg].Reset();
+        uint64_t k = lo;
+        size_t buffer = 0;
+        const Seq* opt = NextOption(st, seg, k, hi, look[2 * seg]);
+        const uint64_t first = k;
+        while (opt && !g_stop.load(std::memory_order_relaxed)) {
+            uint64_t nextK = k + 1;
+            const Seq* next = NextOption(st, seg, nextK, hi, look[2 * seg + (buffer ^ 1)]);
             size_t from = 0, fail = 0, mark = 0;
             if (reuse) {
-                if (k > lo) {
+                if (k > first) {
                     const size_t shared = SharedPrefix(R.prev, *opt);
                     while (R.depth && R.at[R.depth - 1] > shared) --R.depth;
                     if (R.depth) from = R.at[R.depth - 1];
@@ -1674,7 +2692,7 @@ struct Walker {
                 if (from > 0) {
                     CopyState(*pool[seg], *R.cp[R.depth - 1]);
                     cur = pool[seg].get();
-                } else if (k + 1 < hi) {
+                } else if (next) {
                     CopyState(*pool[seg], st);
                     cur = pool[seg].get();
                 }
@@ -1689,17 +2707,71 @@ struct Walker {
                 else merged += sc.rest[seg + 1];
             }
             opt = next;
+            k = nextK;
+            buffer ^= 1;
         }
+    }
+
+    Status PlayFixedPrefix(State& st, const Seq& in, size_t seg, uint64_t prefixIndex, uint64_t later) {
+        const bool check = sc.MidClaims(seg);
+        const size_t every = (size_t)sc.mergeEvery;
+        const size_t keys = check && !in.empty() ? (in.size() - 1) / every : 0;
+        if (in.size() > SIZE_MAX - st.played.size()) return Play(st, in, seg, later);
+        const size_t played = st.played.size() + in.size();
+        const auto cached = sc.deterministicPrefixes->Get({seg, prefixIndex}, DeterministicPrefixes::Cost(played, keys),
+            [&](DeterministicPrefixes::Entry& e) {
+                e.state.played.reserve(played);
+                e.midKeys.reserve(keys);
+                CopyState(e.state, st);
+                for (size_t j = 0; j < in.size(); ++j) {
+                    e.result = Step(e.state, in[j], sc.stateDependent && seg < sc.lastBrute);
+                    e.stopAt = j + 1;
+                    if (e.result != GOING) break;
+                    if (check && j + 1 < in.size() && (j + 1) % every == 0)
+                        e.midKeys.push_back(StateKey(Canon(e.state), *sc.keyBase, e.state.met, sc.conds.size(), sc.tol));
+                }
+            });
+        if (!cached) return Play(st, in, seg, later);
+        // Never cache a MERGED decision. Reapply every skipped claim, in order,
+        // with THIS task's remaining-input hash, even on the first cache use.
+        // --merge-report uses the original path because it needs intermediate Sims.
+        for (size_t k = 0; k < cached->midKeys.size(); ++k) {
+            const size_t at = (k + 1) * every;
+            if (!sc.seen->Claim(PlaceKey(cached->midKeys[k], Place(seg, RestOf(in, at, later))))) {
+                stopAt = at;
+                return MERGED;
+            }
+        }
+        CopyState(st, cached->state);
+        stopAt = cached->stopAt;
+        return cached->result;
     }
 
     // weight: strings a match or merge stands for; tail: hash of what is still to play.
     bool PlayPrefix(State& st, const std::vector<uint64_t>& digit, size_t from, size_t upto, double weight, uint64_t tail = 0) {
+        uint64_t prefixIndex = 0;
+        if (sc.deterministicPrefixes)
+            for (size_t j = 0; j < from; ++j) prefixIndex = prefixIndex * sc.segs[j].size() + digit[j];
         for (size_t i = from; i < upto; ++i) {
             Hasher todo(0x51ED270B27E84A3DULL);
             for (size_t j = i + 1; j < digit.size(); ++j) todo.Mix(digit[j] + 1);
             if (tail) todo.Mix(tail);
             const uint64_t later = i + 1 < digit.size() || tail ? todo.Done().a : 0;
-            const Status r = Play(st, Option(i, digit[i]), i, later);
+            brute[i].Reset();
+            uint64_t skip = digit[i] + 1;
+            size_t prefixEnd = 0;
+            const Seq* option;
+            if (optionsReady) { option = &buf[i]; prefixEnd = preparedPrefixEnds[i]; }
+            else option = Option(st, i, digit[i], buf[i], skip, sc.sampling ? &prefixEnd : nullptr);
+            if (!option) { ended = FAIL; return false; }
+            const Seq& in = *option;
+            // Task splitting bounds this mixed-radix index by SAT. Walk already
+            // saves states for the suffix tree inside each task; only task prefixes
+            // need sharing. Count suffix choices, not --pad frames or file rows.
+            if (sc.deterministicPrefixes) prefixIndex = prefixIndex * sc.segs[i].size() + digit[i];
+            const Status r = sc.deterministicPrefixes && !sc.sampling && !sc.report &&
+                             sc.rest[i + 1] >= PREFIX_MIN_SUFFIXES && in.size() >= MIN_SKIP
+                ? PlayFixedPrefix(st, in, i, prefixIndex, later) : Play(st, in, i, later, 0, nullptr, 0, prefixEnd);
             ended = r;
             if (r == MATCH) Record(st, weight);
             if (r == MERGED) merged += weight;
@@ -1732,6 +2804,19 @@ struct Walker {
 
     // leadAt: 0 unknown, 1 kept, 2 fails, 3 played each time.
     void Sample(const std::vector<uint64_t>& digit, State& st, const State& base) {
+        optionsReady = false;
+        if (sc.excluded) {
+            excludedInput.clear();
+            bool possible = true;
+            for (size_t i = 0; i < sc.segs.size(); ++i) {
+                sc.segs[i].Get(digit[i], buf[i], scratch, &preparedPrefixEnds[i]);
+                if (buf[i].size() > sc.excluded->longest - excludedInput.size()) possible = false;
+                if (possible) excludedInput.append(buf[i].begin(), buf[i].end());
+            }
+            if (possible && sc.excluded->strings.count(excludedInput)) { ++excludedCount; return; }
+            // Reuse these generated parts during replay; no second generation.
+            optionsReady = true;
+        }
         size_t from = 0;
         sampleLead = 0;
         for (size_t i = 0; i < sc.lead; ++i) sampleLead = sampleLead * sc.segs[i].size() + digit[i];
@@ -1801,13 +2886,19 @@ static int Smartforce(int argc, char** argv) {
     bool save = false;
     std::string saveName;
     uint64_t maxSamples = 0, seed = 0;
-    std::string inputs, report = "win";
+    SearchOffset startPercent;
+    std::string startPercentText;
+    std::string inputs, report = "win", excludeFile;
     Force sc;
     for (int i = 2; i < argc; ++i) {
         auto next = [&]() -> const char* { return i + 1 < argc ? argv[++i] : ""; };
         if (!std::strcmp(argv[i], "--level")) level = std::atoi(next());
         else if (!std::strcmp(argv[i], "--inputs")) inputs = next();
         else if (!std::strcmp(argv[i], "--report")) report = next();
+        else if (!std::strcmp(argv[i], "--exclude")) {
+            excludeFile = next();
+            if (excludeFile.empty()) { std::fprintf(stderr, "--exclude needs a file name\n"); return 2; }
+        }
         else if (!std::strcmp(argv[i], "--checkpoint")) checkpoint = std::atoi(next());
         else if (!std::strcmp(argv[i], "--pad")) sc.pad = std::max(0, std::atoi(next()));
         else if (!std::strcmp(argv[i], "--threads")) threads = std::max(1, std::atoi(next()));
@@ -1823,6 +2914,12 @@ static int Smartforce(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--maxmem")) maxMemGB = std::atof(next());
         else if (!std::strcmp(argv[i], "--stochastic")) stochastic = true;
         else if (!std::strcmp(argv[i], "--time")) timeLimit = std::max(0.0, std::atof(next()));
+        else if (!std::strcmp(argv[i], "--start-percent")) {
+            startPercentText = next();
+            if (!startPercent.Parse(startPercentText)) {
+                std::fprintf(stderr, "--start-percent needs 0..100 (at most nine decimal places; optional %% suffix)\n"); return 2;
+            }
+        }
         else if (!std::strcmp(argv[i], "--samples")) maxSamples = std::strtoull(next(), nullptr, 10);
         else if (!std::strcmp(argv[i], "--update")) updateEvery = std::max(0.0, std::atof(next()));
         else if (!std::strcmp(argv[i], "--merge-every")) sc.mergeEvery = std::max(0, std::atoi(next()));
@@ -1845,6 +2942,12 @@ static int Smartforce(int argc, char** argv) {
             return 2;
         }
     }
+    if (!startPercentText.empty() && !stochastic) {
+        std::fprintf(stderr, "--start-percent requires --stochastic\n"); return 2;
+    }
+    if (startPercent.units && !seedGiven) {
+        std::fprintf(stderr, "--start-percent above zero requires --seed to preserve the random ordering\n"); return 2;
+    }
     if (!(maxMemGB > 0) || !std::isfinite(maxMemGB)) {
         std::fprintf(stderr, "--maxmem needs a positive number of gigabytes\n");
         return 2;
@@ -1857,7 +2960,7 @@ static int Smartforce(int argc, char** argv) {
     if (!level || (inputs.empty() && !names)) {
         std::fprintf(stderr, "usage: rbsim smartforce --level N --inputs PATTERN [--report CONDITIONS] [--checkpoint C] [--gless] [--pad N]\n"
             "                        [--threads N] [--top N] [--list] [--names] [--idle-up] [--hardfilter [--tolerance T]]\n"
-            "                        [--merge-report] [--maxmem GB] [--stochastic [--time SEC] [--samples N] [--seed S]\n"
+            "                        [--merge-report] [--maxmem GB] [--stochastic [--time SEC] [--samples N] [--seed S] [--start-percent P]\n"
             "                        [--update SEC]] [--merge-every N] [--sortby [-]Q] [--save [FILE]]\n"
             "pattern:\n"
             "  d18 n3      runs as in a TAS string (a letter without a count is 1 frame)\n"
@@ -1869,22 +2972,56 @@ static int Smartforce(int argc, char** argv) {
             "  <BASE:a1..3>, <BASE+a0..2>   every tap count in the range, for either form (0: BASE unchanged)\n"
             "  <BASE:a1,w1>  several tap kinds on different frames (never on the same one): one a and one w;\n"
             "              each kind takes its own count or range: <n20:a1..2,w0..1>, <d20+a1,w2>\n"
+            "  <BASE+a1..5, r>  reduce one tap kind to one placement per press count and reverse-index sum, like j.\n"
+            "              Uses no game state. Also accepts : to overwrite, other input letters, and an optional\n"
+            "              percentage after r: <BASE+a1..5, r, 30..40%%>. Indices run from BASE length down to 1;\n"
+            "              the maximum spans the whole count range. Counts refer to selected frames, even if\n"
+            "              BASE already holds that key. Equal count/sum does not guarantee equal physics outcomes.\n"
+            "  <BASE+j>    w presses as the jump brute-forcer places them, on BASE = the frames after take-off: one string\n"
+            "              per number of presses and height reached (sum of the presses' frames counted from BASE's end),\n"
+            "              not every subset; <BASE+j3>, <BASE+j2..5>: only that many presses; <BASE:j>: plain w\n"
+            "  <BASE:j2..5, 25..50%%>  keep reverse-index sums in 25..50%% of the maximum across requested press counts,\n"
+            "              for each BASE length (last frame = 1); inclusive, lower rounded up, upper down.\n"
+            "              Integer endpoints 0..100; x%% means 0..x%%; also works with +j\n"
+            "              Startup prints jump 1 - min: STRING, max: STRING for each jump block in pattern order.\n"
+            "  <BASE+b10..20, j5..6, 30..40%%>  use the built-in, state-aware jump brute-forcer on the first 10, 11, ... 20\n"
+            "              frames of BASE. Keep BASE's full length and its tail; replace Up inside the window, retain L/R.\n"
+            "              Start after the take-off input. j counts generated Up frames; the percentage uses the maximum\n"
+            "              eligible sum across that count range, separately for each incoming state and b duration.\n"
+            "              Like the viewer, bN samples vy after the first tick; weighted indices are N-1 down to 1.\n"
+            "              j and %% may be omitted (all). Windows longer than BASE are skipped. Use b blocks as separate\n"
+            "              pattern parts, not nested. Prefixes are probed once when preparation fits the memory/work limits;\n"
+            "              generation then uses cached vy values, reports exact totals, and prints each block's min/max.\n"
+            "              Larger dependent trees fall back to on-demand probes and candidate-slot upper bounds.\n"
+            "              --list also probes prefixes; prepared jump generation uses no further simulation.\n"
+            "  {FILE}      every route in FILE, e.g. the results a --save run kept (best first): {l8.txt}<d20+j>d15\n"
+            "              continues each of them; {FILE:100}: only the first 100\n"
+            "  {FILE}[-N]  trim N frames from each imported route (at most its full length)\n"
+            "  {FILE}[+N]  append N no-input (n) frames; suffixes can be chained; empty routes print as n0\n"
             "  e.g. \"d18(e1..6d0..5)=6<n4:a1>(d4..7e7..10)=14\" = 6 x 4 x 4 = 96 strings\n"
             "  Strings come shortest first, then in written order. Every part of the pattern is expanded in memory (repeats\n"
             "  removed) if it fits in --maxmem GB (default 4); a part that does not is generated one string at a time\n"
             "  instead (no limit, repeats kept; --hardfilter merges them).\n"
-            "report: comma-separated conditions, all must hold; each may have a frame window @F, @A..B, @..B, @A..\n"
+            "report: conditions joined by commas must all hold on the same frame; groups separated by ; are met one after\n"
+            "  another, each on a later frame. Each condition may have a frame window @F, @A..B, @..B, @A..\n"
             "  win  dead  alive  ground (a jump probe touches)  contact  contact=NAME (--names lists them)\n"
             "  Q<V  Q<=V  Q>V  Q>=V  Q=V   Q: px py vx vy vr (as the mod's HUD and /set: metres, m/s), pr (rotation in\n"
             "                              degrees as the HUD shows it: fmod(angle, 360), negative when turned backwards),\n"
             "                              flag (distance from the ball's box to the flag's in twips, <= 0: touching)\n"
-            "  e.g. --report \"contact=kickBall@40..60, px>=12.5@80\" (default: win)\n"
-            "frames are the game's (the flag frame is the one on the game's timer). A string is decided on the frame all conditions hold;\n"
+            "  e.g. --report \"contact=kickBall@40..60; px>=12.5, ground@80..\" (default: win)\n"
+            "frames are the game's (the flag frame is the one on the game's timer). A string is decided on the frame the last group holds;\n"
             "the rest of it is not played. --pad N: N extra n frames after each string. --list: print the strings only.\n"
             "Rows (and the best kept) are ordered by frame, then flag; --sortby Q (frame px py vx vy flag) orders them by\n"
             "that column, highest first (--sortby -Q: lowest first; dead rows last for px py vx vy), ties by frame, flag.\n"
-            "--save [FILE]: at the end (also after Ctrl+C) write all result rows, not just --top, to FILE after a line with\n"
-            "the command; by default smartforce-L<level>-<date>-<time>.txt (FILE ending in / or \\: in that folder;\n"
+            "--save [FILE]: at the end (also after Ctrl+C) write every matching result to FILE, with no row cap.\n"
+            "--exclude FILE: skip exact complete input strings from a saved-results or route-list file.\n"
+            "  With --stochastic, excludes before physics replay; also works with --list. Other variants of the same\n"
+            "  prefix remain. Compares decoded inputs as generated, before idle-Up removal and --pad. Search requires\n"
+            "  all b blocks to fit preparation. Exclusions do not record or resume unsuccessful past candidates.\n"
+            "Results spill to temporary disk files within the memory budget, then are combined and sorted by --sortby.\n"
+            "--top limits the console only. With --list, --save writes every generated string without simulation.\n"
+            "The file begins with the command; by default smartforce-L<level>-<date>-<time>.txt\n"
+            "(FILE ending in / or \\: in that folder;\n"
             "folders are created). An existing file is never overwritten: -2, -3, ... is added to the name.\n"
             "Up held on a frame where it does nothing (ball awake, no jump: no contact or no foot probe, no lift: vy >= 0) is\n"
             "written as the same keys without Up (the game plays both identically). --idle-up keeps the strings as written.\n"
@@ -1894,11 +3031,16 @@ static int Smartforce(int argc, char** argv) {
             "0: bit-exact only). With a tolerance the merge is a heuristic: a 1e-10 difference can grow. --merge-report: also\n"
             "list what still differs between states whose bodies agree to 1e-7 but that were not merged; --raw-states\n"
             "compares the full state instead. States are compared between the parts of the pattern and every\n"
-            "--merge-every N frames inside a part (default 32; 0: only between parts).\n"
+            "--merge-every N frames inside a part (default 32; 0: only between parts), and at every saved result.\n"
             "--stochastic: play the strings in a uniformly random order without repeats and without storing them (a keyed\n"
             "bijection of all string numbers), until all are played or Ctrl+C (or --time SEC, --samples N); every\n"
             "--update SEC (default 60, 0: off) it prints how many strings it has played and how fast, then the 10 best\n"
-            "so far. --seed S repeats a run. Ctrl+C stops any search and prints what was found.\n");
+            "so far. --seed S repeats a run. Ctrl+C stops any search and prints what was found.\n"
+            "--start-percent P: start at floor(total * P / 100) in that same shuffled order, without replaying earlier\n"
+            "strings. Requires --stochastic and an explicit --seed above 0%%; supports exact numbered domains only.\n"
+            "P is 0..100, with up to nine decimal places and an optional %% suffix. Keep the same pattern, input files\n"
+            "and generator version. --samples limits NEW visits; progress includes the skipped portion. Works with --list.\n"
+            "For an estimated stopping percentage, start slightly earlier to avoid leaving a gap.\n");
         return 2;
     }
     if (level < 1 || level > NUM_LEVELS || !GetLevelScript(level).implemented) {
@@ -1940,7 +3082,7 @@ static int Smartforce(int argc, char** argv) {
             cmd += a.find_first_of(" \t\"<>|&()") == std::string::npos && !a.empty() ? " " + a : " \"" + a + "\"";
         }
         std::fprintf(saveFile.f, "# %s\n# started %s\n", cmd.c_str(), when);
-        std::fflush(saveFile.f);
+        if (std::fflush(saveFile.f) || std::ferror(saveFile.f)) throw SaveError("writing " + saveName + " failed");
         std::fprintf(stderr, "the results will be saved to %s\n", saveName.c_str());
     }
     auto base = std::make_unique<State>();
@@ -1958,12 +3100,99 @@ static int Smartforce(int argc, char** argv) {
 
     const double budget = maxMemGB * 1e9;
     std::string err;
+    ExcludedStrings exclusions;
+    if (!excludeFile.empty()) {
+        if (!stochastic && !list) {
+            std::fprintf(stderr, "--exclude requires --stochastic for search (or --list)\n"); return 2;
+        }
+        if (!exclusions.Load(excludeFile, budget, err)) {
+            std::fprintf(stderr, "--exclude: %s\n", err.c_str()); return 2;
+        }
+        sc.excluded = &exclusions;
+        Say("exclude: loaded %zu exact strings from %s\n", exclusions.strings.size(), excludeFile.c_str());
+    }
     double storedBytes = 0;
-    sc.segs = ParsePattern(inputs, budget, storedBytes, err);
+    std::vector<JumpSummary> jumps;
+    sc.segs = ParsePattern(inputs, budget - exclusions.bytes, storedBytes, err, jumps);
+    storedBytes += exclusions.bytes;
     if (!err.empty()) {
         std::fprintf(stderr, "pattern: %s\n", err.c_str());
         return 2;
     }
+    if (!list) {
+        for (size_t start = 0; start <= report.size();) {
+            size_t end = report.find_first_of(",;", start);
+            if (end == std::string::npos) end = report.size();
+            const std::string tok = Trim(report.substr(start, end - start));
+            const bool closesGroup = end == report.size() || report[end] == ';';
+            start = end + 1;
+            if (!tok.empty()) {
+                Cond c;
+                if (!ParseCond(tok, c, err)) {
+                    std::fprintf(stderr, "report: %s\n", err.c_str());
+                    return 2;
+                }
+                if (c.kind == K_CONTACT && !c.name.empty() && c.name != "ground" &&
+                    std::find(tpl.bodyNames.begin(), tpl.bodyNames.end(), c.name) == tpl.bodyNames.end()) {
+                    std::fprintf(stderr, "report: level %d has no body named '%s' (see --names)\n", level, c.name.c_str());
+                    return 2;
+                }
+                sc.conds.push_back(c);
+            }
+            const size_t a = sc.groups.empty() ? 0 : sc.groups.back().b;
+            if (closesGroup && sc.conds.size() > a) sc.groups.push_back({a, sc.conds.size(), INT_MAX, true});
+        }
+        if (sc.conds.empty() || sc.conds.size() > MAX_CONDS) {
+            std::fprintf(stderr, "report: 1 to %d conditions\n", MAX_CONDS);
+            return 2;
+        }
+        for (size_t g = sc.groups.size(); g-- > 0;) {
+            Force::Group& G = sc.groups[g];
+            int lo = 1;
+            bool dead = g + 1 == sc.groups.size() || sc.groups[g + 1].deadLater;
+            for (size_t j = G.a; j < G.b; ++j) {
+                lo = std::max(lo, sc.conds[j].lo), G.hi = std::min(G.hi, sc.conds[j].hi);
+                dead = dead && CanHoldDead(sc.conds[j]);
+            }
+            G.deadLater = dead;
+            if (lo > G.hi) {
+                std::fprintf(stderr, "report: the conditions of group %zu (joined by commas: on the same frame) have no frame in common\n", g + 1);
+                return 2;
+            }
+        }
+    }
+
+    double preparationSeconds = 0;
+    bool preparationTimedOut = false;
+    const auto printJumps = [&] {
+        for (size_t i = 0; i < jumps.size(); ++i) {
+            if (jumps[i].stateDependent) Say("jump %zu - min/max depend on the incoming game state\n", i + 1);
+            else Say("jump %zu - min: %s, max: %s\n", i + 1, jumps[i].minimum.c_str(), jumps[i].maximum.c_str());
+        }
+    };
+    for (;;) {
+        const PrepareResult prepared = PrepareBrute(sc.segs, base->sim, threads, budget, storedBytes,
+            stochastic && !list ? timeLimit : 0, preparationSeconds, preparationTimedOut, &jumps);
+        if (prepared == PrepareResult::Skipped) break;
+        if (prepared == PrepareResult::Ready) continue;
+        if (prepared == PrepareResult::Empty) { printJumps(); Say("0 valid strings after jump filtering\n"); }
+        else Say("stopped during jump preparation: %s\n", preparationTimedOut ? "time limit" : "Ctrl+C");
+        if (saveFile.f) {
+            SaveText(saveFile.f, prepared == PrepareResult::Empty ? "# no valid jump candidates\n" : "# stopped during jump preparation\n", saveName);
+            CloseSaved(saveFile.f, saveName);
+            std::fprintf(stderr, "saved 0 %s to %s\n", list ? "strings" : "rows", saveName.c_str());
+        }
+        return list ? 0 : 1;
+    }
+    printJumps();
+    for (size_t i = 0; i < sc.segs.size(); ++i)
+        if (sc.segs[i].needsState()) sc.stateDependent = true, sc.lastBrute = i;
+    if (sc.excluded && sc.stateDependent && !list) {
+        std::fprintf(stderr, "--exclude needs all b blocks prepared before search; increase --maxmem or reduce the pattern\n");
+        return 2;
+    }
+    sc.origin = &base->sim;
+    const char* domainName = sc.stateDependent ? "candidate slots (upper bound before state filtering)" : "strings";
     sc.rest.assign(sc.segs.size() + 1, 1);
     for (size_t i = sc.segs.size(); i-- > 0;) sc.rest[i] = sc.rest[i + 1] * (double)sc.segs[i].size();
     std::string sizes;
@@ -1980,6 +3209,18 @@ static int Smartforce(int argc, char** argv) {
         if (o.size() > SAT / std::max<uint64_t>(total, 1)) exactTotal = false;
         else total *= o.size();
     }
+    if (startPercent.units && !exactTotal) {
+        std::fprintf(stderr, "--start-percent needs an exactly numbered search space (at most 4.6e18 candidates); this pattern uses independent random choices\n"); return 2;
+    }
+    const uint64_t startIndex = exactTotal ? startPercent.Index(total) : 0;
+    auto printStart = [&]() {
+        if (!startPercentText.empty()) Say("start position: %llu of %llu (%.9f%%); earlier positions skipped without replay\n",
+            (unsigned long long)startIndex, (unsigned long long)total, total ? 100.0 * (double)startIndex / (double)total : 0.0);
+    };
+    auto saveStart = [&]() {
+        if (saveFile.f && !startPercentText.empty()) std::fprintf(saveFile.f, "# start-percent %s\n# start-index %llu\n",
+            startPercentText.c_str(), (unsigned long long)startIndex);
+    };
     if (stochastic && !seedGiven) seed = ((uint64_t)std::random_device{}() << 32) ^ (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count();
     auto digitsOf = [&](uint64_t idx, std::vector<uint64_t>& d, std::mt19937_64* rng) {
         d.resize(sc.segs.size());
@@ -1994,57 +3235,95 @@ static int Smartforce(int argc, char** argv) {
     };
 
     if (list) {
-        if (stochastic && top == 0 && !exactTotal) {
-            std::fprintf(stderr, "--list --stochastic --top 0 would never end: the pattern has more than 4.6e18 strings\n");
+        if (stochastic && (top == 0 || save) && !exactTotal) {
+            std::fprintf(stderr, "--list --stochastic with --top 0 or --save would never end: the pattern has more than 4.6e18 strings\n");
             return 2;
         }
-        Say("%.0f strings%s%s\n", sc.rest[0], sizeNote.c_str(), anyGenerated ? ", * = generated, not stored" : "");
+        Say("%.0f %s%s%s\n", sc.rest[0], domainName, sizeNote.c_str(), anyGenerated ? ", * = generated, not stored" : "");
         std::vector<uint64_t> d(sc.segs.size(), 0);
         Seq part;
         Scratch scratch;
+        std::unique_ptr<Sim> listState, probe;
+        if (sc.stateDependent) listState = std::make_unique<Sim>(), probe = std::make_unique<Sim>();
+        BruteChoices brute;
         const Shuffle shuf(exactTotal ? total : 1, seed);
         std::mt19937_64 rng(seed);
-        for (int n = 0; (top == 0 || n < top) && !(exactTotal && (uint64_t)n >= total); ++n) {
+        if (saveFile.f && stochastic) std::fprintf(saveFile.f, "# seed %llu\n", (unsigned long long)seed);
+        const auto previousInterrupt = std::signal(SIGINT, OnInterrupt);
+        printStart();
+        saveStart();
+        uint64_t listed = 0, excluded = 0;
+        for (uint64_t n = startIndex; !g_stop && (save || top == 0 || listed < (uint64_t)top) && !(exactTotal && n >= total); ++n) {
             if (stochastic) digitsOf(exactTotal ? shuf((uint64_t)n) : 0, d, exactTotal ? nullptr : &rng);
             Seq s;
+            bool valid = true;
+            if (listState) CopySim(*listState, base->sim);
             for (size_t i = 0; i < sc.segs.size(); ++i) {
-                sc.segs[i].Get(d[i], part, scratch);
+                if (sc.segs[i].needsState()) {
+                    brute.Reset();
+                    uint64_t skip;
+                    if (!brute.Get(*sc.segs[i].node, d[i], *listState, *probe, part, scratch, skip)) {
+                        valid = false;
+                        if (!stochastic) {
+                            // Every suffix of this unused group is invalid. The
+                            // normal odometer below advances directly to skip.
+                            d[i] = skip - 1;
+                            for (size_t j = i + 1; j < d.size(); ++j) d[j] = sc.segs[j].size() - 1;
+                        }
+                        break;
+                    }
+                } else sc.segs[i].Get(d[i], part, scratch);
+                if (listState) for (uint8_t in : part) listState->Tick(in);
                 s.insert(s.end(), part.begin(), part.end());
             }
-            Say("%s\n", EncodeInputsRLE(s).c_str());
+            if (valid && sc.excluded && sc.excluded->strings.count(std::string(s.begin(), s.end()))) {
+                ++excluded;
+                valid = false;
+            }
+            if (valid) {
+                const std::string route = (s.empty() ? "n0" : EncodeInputsRLE(s)) + "\n";
+                if (top == 0 || listed < (uint64_t)top) PrintText(route);
+                if (saveFile.f) SaveText(saveFile.f, route, saveName);
+                ++listed;
+            }
             if (stochastic) continue;
             size_t i = sc.segs.size();
             while (i > 0 && ++d[i - 1] == sc.segs[i - 1].size()) d[--i] = 0;
             if (i == 0) break;
         }
+        if (saveFile.f) {
+            CloseSaved(saveFile.f, saveName);
+            std::fprintf(stderr, "saved %llu strings to %s\n", (unsigned long long)listed, saveName.c_str());
+        }
+        if (g_stop) Say("stopped by Ctrl+C after %llu strings\n", (unsigned long long)listed);
+        if (sc.excluded) Say("excluded %llu exact strings from listing\n", (unsigned long long)excluded);
+        std::signal(SIGINT, previousInterrupt);
         return 0;
     }
 
-    size_t start = 0;
-    while (start <= report.size()) {
-        size_t end = report.find(',', start);
-        if (end == std::string::npos) end = report.size();
-        const std::string tok = Trim(report.substr(start, end - start));
-        start = end + 1;
-        if (tok.empty()) continue;
-        Cond c;
-        if (!ParseCond(tok, c, err)) {
-            std::fprintf(stderr, "report: %s\n", err.c_str());
-            return 2;
+    uint64_t tasks = 1;
+    const uint64_t wantTasks = (uint64_t)threads * 32;
+    if (!stochastic) {
+        while (sc.split < sc.segs.size() && tasks < wantTasks && sc.segs[sc.split].size() <= SAT / tasks)
+            tasks *= sc.segs[sc.split++].size();
+        if (sc.split > 0) {
+            const uint64_t m = sc.segs[sc.split - 1].size(), outer = tasks / m;
+            sc.chunks = std::min(m, std::max<uint64_t>(1, (wantTasks + outer - 1) / outer));
+            tasks = outer * sc.chunks;
         }
-        if (c.kind == K_CONTACT && !c.name.empty() && c.name != "ground" &&
-            std::find(tpl.bodyNames.begin(), tpl.bodyNames.end(), c.name) == tpl.bodyNames.end()) {
-            std::fprintf(stderr, "report: level %d has no body named '%s' (see --names)\n", level, c.name.c_str());
-            return 2;
-        }
-        sc.conds.push_back(c);
     }
-    if (sc.conds.empty() || sc.conds.size() > MAX_CONDS) {
-        std::fprintf(stderr, "report: 1 to %d conditions\n", MAX_CONDS);
-        return 2;
-    }
+    bool shareTaskPrefixes = false;
+    if (!stochastic && !mergeReport)
+        for (size_t i = 0; i + 1 < sc.split; ++i)
+            shareTaskPrefixes |= sc.rest[i + 1] >= PREFIX_MIN_SUFFIXES && sc.segs[i].node->cnt.size() > MIN_SKIP;
 
-    const double fixedBytes = (double)threads * ((double)(sc.segs.size() + 3) * sizeof(State) + sizeof(Sim)) +
+    double bruteBytes = 0;
+    for (const Segment& s : sc.segs)
+        if (s.needsState())
+            bruteBytes += 2.0 * (double)std::min(s.node->hi + (s.node->hi < LONG_MAX ? 1 : 0), s.node->bruteHi) * sizeof(BruteChoices::Row);
+    const double fixedBytes = (double)threads * ((double)(sc.segs.size() + 3) * sizeof(State) +
+                              (sc.stateDependent ? 2.0 : 1.0) * sizeof(Sim) + bruteBytes +
+                              2.0 * exclusions.longest) +
                               (mergeReport ? 260.0 * sizeof(Sim) : 0.0);
     if (storedBytes + fixedBytes > budget) {
         std::fprintf(stderr, "%d threads need about %.2f GB for their game states, more than is left of --maxmem %g: use fewer --threads or a larger --maxmem\n",
@@ -2061,18 +3340,26 @@ static int Smartforce(int argc, char** argv) {
         if (sc.rawStates) sc.keyBase = &base->sim;
         else keyBase = std::make_unique<Sim>(), Canonicalize(base->sim, *keyBase, true), sc.keyBase = keyBase.get();
     }
-    sc.checkpoints = (size_t)std::min(stochastic ? 256.0 : 16.0 * (double)sc.segs.size(), spare * 0.1 / threads / sizeof(State));
+    // Deterministic task snapshots and the existing per-worker checkpoints share
+    // the same 10% memory allowance. Keep stochastic allocation unchanged.
+    sc.checkpoints = (size_t)std::min(stochastic ? 256.0 : 16.0 * (double)sc.segs.size(),
+                                    spare * (shareTaskPrefixes ? 0.05 : 0.1) / threads / sizeof(State));
     if (mergeReport) mrep = std::make_unique<Report>(), sc.report = mrep.get();
     const double rowShare = std::max(1000.0, spare * 0.3 / ROW_BYTES / threads);
     sc.rowCap = (size_t)(top > 0 ? std::min(rowShare, std::max(10000.0, 4.0 * top)) : rowShare);
+    sc.rowByteCap = (size_t)std::max(1.0, spare * 0.3 / threads);
+    std::unique_ptr<ResultScratch> saveScratch;
+    if (save) saveScratch = std::make_unique<ResultScratch>(saveName), sc.saved = saveScratch.get();
     Best best;
     sc.sampling = stochastic;
     if (stochastic && updateEvery > 0) sc.best = &best;
-    std::atomic<uint64_t> nextTask{0}, done{0};
+    std::atomic<uint64_t> nextTask{startIndex}, done{0};
     sc.played = &done;
     std::signal(SIGINT, OnInterrupt);
 
-    Say("level %d: %.0f strings%s, report: %s, %d threads\n", level, sc.rest[0], sizeNote.c_str(), report.c_str(), threads);
+    Say("level %d: %.0f %s%s, report: %s, %d threads\n", level, sc.rest[0], domainName, sizeNote.c_str(), report.c_str(), threads);
+    if (sc.stateDependent)
+        Say("b: state-dependent choices; unused slots are skipped. Match counts count visited matching branches, not unexpanded suffixes.\n");
     Say("memory: %.0f MB of the pattern stored%s, limit %g GB\n", storedBytes / 1e6,
                 anyGenerated ? ", * = generated one string at a time" : "", maxMemGB);
     if (stochastic) {
@@ -2084,26 +3371,26 @@ static int Smartforce(int argc, char** argv) {
         std::fflush(stdout);
     }
 
+    printStart();
     const auto t0 = std::chrono::steady_clock::now();
-    auto elapsed = [&]() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
+    auto elapsed = [&]() { return preparationSeconds + std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
     std::atomic<int> running{threads};
     std::atomic<bool> outOfMemory{false};
     std::atomic<bool> timeUp{false};
     std::vector<std::unique_ptr<Walker>> walkers;
     std::vector<std::thread> pool;
-    uint64_t tasks = 1;
-    const uint64_t wantTasks = (uint64_t)threads * 32;
-    if (!stochastic) {
-        while (sc.split < sc.segs.size() && tasks < wantTasks && sc.segs[sc.split].size() <= SAT / tasks)
-            tasks *= sc.segs[sc.split++].size();
-        if (sc.split > 0) {
-            const uint64_t m = sc.segs[sc.split - 1].size(), outer = tasks / m;
-            sc.chunks = std::min(m, std::max<uint64_t>(1, (wantTasks + outer - 1) / outer));
-            tasks = outer * sc.chunks;
-        }
-    } else {
+    std::vector<std::exception_ptr> saveErrors((size_t)threads);
+    if (stochastic) {
         for (uint64_t n = 1; sc.lead + 1 < sc.segs.size() && sc.segs[sc.lead].size() <= sc.checkpoints / n;)
             n *= sc.segs[sc.lead++].size(), sc.leadStates = n;
+    }
+    std::unique_ptr<DeterministicPrefixes> deterministicPrefixes;
+    if (shareTaskPrefixes) {
+        const size_t prefixBudget = (size_t)std::max(0.0, spare * 0.1 - (double)threads * sc.checkpoints * sizeof(State));
+        if (prefixBudget >= sizeof(DeterministicPrefixes) + DeterministicPrefixes::Cost(0, 0)) {
+            deterministicPrefixes = std::make_unique<DeterministicPrefixes>(prefixBudget, (size_t)threads);
+            sc.deterministicPrefixes = deterministicPrefixes.get();
+        }
     }
     std::unique_ptr<SharedPrefixes> prefixes;
     if (stochastic && sc.checkpoints > sc.leadStates) {
@@ -2128,7 +3415,7 @@ static int Smartforce(int argc, char** argv) {
         for (;;) {
             if (g_stop || timeUp) break;
             const uint64_t c = nextTask.fetch_add(1);
-            if ((exactTotal && c >= total) || (maxSamples && c >= maxSamples)) break;
+            if ((exactTotal && c >= total) || (maxSamples && c - startIndex >= maxSamples)) break;
             if (timeLimit > 0 && elapsed() > timeLimit) {
                 timeUp = true;
                 break;
@@ -2144,6 +3431,9 @@ static int Smartforce(int argc, char** argv) {
                 work(k);
             } catch (const std::bad_alloc&) {
                 outOfMemory = true;
+                g_stop = true;
+            } catch (const SaveError&) {
+                saveErrors[(size_t)k] = std::current_exception();
                 g_stop = true;
             }
             --running;
@@ -2164,8 +3454,9 @@ static int Smartforce(int argc, char** argv) {
                 }
                 const uint64_t played = done.load();
                 char head[256];
-                std::snprintf(head, sizeof head, "--- %.0f s: %llu of %.0f strings played (%.3g%%), %.0f/s (%.0f/s since the last update)\n%s\n",
-                              sec, (unsigned long long)played, sc.rest[0], 100.0 * (double)played / sc.rest[0], played / sec,
+                std::snprintf(head, sizeof head, "--- %.0f s: %llu of %.0f %s (%.3g%%), %.0f/s (%.0f/s since the last update)\n%s\n",
+                              sec, (unsigned long long)(startIndex + played), sc.rest[0], startIndex ? "positions reached" : sc.stateDependent ? "candidate slots visited" : "strings played",
+                              100.0 * (double)(startIndex + played) / sc.rest[0], played / sec,
                               (played - lastDone) / std::max(1e-9, sec - lastSec),
                               board.empty() ? "no match yet" : ("the " + std::to_string(board.size()) + " best so far:").c_str());
                 lastDone = played, lastSec = sec;
@@ -2187,52 +3478,94 @@ static int Smartforce(int argc, char** argv) {
     if (shown) std::fprintf(stderr, "\n");
     std::signal(SIGINT, SIG_DFL);
     const double sec = elapsed();
+    for (const auto& failure : saveErrors) if (failure) std::rethrow_exception(failure);
 
     Rows all;
+    std::unique_ptr<ResultRuns> savedRuns;
+    if (save) savedRuns = std::make_unique<ResultRuns>(*saveScratch, true);
     double sameState = 0;
+    uint64_t excludedCount = 0;
     bool evicted = false;
     for (auto& w : walkers) {
         all.matched += w->rows.matched;
         evicted |= w->rows.evicted;
         sameState += w->merged;
-        for (auto& kv : w->rows.byRoute) all.Add(std::move(kv.second), false);
+        excludedCount += w->excludedCount;
+        if (save) {
+            w->rows.Flush();
+            savedRuns->Take(*w->saved);
+        } else for (auto& kv : w->rows.byRoute) all.Add(std::move(kv.second), false);
     }
+    walkers.clear();
+    Run savedResults;
+    if (save) savedResults = SortSavedResults(*savedRuns, sc.rowCap, sc.rowByteCap);
     std::vector<Match> res;
     for (const Match* m : all.order) res.push_back(*m);
-    const size_t distinct = all.byRoute.size();
+    const size_t distinct = save ? (savedResults ? (size_t)savedResults->rows : 0) : all.byRoute.size();
     const char* atLeast = evicted ? "at least " : "";
     if (stochastic) {
         const uint64_t played = done.load();
-        Say("played %llu of %.0f strings (%.3g%%), %.0f match, %s%zu distinct, %.1f s, stopped: %s\n", (unsigned long long)played,
-                    sc.rest[0], 100.0 * (double)played / sc.rest[0], all.matched, atLeast, distinct, sec,
-                    outOfMemory ? "out of memory" : g_stop ? "Ctrl+C" : timeUp ? "time limit" : (maxSamples && played >= maxSamples) ? "--samples" : "all strings played");
+        Say("%s %llu of %.0f %s (%.3g%%), %.0f match, %s%zu distinct, %.1f s, stopped: %s\n",
+                    startIndex ? "position" : sc.stateDependent || sc.excluded ? "visited" : "played", (unsigned long long)(startIndex + played),
+                    sc.rest[0], sc.stateDependent ? "candidate slots" : "strings",
+                    100.0 * (double)(startIndex + played) / sc.rest[0], all.matched, atLeast, distinct, sec,
+                    outOfMemory ? "out of memory" : g_stop ? "Ctrl+C" : timeUp ? "time limit" : (maxSamples && played >= maxSamples) ? "--samples" : sc.stateDependent ? "all candidate slots visited" : sc.excluded ? "all strings visited" : "all strings played");
     } else {
-        Say("%.0f of %.0f strings match, %s%zu distinct up to the deciding frame, %.1f s%s\n", all.matched, sc.rest[0], atLeast,
+        if (sc.stateDependent)
+            Say("%.0f matching branches, %s%zu distinct up to the deciding frame, %.1f s%s\n", all.matched, atLeast,
+                distinct, sec, outOfMemory ? "" : g_stop ? " (stopped by Ctrl+C: results so far)" : "");
+        else Say("%.0f of %.0f strings match, %s%zu distinct up to the deciding frame, %.1f s%s\n", all.matched, sc.rest[0], atLeast,
                     distinct, sec, outOfMemory ? "" : g_stop ? " (stopped by Ctrl+C: results so far)" : "");
+        if (deterministicPrefixes)
+            Say("prefix savestates: %llu built, %llu reused, %llu evicted, peak %zu/%zu (minimum %.0fx suffix choices)\n",
+                (unsigned long long)deterministicPrefixes->built, (unsigned long long)deterministicPrefixes->reused,
+                (unsigned long long)deterministicPrefixes->evicted, deterministicPrefixes->peakEntries,
+                deterministicPrefixes->entryLimit, PREFIX_MIN_SUFFIXES);
     }
+    if (stochastic && !startPercentText.empty())
+        Say("this run: %llu positions visited after skipping %llu; same seed and unchanged inputs preserve the ordering\n",
+            (unsigned long long)done.load(), (unsigned long long)startIndex);
+    if (sc.excluded) Say("excluded %llu exact strings before simulation\n", (unsigned long long)excludedCount);
     if (hardfilter)
-        Say("%.0f strings merged into an earlier one with the same game state (tolerance %g; not counted above)%s\n", sameState,
-                    sc.tol, seen->full ? "; the merge table reached its --maxmem share, later states were not added" : "");
+        Say("%.0f %s merged into an earlier one with the same game state (tolerance %g; not counted above)%s\n", sameState,
+                    sc.stateDependent ? "candidate slots (upper bound)" : "strings", sc.tol,
+                    seen->full ? "; the merge table reached its --maxmem share, later states were not added" : "");
     if (evicted) Say("note: only the best rows were kept (memory share of --maxmem); the strings column may undercount\n");
     if (outOfMemory) Say("stopped early: out of memory (lower --maxmem or --threads); the results above are partial\n");
     if (mrep) mrep->Print();
     if (saveFile.f) {
+        saveStart();
         if (stochastic) std::fprintf(saveFile.f, "# seed %llu\n", (unsigned long long)seed);
-        std::fputs(res.empty() ? "# no string matched\n" : "frame         px         py         vx         vy   flag   strings\n      inputs\n", saveFile.f);
-        for (const Match& m : res) std::fputs(RowText(m, true, true).c_str(), saveFile.f);
-        const bool ok = !std::ferror(saveFile.f) && !std::fclose(saveFile.f);
-        saveFile.f = nullptr;
-        if (ok) std::fprintf(stderr, "saved %zu rows to %s\n", res.size(), saveName.c_str());
-        else std::fprintf(stderr, "--save: writing %s failed\n", saveName.c_str());
+        SaveText(saveFile.f, distinct ? "frame         px         py         vx         vy   flag   strings\n      inputs\n" : "# no string matched\n", saveName);
+        if (savedResults) {
+            ResultFile input(savedResults->path, "rb");
+            Match m;
+            while (input.Read(m)) SaveText(saveFile.f, RowText(m, true, true), saveName);
+        }
+        CloseSaved(saveFile.f, saveName);
+        saveScratch->clean = true;
+        std::fprintf(stderr, "saved %zu rows to %s\n", distinct, saveName.c_str());
     }
-    if (res.empty()) return 1;
+    if (!distinct) return 1;
     Say("frame         px         py         vx         vy   flag   strings  inputs\n");
     std::string rows;
-    for (size_t i = 0; i < res.size() && (top == 0 || (int)i < top); ++i) rows += RowText(res[i], true);
+    auto show = [&](const Match& m) {
+        rows += RowText(m, true);
+        if (rows.size() >= 65536) PrintText(rows), rows.clear();
+    };
+    if (savedResults) {
+        ResultFile input(savedResults->path, "rb");
+        Match m;
+        for (size_t i = 0; (top == 0 || i < (size_t)top) && input.Read(m); ++i) show(m);
+    } else for (size_t i = 0; i < res.size() && (top == 0 || i < (size_t)top); ++i) show(res[i]);
     PrintText(rows);
-    if (top && res.size() > (size_t)top) Say("... %s%zu more (--top 0 shows all)\n", atLeast, res.size() - (size_t)top);
+    if (top && distinct > (size_t)top) Say("... %s%zu more (--top 0 shows all)\n", atLeast, distinct - (size_t)top);
     return 0;
 }
+
+// rbview uses the same graceful stop path as Ctrl+C, from its worker's event thread.
+// This does not alter search enumeration, state comparison or simulation.
+void RequestSmartforceStop() { g_stop.store(true, std::memory_order_relaxed); }
 
 int CmdSmartforce(int argc, char** argv) {
     try {
@@ -2240,6 +3573,10 @@ int CmdSmartforce(int argc, char** argv) {
     } catch (const std::bad_alloc&) {
         std::fflush(stdout);
         std::fprintf(stderr, "out of memory: lower --maxmem or --threads\n");
+        return 3;
+    } catch (const SaveError& e) {
+        std::fflush(stdout);
+        std::fprintf(stderr, "--save: %s; results are incomplete\n", e.what());
         return 3;
     }
 }

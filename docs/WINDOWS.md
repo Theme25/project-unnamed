@@ -75,6 +75,59 @@ digits typed into the route do not save states. Click the level view to play aga
     - *Keys and remapping* (the mod's `/remap`).
   - **Brute force:** the mod's jump brute-forcer. Every way it finds is also simulated, so the list shows the real
     end height and speed next to the mod's estimate.
+  - **Smartforce:** input-string searches in a full-width workspace. See below.
+
+### Smartforce in rbview
+
+Open the **Smartforce** tab to search for input strings. The search engine is included in the app.
+
+Enter an **Input pattern** and conditions under **Find results where**. **Insert file...** inserts `{absolute-file-path}`
+at the cursor. The latest syntax works unchanged, including `{FILE}[-1]`, `{FILE}[+3]`, and
+`<d57+j6..35,55..70%>`. Comma-separated conditions must hold on the same frame; semicolons specify
+successive groups. Jump-block minimum/maximum strings appear in the output at startup.
+
+| Settings | Advanced settings |
+|---|---|
+| Level and checkpoint | Memory budget |
+| CPU threads (defaults to all available threads) | Output row limit; 0 prints all rows |
+| Random search order, time limit and update interval | Sample limit, seed and Start from (%) |
+| Merge similar states | Idle Up preservation, merge tolerance, merge interval, merge details and complete states |
+| Result sort field and direction | Spike rule, game window dimensions, scale mode and trigonometry |
+| Save all results and output filename/folder | Search folder for relative input and output paths |
+| Search / List input strings / Show object names | Skip saved strings |
+| Glitchless and trailing no-input frames | |
+
+Hover or focus a control for its explanation. Each settings page scrolls when needed; keyboard focus
+brings its control into view. Time, sample and update limits apply to random searches; the seed also
+applies when listing strings in random order. An empty seed chooses a random seed; `0` is a valid fixed seed.
+
+Search settings are saved separately in `rbview.ini`. **Use current route** copies the entire loaded
+route and its level, checkpoint, glitchless and display setup into the search form. Warped or invincible
+routes cannot be used as search prefixes. Returning to the viewer keeps its
+route intact. The search runs in a separate hidden process so its settings cannot alter the viewer's physics.
+
+**Start** runs the search; **Stop and finish saving** stops it after finishing current work and saving results.
+The controls unlock after current work and saving finish. Closing the viewer during a search requests this
+same stop and waits for completion. You can switch back to the route tabs while a search is running.
+Result files are written when **Save all results** is enabled; full run logs are always kept.
+
+**Save all results** saves every result and adds a number to the filename if it already exists. **Output rows** only limits
+what is printed, never the saved file. The live output pane keeps the latest 256 KiB for responsiveness;
+**Open full log** opens the complete output in Notepad. Each run has its own file under `smartforce-logs`
+in the Search folder. Merged states keep a representative string and count the alternatives.
+An empty save filename uses an automatic timestamped name; a path ending in a slash selects a folder.
+
+**String syntax** opens the read-only guide. The standalone executable includes a bundled copy;
+`docs/smartforce-string-guide.txt` beside the application takes precedence when present.
+
+To build the current standalone viewer with native MinGW-w64 tools in PowerShell:
+
+```powershell
+.\tools\build-rbview.ps1 -Cxx 'C:\msys64\ucrt64\bin\g++.exe' -Windres 'C:\msys64\ucrt64\bin\windres.exe'
+```
+
+The script includes Smartforce and preserves the required floating-point flags. It caches compilation
+objects in `rbview-build` and checks source, header, build-script and compiler hashes before reusing them.
 
 ### Differences from the mod
 
@@ -142,7 +195,9 @@ rbsim.exe smartforce --level 2 --inputs "d18(e1..6d0..5)=6<n4:a1>(d4..7e7..10)=1
 - `--report "..."`: what a string must do, comma-separated: `win`, `dead`, `ground`, `contact=NAME`
   (`rbsim.exe smartforce --level 2 --names` lists the names), or `px>=12.5`-style comparisons on
   `px py pr vx vy vr flag` (in the HUD's units, as `/set` takes them; `pr` = rotation in degrees; `flag` = distance to the flag in twips, 0 or less
-  means touching). Add `@F` or `@A..B` for a frame window. Default: `win`.
+  means touching). Add `@F` or `@A..B` for a frame window. Default: `win`. Conditions joined by commas
+  must hold on the same frame (`contact=kingCrown1, vx>5.5, ground`); separate them with `;` when one has
+  to happen first and the next later (`contact=kickBall; ground`).
 - `--pad N`: N extra frames of no input after each string (the pattern's end is the string's end).
 - Up held where it does nothing (in the air and falling, or on the ground without a jump) is shown as the
   same keys without Up, since the game plays both the same. `--idle-up` keeps the strings as written.
@@ -154,10 +209,13 @@ rbsim.exe smartforce --level 2 --inputs "d18(e1..6d0..5)=6<n4:a1>(d4..7e7..10)=1
   one twice) until all are played or you press Ctrl+C (or for `--time SEC` / `--samples N`).
   Every minute (`--update SEC` to change, 0 = off) it prints how many strings it has played and how fast,
   then the 10 best strings so far, so a long search can be checked while it runs. `--seed S` repeats a run.
-- `--save` writes all the matching strings and their data to a new file at the end
-  (`smartforce-L8-2026-10-24-153207.txt`), or `--save mysearch.txt` to choose the name. Nothing is
+- `--save` writes all the matching strings and their data to a new file at the end, with no row cap.
+  Full result buffers spill to disk, then all results are combined and sorted by `--sortby`.
+  `--top` limits only the console. With `--list --save`, every generated string is saved without simulation.
+  The default name is `smartforce-L8-2026-10-24-153207.txt`; use `--save mysearch.txt` to choose the name. Nothing is
   overwritten: a second `mysearch.txt` becomes `mysearch-2.txt`. The file also records the exact command,
-  so the search can be repeated.
+  so the search can be repeated. Temporary batches in `FILE.parts` are removed after a successful save;
+  disk errors return a failure and retain the batches. Existing report and hardfilter rules still apply.
 - `--sortby px` lists the matches (and the best 10 of `--stochastic`) by px, highest first; `--sortby -px`
   lowest first. Also `frame py vx vy flag`. The default is earliest frame, then smallest flag distance.
 - `--checkpoint C`, `--gless`, `--threads N`, `--top N` (how many matches to print, 0 = all). Ctrl+C stops

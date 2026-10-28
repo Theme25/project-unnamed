@@ -1,12 +1,31 @@
-rbsim
+# Keep arbitrary search outputs and local settings out of the repository root.
+/*
+!/.gitignore
+!/.gitattributes
+!/.github/
+!/README.md
+!/Makefile
+!/LICENSE*
+!/src/
+!/viewer/
+!/tools/
+!/docs/
+!/LICENSES/
+
+# Build products and local runtime data.
+*.exe
 *.o
-tools/trig_flip_search
-*.tsv
+*.obj
+*.pyc
 __pycache__/
-rbsim.exe
-tools/deathcause
-rbview.exe
+*.parts/
+smartforce-logs/
 rbview.ini
-viewer/*.res.o
-tools/framescan
-viewer/tas_test
+rbview_states.txt
+/viewer/tas_test
+/tools/deathcause
+/tools/framescan
+/tools/trig_flip_search
+
+# Test outputs belong in a disposable output directory.
+/tools/test-output/

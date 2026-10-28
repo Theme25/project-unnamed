@@ -1,0 +1,78 @@
+SMARTFORCE STRING SYNTAX AND CONDITIONS
+
+The idea behind smartforce is to be able to write complex string patterns in a compact way.
+It offers "macros" that expand into all possible strings matching a pattern, let's see:
+
+VARIABLE LENGTH
+
+For any input, let's say d, we can ask smartforce to repeat it for a variable number of frames, for example d2..5 expands into d2, d3, d4, d5.
+
+Additionally, d0..2a5 expands into a5, d1a5, d2a5, so a part of the string can be entirely eliminated.
+
+REPLACING/ADDING INPUTS
+
+With syntax <STRING:d2..4> or <STRING+d2..4>, 2, 3 or 4 d inputs will be replaced or added to the string, respectively. For example <n3w:d2..3> expands into d2nw, nd2w, n2d2, dndw, dn2d, ndnd, d3w, nd3.
+
+In contrast <n3w+d2..3> expands into d2nw, nd2w, n2de, dndw, dn2e, ndne, d3w, nd2e; adding onto the string.
+
+Multiple different inputs can be used in this syntax without collision, for example <STRING:d2..4, a1..5, w3..4>.
+
+STRING ALTERNATIVES
+
+To pick one from a selection of strings use (STRING_1|STRING_2|...), for example (d2|d3e|d4a)w3 expands into d2w3, d3ew3, d4aw3.
+
+CONSTANT SUM
+
+Sometimes when TASing you want a string to take the same amount of time, regardless of its parts. The perfect fit for such a situation is the (STRING)=n syntax, which forces the string to take n frames.
+
+For example (d3..10e4..7)=12, will only pick strings 12 frames in length, so strings like d8e4, d7e5 and so on.
+
+The number of frames itself can have variable length, so (d3..10e4..7)=10..12 also works.
+
+CONCATENATION
+
+The string patterns can be combined by simply writing them next to each other, for example d10(w1|e1)<d10+w5..7>.
+
+SAVE TO / LOAD FROM FILE
+
+To save to file simply check the "Save all results" option. To load from file use syntax {filename}, this works like any other pattern and can be combined, for example {myTAS}d3<d10:a2>.
+
+It's also possible to trim or expand the strings from file by adding [+/-n] at the end, for example {gssh}[-2], takes out the last 2 frames of every string in gssh, while {Garfield}[+3] adds n3 at the end of every string.
+
+LEFT/RIGHT BRUTEFORCING 
+
+While red ball is in the air, determining how lefr/right inputs affect his movement becomes much easier and many strings merge into the same state.
+
+Use <STRING: a3..8, r> to only keep the physically equivalent options, this massively improves runtime.
+
+It is also possible to bound the displacement the inputs produce with <STRING: a3..8, r, 60..80%> for example. This will only keep the strings that reach 60-80% of the maximum possible displacement from the unaltered path. 
+<STRING+a3..8, r> also works.
+
+JUMP BRUTEFORCING
+
+This is the only part of the syntax that can only properly expand with game emulation. You see, jump patterns depend a lot on the frames red ball has negative vy, so they need to be checked in the game.
+
+Anyway, <STRING:b5..10> works a bit differently than you might expect; it runs the bruteforcer by starting the pattern when the string starts and ending it after the number given after b. So our syntax here would run the bruteforcer for a 5-frame jump, a 6-frame jump and so on, until 10.
+
+There are 2 additional options, <STRING:b5..10, j2..4, 60..80%> only allows 2 to 4 jump inputs, and 60-80% of the maximum jump strength. 
+
+CONDITIONS
+
+Quick reference to expand later. Use "Find results where" (default: win).
+
+- win / dead / alive: finish reached / ball dead / ball alive.
+- ground: at least one jump probe touches; different from a physics contact.
+- contact: any physics contact; contact=NAME: a specific object. "Show object names" lists the level's names.
+- px, py: position; vx, vy: velocity, in the mod's HUD units. Positive x is right, positive y is down; negative vy means rising.
+- pr: rotation in degrees, wrapped at 360 (can be negative); vr: rotational speed in the HUD's units.
+- flag: gap between the ball's and finish's bounding boxes, in twips; flag <= 0 means touching or overlapping.
+
+Comparisons: <, <=, >, >=, = (exact equality). Example: vx > 11.48. Decimals and negatives work.
+
+Frames: @F = exactly F; @A..B = A through B; @..B = through B; @A.. = A onward. Inclusive game frames, starting at 1. No @ means any simulated frame.
+
+Comma: conditions must hold on the SAME frame. vx > 11.48@230, vy > -3.1 requires BOTH at frame 230. Frame windows must overlap.
+
+Semicolon: successive groups, on STRICTLY LATER frames. Example: contact=star@40..60; vx > 11.48, vy > -3.1. Earlier groups need not remain true.
+
+The first complete match determines the result frame and saved prefix. Names are case-sensitive; 16 conditions maximum. Position, velocity, rotation, ground and contact checks require a live ball.

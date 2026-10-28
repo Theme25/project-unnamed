@@ -2,6 +2,8 @@
 #include "tas.h"
 
 #include <cstdio>
+#include <chrono>
+#include <filesystem>
 #include <cstring>
 #include <random>
 
@@ -167,12 +169,17 @@ int main() {
         s.SaveSlot(1);
         s.SaveNamed("first try");
         s.Backup();
-        const std::string path = "/tmp/tas_test_states.txt";
-        s.SaveStatesFile(path);
+        const auto testDir = std::filesystem::temp_directory_path() /
+            ("rbview-tas-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        if (!std::filesystem::create_directory(testDir)) return 1;
+        const std::string path = (testDir / "states.txt").string();
+        check(s.SaveStatesFile(path), "states file saved");
         Session t;
-        t.LoadStatesFile(path);
+        check(t.LoadStatesFile(path), "states file loaded");
         check(t.slotUsed[1] && t.slots[1] == s.slots[1] && t.named.size() == 1 && t.named[0].name == "first try" && t.backups.size() == 1,
               "states file round trip");
+        std::filesystem::remove(path);
+        std::filesystem::remove(testDir);
     }
     // 5. invincibility, warps, commands
     {

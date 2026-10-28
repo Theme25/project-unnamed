@@ -64,11 +64,15 @@ Backspace rewind, R/F restarts, G invincibility, Shift+G glitchless, H/J overlay
   replaced;
 - a ghost route to race against;
 - the jump brute-forcer's candidates actually simulated;
+- Smartforce searches with **Settings / Advanced settings**, live output, scrollable forms,
+  uncapped result saving, a graceful Stop button and a **String syntax** guide;
 - remappable keys that stay out of the way while you type, and every setting as a checkbox or slider;
 - the route viewer: seek any frame, events list, death-warp ghost, path, a HUD that scales with the window
   (distance to the flag, jump probes), spike hitboxes as the game tests them, Flash's spike test at any window
   size.
 Guide and full key list: [`docs/WINDOWS.md`](docs/WINDOWS.md).
+Native Windows build of the viewer, including Smartforce: `tools/build-rbview.ps1` with MinGW-w64's
+`g++` and `windres` on PATH (or pass `-Cxx` and `-Windres` paths).
 Build: `make viewer` (MinGW-w64 cross build; Win32 + GDI+, static; source in `viewer/`: `tas.cpp` is the TAS logic
 without Windows code, checked natively by `make tastest && viewer/tas_test`).
 To publish a new version: create a GitHub release (new tag, e.g. `v2.0`) and attach the exe named
@@ -116,7 +120,7 @@ Two ways to build, both giving a static `rbsim.exe` (no DLLs needed) with the sa
 1. **Native, with MSYS2:** install [MSYS2](https://www.msys2.org/), open the **MSYS2 UCRT64** shell, then
    ```
    pacman -S --needed mingw-w64-ucrt-x86_64-gcc make git
-   git clone <repo> && cd project-unnamed
+   git clone https://github.com/Theme25/project-unnamed.git && cd project-unnamed
    make            # produces rbsim.exe
    ./rbsim.exe test
    ```
@@ -133,25 +137,51 @@ the same results as Linux.
 -fexcess-precision=standard`, `-pthread`). `-O3 -march=native` breaks bit-exactness on Levels 3, 8
 and 12 and is not faster. Never add fast-math, FMA contraction or `-march` flags.
 
+### Tests
+
+The source checkout includes regression tests that do not require saved search results:
+
+```sh
+make test
+make tastest
+./viewer/tas_test
+python3 tools/test-smartforce-endpoints.py --binary ./rbsim --out-dir ./test-output
+```
+
+On Windows, use `rbsim.exe` for `--binary` and `viewer/tas_test.exe` for the TAS tests.
+The viewer's search worker can also be checked in PowerShell:
+
+```powershell
+.\tools\test-rbview-smartforce.ps1 -Viewer .\rbview.exe -Cli .\rbsim.exe -OutDir .\test-output
+```
+
 ## Trying many routes at once: `rbsim smartforce`
 
 ```
 rbsim smartforce --level N --inputs PATTERN [--report CONDITIONS] [--checkpoint C] [--gless] [--pad N]
                  [--threads N] [--top N] [--list] [--names] [--idle-up] [--hardfilter [--tolerance T]]
-                 [--merge-report] [--maxmem GB] [--stochastic [--time SEC] [--samples N] [--seed S]]
-                 [--sortby [-]Q] [--save [FILE]]
+                 [--merge-report] [--maxmem GB] [--stochastic [--time SEC] [--samples N] [--seed S] [--start-percent P]]
+                 [--sortby [-]Q] [--exclude FILE] [--save [FILE]]
 ```
 
-`--save` writes the result rows to a file when the search ends (also after Ctrl+C): all rows kept, not
-just `--top`, after comment lines with the command, the start time and (`--stochastic`) the seed; each row's
+`--save` writes every matching result to a file when the search ends (also after Ctrl+C), with no row cap.
+When a worker's result buffer fills, it spills a sorted batch to disk instead of discarding matches.
+The batches are combined, identical routes have their counts added, and all results are sorted by
+`--sortby` without holding the complete result set in RAM. `--top` limits the console only.
+The file begins with comment lines with the command, the start time and (`--stochastic`) the seed; each row's
 inputs are on an indented line of their own, so long strings wrap without breaking the columns. The file is
 `smartforce-L8-2026-10-24-153207.txt` in the current folder by default, or `--save FILE` (a name ending in
 `/` or `\` is a folder for the automatic name; folders are created). It is created when the search starts,
 so a bad path is reported at once. An existing file is never overwritten: `-2`, `-3`, ... is added before
-the extension.
+the extension. Temporary batches live in a new `FILE.parts` directory beside the output and are removed
+after a successful save; a disk error stops the search with a nonzero exit code and retains the batches
+for recovery. Saving still uses the existing report, idle-Up normalization and hardfilter rules: strings
+merged by `--hardfilter` are not separate results, and routes stop at their deciding frame.
+With `--list --save FILE`, every generated string is written without simulation; `--top` still limits
+only what appears in the console.
 
 Rows come by frame, then flag. `--sortby Q` (`frame px py vx vy flag`) orders them, the `--stochastic` best
-10 and which rows are kept when memory runs short by that column instead, highest first; `--sortby -Q` lowest
+10 and (without `--save`) which rows are kept when memory runs short by that column instead, highest first; `--sortby -Q` lowest
 first. Ties go by frame, then flag; for `px py vx vy` dead rows come last.
 
 Simulates every string a pattern expands to and lists those that meet all the conditions. Meant for
@@ -167,6 +197,25 @@ routes worked out by hand: fix what is understood, enumerate the rest.
 | `<BASE+a3>` | the same, but `a` is added to the keys already held there: `<d20+a1>` puts one `S` (left+right) into `d20` |
 | `<BASE:a1..3>`, `<BASE+a0..2>` | every tap count in the range, for either form; 0 includes BASE unchanged |
 | `<BASE:a1,w1>`, `<n20:a1..2,w0..1>` | several tap kinds, each with its own count or range, always on different frames (`<<BASE:a1>:w1>` instead lets the `w` overwrite the `a`) |
+| `<BASE+a1..5, r>`, `<BASE:a1..5, r>` | reduce one tap kind to one representative per press count and reverse-index sum, using the same placements and order as `j`, without consulting the game state. `+` adds the selected keys; `:` overwrites selected frames. Any input letter is supported; use nested blocks for separate reductions of different kinds. Counts and sums refer to selected placement frames, including frames already holding that key |
+| `<BASE+a1..5, r, 30..40%>` | optional index-sum range after `r`, with the same bounds, rounding, and maximum across the whole count range as `j`. The first frame's index is BASE's full length, and the last frame's index is 1. `x%` means `0..x%` |
+| `{FILE}`, `{FILE:100}` | every route in FILE (any line that is a whole route: the input lines of a `--save` file, `--list` output), in the file's order, so `{FILE:100}` is a `--save` run's 100 best. Searches can be chained: save the good starts, then `--inputs "{starts.txt}<d12:a0..1>d6..8"` continues each of them; with `--hardfilter`, starts that reached the same state are merged |
+| `{FILE}[-N]`, `{FILE}[+N]` | remove the last N frames from each imported route, or append N no-input (`n`) frames. Trimming beyond the start leaves an empty route (`n0` in `--list` output); padding cannot exceed 1,000,000 total frames. `{FILE:100}[-1]` selects the first 100 routes before trimming. Suffixes can be chained, e.g. `{FILE}[-2][+1]`; identical resulting routes are deduplicated as usual |
+| `<BASE+j>`, `<BASE+j2..5>` | game-independent Up placements: one representative per press count and reverse-index sum over BASE (frames counted back from its end), instead of every subset. This version does not check whether each Up press actually produces lift; use `+b` for the built-in state-aware model. `<n30+j>` is 4,526 strings instead of 2^30. `j3`: exactly 3 presses; `<BASE:j>`: plain `w` instead of adding Up to the held keys |
+| `<BASE:jn, i..j%>`, `<BASE+jA..B, i..j%>` | keep jump placements whose reverse-index sum is between `ceil(i * maximum / 100)` and `floor(j * maximum / 100)`, inclusive, with integer endpoints `0 <= i <= j <= 100`. The maximum is across the entire requested jump-count range, separately for each BASE length L: let K be the largest allowed count that fits L, then `maximum = K*(2*L-K+1)/2`. Indices run from L on the first frame to 1 on the last. For `<d10:j1..2, 25..50%>`, both counts use sums 5 through 9 (maximum 19). `x%` is shorthand for `0..x%`. This limits newly placed presses; existing Up inputs in BASE are unchanged. `0..100%` preserves the original set and order; an interval containing no attainable integer sum produces no strings |
+| `<BASE+b10..20, j5..6, 30..40%>` | use the built-in jump brute-forcer from the actual incoming game state, for each window of 10 through 20 frames at the beginning of BASE. Keep BASE's full length, preserve Left/Right, and replace Up inside the window; keep all inputs after it unchanged. `j5..6` allows 5 or 6 generated Up frames. The percentage limits the weighted index sum, using the maximum across the eligible requested press counts for each incoming state and window length. `j` and the percentage can be omitted to allow all candidates |
+
+Place the `b` block **after the take-off input**, as with the viewer's start marker. For example, `e1<d30+b10..20, j5..6, 30..40%>d5` retains the 30-frame base and then continues with `d5`; the initial `e1` is outside the generated window. A window longer than its particular BASE expansion is skipped. BASE can include ordinary sub-patterns or `{FILE}`; multiple `b` blocks can follow one another, each using the state produced by the preceding parts. A `b` block must be a separate pattern part, not nested inside another placement or alternative.
+
+The `b` frame convention matches the viewer: sample `vy` after the window's first native tick, then use weighted indices `N-1, ..., 1` for a window of N frames. Its last input has zero effect on position at that endpoint and receives no generated Up. The model limits the placement window using incoming `vy`, so late ineffective Up padding is not used to represent an earlier lift. Percentages have integer inclusive bounds (lower rounded up, upper down), shared across the entire eligible count range; `40%` means `0..40%`. Existing Up within the window is replaced, so `j` counts the generated frames there; existing Up outside the window remains untouched. The old `+j` / `:j` syntax keeps its previous, game-independent behavior.
+
+The built-in bruteforcer generates representatives using its clear-flight model, rather than every possible input placement. Intermediate collisions can invalidate the model's equivalences. All candidates are replayed by the accepted native simulation; the model does not replace physics or guarantee exhaustive coverage of collision histories.
+
+The `r` modifier is also a representative reduction, not a guarantee of equal game outcomes. Horizontal speed limits, friction, and collisions can make two placements with equal counts and sums behave differently. Generation stays game-independent; every resulting string uses the unchanged native simulation. For example, `<d30+a1..5, r>` generates 400 placements instead of the 174,436 unrestricted subsets, preserving Right and adding Left as `S` on the selected frames.
+
+`b` choices depend on the prefix, so startup totals are **candidate-slot upper bounds**. Deterministic search skips unused slot ranges; stochastic search shuffles slots without repeats and skips invalid choices. `--samples` counts visited slots for these patterns. `--list` also replays prefixes to resolve `b` blocks, and saving still writes every generated result. Matching-branch counts do not multiply an early match by an unknown number of future `b` choices.
+
+At startup, each game-independent jump block prints `jump 1 - min: STRING, max: STRING`, then `jump 2 - ...`, in the order its opening `<` appears in the pattern. The strings are expansions of that block, after its percentage and local length filters, attaining the lowest and highest allowed index sums across its lengths and press counts. They omit the surrounding route. Ties use one representative base string; an empty expansion prints `n0`, and a block with no expansions prints `none`. A state-dependent `b` block instead states that its minimum and maximum depend on the incoming game state. This summary also appears with `--list` and does not add rows to saved route files.
 
 `d18(e1..6d0..5)=6<n4:a1>(d4..7e7..10)=14` is 6 x 4 x 4 = 96 strings (`--list` prints them). `R` is not
 allowed.
@@ -186,7 +235,10 @@ thread) must fit in it, and the counting tables count towards it too. Patterns t
 400 million steps just to count, or brackets nested more than 200 deep, are refused with a message, and
 running out of memory stops the search with the results so far instead of crashing.
 
-Conditions (`--report`, comma-separated, all must hold; default `win`): `win`, `dead`, `alive`, `ground`
+Conditions (`--report`; default `win`): conditions joined by commas must all hold on the same frame, and
+groups separated by `;` are met one after another, each on a later frame than the one before:
+`"contact=kickBall@40..60; px>=12.5, ground@80.."` = touch kickBall between frames 40 and 60, later be on
+the ground at px >= 12.5 from frame 80 on. The conditions: `win`, `dead`, `alive`, `ground`
 (a jump probe touches), `contact`, `contact=NAME` (`--names` lists a level's bodies), and comparisons
 `Q<V Q<=V Q>V Q>=V Q=V` with Q one of `px py vx vy vr` (the Practice Hack HUD's and `/set`'s units: metres, m/s,
 `vr` = 0.35 x the angular velocity; `px py` are `run`'s x and y), `pr` (rotation in degrees as the HUD shows it: `run`'s angle x 180/pi, fmod 360,
@@ -200,8 +252,22 @@ the larger of the x and y gaps; <= 0 means touching, minus the overlap depth). E
   over all threads, each taking a range of options. With `--stochastic`, the states after the first parts
   are kept once per choice of them (up to 256 per thread), so a sample plays only the rest. None of this
   changes a result: the same strings are played and merged, only faster.
-- A string is decided on the frame all conditions hold; the rest of it is not played. It is dropped as
-  soon as a window has passed, or when the ball is dead and no condition can still hold. Strings that
+- Without `--stochastic`, fixed prefixes repeated across worker tasks also share exact savestates.
+  This includes literal strings and each selected string from `{FILE}`, with trimming/padding applied.
+  A prefix is cached only when the parts after it have at least 10 combinations and its current part
+  contains at least two frames. For example, `{starts}d0..9` qualifies (10 continuations per file row);
+  `{starts}d0..8` does not (9). `--pad` adds frames, not combinations. Prefixes already shared within
+  one task keep using the existing branch states. The cache is filled as needed, shared by all threads,
+  and holds at most `--threads` prefix savestates in total, including entries still being calculated.
+  It evicts unused old entries before allocating replacements and stays within the existing 10%
+  checkpoint allowance of `--maxmem`; if all slots are in use or there is no room, the task replays
+  normally. Existing per-worker branch states are separate. Savestates include report progress and the complete played
+  prefix, so saved strings and early matches retain their original counts. `--hardfilter` checks are
+  replayed with each task's remaining inputs; `--merge-report` retains the original diagnostic path.
+  The final `prefix savestates` line reports entries built, reused, evicted and peak occupancy/limit. The 10x threshold is
+  provisional; it has not been tuned by benchmarking.
+- A string is decided on the frame its last group holds; the rest of it is not played. It is dropped as
+  soon as a window has passed, or when the ball is dead and the groups left cannot hold dead. Strings that
   agree up to the deciding frame are listed once, with their count.
 - Up held on a frame where it does nothing is written as the same keys without Up: the ball is awake,
   does not jump (a jump needs a contact and a foot probe) and gets no lift (that needs vy < 0), so the game
@@ -210,7 +276,8 @@ the larger of the x and y gaps; <= 0 means touching, minus the overlap depth). E
   same inputs still to play, however different their pasts (inputs that cancel out lead back to the same
   state): only the first is played on and listed, the rest are counted as merged. The check runs between
   the parts of the pattern and every `--merge-every N` frames inside a part (default 32; 0: only between
-  parts; 32 found nearly all of 16's extra merges at no extra cost on the Level 8 tests). States are compared without what the game
+  parts; 32 found nearly all of 16's extra merges at no extra cost on the Level 8 tests). Every saved result is
+  also checked at its deciding frame, including early matches and padding. States are compared without what the game
   never reads again (freed contact slots, manifold points past `pointCount`, the normal of an empty
   manifold, the two speed-up caches, scratch arrays past their counts, the probe and `upIdle` flags), and
   doubles count as equal within `--tolerance T` (default 1e-10, rounded to a grid of that size; `0` =
@@ -232,6 +299,15 @@ the larger of the x and y gaps; <= 0 means touching, minus the overlap depth). E
   strings it picks each part independently at random instead (repeats then possible but vanishingly rare).
   `--hardfilter` works here too: a sample is merged when its state and its remaining inputs match an earlier
   one's. Ctrl+C stops any search and prints the results so far.
+
+
+- `--start-percent P` starts at `floor(P / 100 * total)` in the numbered random order. Use the same
+  `--seed`, pattern, input files and generator version to continue a search. It requires `--stochastic`
+  and an explicit seed for a nonzero offset; percentages accept up to nine decimal places. `--samples`
+  counts new visits after the offset. This skips enumeration positions, not a percentage of matches,
+  and does not restore a previous run's merge table.
+- `--exclude FILE` skips exact decoded strings already in a result file before simulation. It works
+  with random searches and listing; it does not exclude equivalent states or all variants of a prefix.
 
 ## Architecture
 
@@ -379,13 +455,13 @@ use logs from it.
 section/symbol directives adapted; ARM (incl. Apple Silicon) cannot run the Intel `sin`/`cos` routine.
 
 **Licensing note:** `src/libm_intel.S` is derived from OpenJDK HotSpot code, which is GPL-2.0-only
-(Intel copyright). Binaries that include it fall under GPLv2.
+(Intel copyright). Binaries that include it fall under GPLv2. The existing notice and license text
+are retained in [`LICENSES/`](LICENSES/README.txt). No project-wide license has been selected for the other code.
 
 ## Roadmap
 
 1. **Viewer:** `rbview.exe` is the TAS tool (the mod's keys) plus viewer, states, ghost. Possible next:
-   an input piano roll (edit frames by clicking), smartforce inside the viewer, a real-Windows check of the
-   keyboard timing.
+   an input piano roll (edit frames by clicking), a real-Windows check of the keyboard timing.
 2. **Simulator:** complete; the display layer is the player's own arithmetic, including the real game's
    shape spike test at any window size (`MATHSPIKES 0`, `docs/RESOLUTION.md`). Open: confirm it with one stats
    log recorded on real Windows; the Tournament Edition's Level 15 money tween (0.3 s of real time).

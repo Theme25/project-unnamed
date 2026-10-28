@@ -1220,7 +1220,7 @@ static bool ParseDisplayOptions(int& argc, char** argv) {
     return true;
 }
 
-int main(int argc, char** argv) {
+int RbsimMain(int argc, char** argv) {
     if (!ParseDisplayOptions(argc, argv)) return 2;
     for (int i = 1; i < argc; ++i)
         if (!std::strcmp(argv[i], "--trig")) {
@@ -1244,3 +1244,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "unknown command %s\n", argv[1]);
     return 2;
 }
+
+#ifndef RBSIM_EMBEDDED
+int main(int argc, char** argv) { return RbsimMain(argc, argv); }
+#endif

@@ -1,5 +1,6 @@
 // viewer/tas.cpp - see tas.h.
 #include "tas.h"
+#include "../src/jumpbrute.h"
 
 #include <algorithm>
 #include <cmath>
@@ -267,15 +268,6 @@ bool Timeline::warpValid() const {
 }
 
 // ------------------------------------------------------------------ BruteEnv (BruteForcer.as)
-static int ToInt32(double v) {  // AS3 int(Number)
-    if (!std::isfinite(v)) return 0;
-    const double t = std::trunc(v);
-    const double m = std::fmod(t, 4294967296.0);
-    int64_t u = (int64_t)m;
-    if (u < 0) u += 4294967296LL;
-    return (int32_t)(uint32_t)u;
-}
-
 void BruteEnv::Start(const std::vector<uint8_t>& prefix, const Sim& next) {
     const Body& b = next.world.bodies[next.playerBody];
     ypos0 = b.xf.position.y;
@@ -304,31 +296,15 @@ void BruteEnv::Adjust(int change, const Timeline& base) {
 void BruteEnv::Compute(const Timeline& base) {
     const double PI = 3.141592653589793;
     cands.clear();
-    int up = 0;
-    while (up <= std::ceil(vy0 / (40 / (147 * PI) - 1.0 / 3)) && up <= x) {
-        const double reach = (x - up + (up + 1) / 2.0) * up;
-        if (reach >= currYOffsets) {
-            const int possibleup = (int)std::min(std::ceil(-vy0 * 3 + (up - 1) * 40 / (49 * PI)), (double)x);
-            if ((x - possibleup + (up + 1) / 2.0) * up <= currYOffsets) {
-                const int middle_up = ToInt32(std::fmod(reach - currYOffsets, (double)(possibleup - up)));
-                const int end_up = ToInt32((reach - currYOffsets) / (double)(possibleup - up));
-                std::vector<uint8_t> jump;
-                int i = 0;
-                while (i < up - end_up - 1) jump.push_back(2), ++i;
-                while (i < possibleup - end_up) {
-                    jump.push_back(i == up - end_up - 1 + middle_up ? 2 : 0);
-                    ++i;
-                }
-                for (i = 0; i < end_up; ++i) jump.push_back(2);
-                BruteCandidate c;
-                c.in = untilJump;
-                for (i = 0; i < (int)jump.size(); ++i) c.in.push_back((uint8_t)((i < (int)lrDuringJump.size() ? lrDuringJump[(size_t)i] : 0) | jump[(size_t)i]));
-                for (; i < (int)lrDuringJump.size(); ++i) c.in.push_back(lrDuringJump[(size_t)i]);
-                c.predictedVy = x / 3.0 + vy0 - up * 40 / (147 * PI);
-                cands.push_back(std::move(c));
-            }
-        }
-        up++;
+    const JumpBrute model(x + 1, vy0);
+    for (int up = 0; up <= model.MaxCount(); ++up) {
+        if (currYOffsets < 0 || !model.Allows(up, (uint64_t)currYOffsets)) continue;
+        BruteCandidate c;
+        c.in = untilJump;
+        c.in.insert(c.in.end(), lrDuringJump.begin(), lrDuringJump.end());
+        model.Place(up, (uint64_t)currYOffsets, [&](int i) { c.in[untilJump.size() + (size_t)i] |= IN_U; });
+        c.predictedVy = x / 3.0 + vy0 - up * 40 / (147 * PI);
+        cands.push_back(std::move(c));
     }
     // rbview: simulate every candidate from the take-off state
     const Route& r = base.route();

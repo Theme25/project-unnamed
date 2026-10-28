@@ -28,6 +28,7 @@
 
 #include "../src/redball.h"
 #include "tas.h"
+#include "smartforce_ui.h"
 
 using namespace rb;
 namespace gp = Gdiplus;
@@ -82,8 +83,10 @@ static HWND g_probesBox;
 static HWND g_bInfo, g_bList, g_bUp, g_bDown, g_bNext, g_bApply, g_bLeave;
 static HWND g_speedLbl, g_grpPlay, g_fast, g_lblEnd, g_pauseEnd, g_keepEnd, g_lblFlag, g_grpView, g_marksBox, g_polysBox, g_lblDec, g_dec,
     g_grpWarp, g_lblWarp, g_wLbl[5], g_wEdit[5], g_wFill, g_wApply, g_wClear, g_grpKeys, g_lblKeys, g_oKeys;
-static const int NPAGES = 5;
+static const int NPAGES = 6;
 static std::vector<HWND> g_pages[NPAGES];
+static HWND g_smartforce;
+static bool g_closeAfterSearch = false;
 static HFONT g_font;
 static double g_dpi = 1.0;
 
@@ -1467,10 +1470,19 @@ static bool TasKey(UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 // ------------------------------------------------------------------ layout
+static void Layout();
 static void ShowTab(int t) {
     TabCtrl_SetCurSel(g_tabs, t);
     for (int i = 0; i < NPAGES; ++i)
         for (HWND h : g_pages[i]) ShowWindow(h, i == t ? SW_SHOW : SW_HIDE);
+    ShowWindow(g_canvas, t == 5 ? SW_HIDE : SW_SHOW);
+    if (t == 5) {
+        g_s.paused = true;
+        ReleaseAll();
+        SetFocus(g_smartforce);
+    }
+    Layout();
+    RedrawWindow(g_wnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
 static void Layout() {
@@ -1518,14 +1530,16 @@ static void Layout() {
     put(g_feedback, std::max(S(80), W - x - pad), S(5));
     // main area: level view, side panel
     y += rowH + S(6);
-    const int statusH = S(24), sideW = S(420);
+    const bool search = TabCtrl_GetCurSel(g_tabs) == 5;
+    const int statusH = S(24), sideW = search ? W - 2 * pad : S(420);
     const int mainH = H - y - statusH - pad;
-    MoveWindow(g_canvas, pad, y, W - 2 * pad - sideW - S(6), mainH, TRUE);
+    if (!search) MoveWindow(g_canvas, pad, y, W - 2 * pad - sideW - S(6), mainH, TRUE);
     const int tx = W - pad - sideW;
     MoveWindow(g_tabs, tx, y, sideW, mainH, TRUE);
     RECT tr = {0, 0, sideW, mainH};
     TabCtrl_AdjustRect(g_tabs, FALSE, &tr);
     const int px = tx + tr.left + S(4), py = y + tr.top + S(4), pw = tr.right - tr.left - S(8), ph = tr.bottom - tr.top - S(8);
+    if (g_smartforce) MoveWindow(g_smartforce, px, py, pw, ph, TRUE);
     MoveWindow(g_events, px, py, pw, ph, TRUE);
     {  // States
         int yy = py;
@@ -2013,8 +2027,8 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             // main
             g_canvas = CreateWindowExW(WS_EX_CLIENTEDGE, L"RbCanvas", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 10, 10, h, (HMENU)ID_CANVAS,
                                        GetModuleHandleW(nullptr), nullptr);
-            g_tabs = MakeCtl(WC_TABCONTROLW, L"", WS_CLIPSIBLINGS, ID_TABS);
-            const wchar_t* tabNames[NPAGES] = {L"Events", L"States", L"Ghost", L"Brute force", L"Options"};
+            g_tabs = MakeCtl(WC_TABCONTROLW, L"", WS_CLIPSIBLINGS | TCS_MULTILINE | WS_TABSTOP, ID_TABS);
+            const wchar_t* tabNames[NPAGES] = {L"Events", L"States", L"Ghost", L"Brute force", L"Options", L"Smartforce"};
             for (int i = 0; i < NPAGES; ++i) {
                 TCITEMW ti = {};
                 ti.mask = TCIF_TEXT;
@@ -2125,6 +2139,8 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             SendMessageW(g_level, CB_SETCURSEL, (WPARAM)r.level - 1, 0);
             FillCheckpoints(r.level, r.checkpoint);
             SyncSetupControls();
+            g_smartforce = smartui::Create(h, g_font, g_dpi, g_iniPath);
+            g_pages[5].push_back(g_smartforce);
             Layout();
             ShowTab(0);
             RefreshAll();
@@ -2158,7 +2174,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             QueryPerformanceCounter(&now);
             const double sec = double(now.QuadPart - g_lastTick.QuadPart) / double(g_qpf.QuadPart);
             g_lastTick = now;
-            if (g_modal) return 0;
+            if (g_modal || TabCtrl_GetCurSel(g_tabs) == 5) return 0;
             if (g_spaceHeld && GetKeyState(VK_SPACE) >= 0) g_spaceHeld = false;  // released while another window had the keys
             if (g_spaceHeld && now.QuadPart >= g_spaceNext.QuadPart) {
                 const LONGLONG step = (LONGLONG)(KeyRepeatInterval() * (double)g_qpf.QuadPart);
@@ -2241,8 +2257,23 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             }
             break;
         case WM_CLOSE:
+            if (smartui::Running(g_smartforce)) {
+                g_closeAfterSearch = true;
+                ShowTab(5);
+                smartui::Stop(g_smartforce);
+                return 0;
+            }
             DestroyWindow(h);
             return 0;
+        case smartui::WM_SEARCH_FINISHED:
+            if (g_closeAfterSearch) DestroyWindow(h);
+            return 0;
+        case smartui::WM_CURRENT_ROUTE: {
+            auto& context = *reinterpret_cast<smartui::RouteContext*>(lp);
+            context.route = g_s.route();
+            context.display = GetDisplayConfig();
+            return 0;
+        }
         case WM_DESTROY:
             SaveSettings();
             PostQuitMessage(0);
@@ -2262,6 +2293,8 @@ static bool Typing(HWND f) {
 }
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
+    int workerExit = 0;
+    if (smartui::WorkerMainIfRequested(workerExit)) return workerExit;
     SetProcessDPIAware();
     INITCOMMONCONTROLSEX icc = {sizeof icc, ICC_BAR_CLASSES | ICC_STANDARD_CLASSES | ICC_TAB_CLASSES};
     InitCommonControlsEx(&icc);
@@ -2310,17 +2343,20 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
                 g_s.Seek(_wtoi(argv[++i]));
                 RefreshStatus();
                 InvalidateRect(g_canvas, nullptr, FALSE);
+            } else if (!wcscmp(argv[i], L"--smartforce")) {
+                ShowTab(5);
             } else {
                 LoadRouteFile(argv[i]);
             }
         }
         if (argv) LocalFree(argv);
     }
-    FocusCanvas();
+    if (TabCtrl_GetCurSel(g_tabs) != 5) FocusCanvas();
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (!g_modal && (msg.message == WM_KEYDOWN || msg.message == WM_KEYUP || msg.message == WM_SYSKEYDOWN || msg.message == WM_SYSKEYUP) &&
+        if (smartui::DialogMessage(g_smartforce, msg)) continue;
+        if (TabCtrl_GetCurSel(g_tabs) != 5 && !g_modal && (msg.message == WM_KEYDOWN || msg.message == WM_KEYUP || msg.message == WM_SYSKEYDOWN || msg.message == WM_SYSKEYUP) &&
             msg.wParam != VK_TAB && msg.wParam != VK_MENU && msg.wParam != VK_F4) {
             HWND f = GetFocus();
             if (Typing(f)) {
