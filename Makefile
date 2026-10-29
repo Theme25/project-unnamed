@@ -13,7 +13,7 @@ else
   MINGW_WINDRES ?= x86_64-w64-mingw32-windres
 endif
 PYTHON ?= python3
-SIM_SRC := src/libm_intel.S src/b2collision.cpp src/b2world.cpp src/b2joints.cpp src/redball.cpp src/flashpix.cpp
+SIM_SRC := src/libm_intel.S src/libm_x64_ocx.S src/libm_x64_fp30.S src/b2collision.cpp src/b2world.cpp src/b2joints.cpp src/redball.cpp src/flashpix.cpp
 SRC := $(SIM_SRC) src/rbsim.cpp src/verify.cpp src/calib.cpp src/snapshot.cpp src/smartforce.cpp
 HDR := $(wildcard src/*.h src/*.inc)
 VIEW_SRC := viewer/rbview.cpp viewer/tas.cpp viewer/smartforce_config.cpp viewer/smartforce_ui.cpp

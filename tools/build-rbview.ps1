@@ -17,7 +17,7 @@ try {
 } finally { Pop-Location }
 $sources = @(
     'viewer/rbview.cpp', 'viewer/tas.cpp', 'viewer/smartforce_config.cpp', 'viewer/smartforce_ui.cpp',
-    'src/libm_intel.S', 'src/b2collision.cpp', 'src/b2world.cpp', 'src/b2joints.cpp',
+    'src/libm_intel.S', 'src/libm_x64_ocx.S', 'src/libm_x64_fp30.S', 'src/b2collision.cpp', 'src/b2world.cpp', 'src/b2joints.cpp',
     'src/redball.cpp', 'src/flashpix.cpp', 'src/snapshot.cpp',
     'src/rbsim.cpp', 'src/verify.cpp', 'src/calib.cpp', 'src/smartforce.cpp'
 ) | ForEach-Object { Join-Path $repo $_ }

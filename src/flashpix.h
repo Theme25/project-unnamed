@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cstdint>
 
+#include "b2math.h"  // g_player
+
 namespace rb {
 namespace pix {
 
@@ -32,6 +34,11 @@ struct DevMatrix {
 DevMatrix RootMatrix(const Window& w);                               // stage twips -> window subpixels
 DevMatrix Concat(const DevMatrix& parent, double a, double b, double c, double d, int64_t tx, int64_t ty);
 inline void Xform(const DevMatrix& m, int64_t x, int64_t y, int64_t& ox, int64_t& oy) {
+    if (PlayerIsX64()) {  // 64-bit players: each product rounded to float32 (docs/X64_PLAYERS.md)
+        ox = m.tx + Rint((float)x * m.a + (float)y * m.c);
+        oy = m.ty + Rint((float)y * m.d + (float)x * m.b);
+        return;
+    }
     ox = m.tx + Rint(F32((double)m.a * F32((double)x) + (double)m.c * F32((double)y)));
     oy = m.ty + Rint(F32((double)m.d * F32((double)y) + (double)m.b * F32((double)x)));
 }

@@ -278,6 +278,7 @@ struct Panel {
         values[L"mathspikes"] = std::to_wstring(ctx.display.mathSpikes);
         values[L"window"] = std::to_wstring(ctx.display.windowW) + L"x" + std::to_wstring(ctx.display.windowH);
         values[L"scale"] = ctx.display.showAll ? L"showall" : L"noscale";
+        values[L"player"] = Widen(rb::PlayerName(ctx.player));
         for (const auto& s : Settings()) {
             std::wstring buf(65536, L'\0');
             buf.resize(GetPrivateProfileStringW(L"smartforce", s.key, L"", buf.data(), static_cast<DWORD>(buf.size()), ini.c_str()));
@@ -567,6 +568,7 @@ struct Panel {
         values[L"mathspikes"] = std::to_wstring(ctx.display.mathSpikes);
         values[L"window"] = std::to_wstring(ctx.display.windowW) + L"x" + std::to_wstring(ctx.display.windowH);
         values[L"scale"] = ctx.display.showAll ? L"showall" : L"noscale"; values[L"trig"] = L"intel";
+        values[L"player"] = Widen(rb::PlayerName(ctx.player));
         Fill(); SetFocus(Input(L"inputs")); SendMessageW(Input(L"inputs"), EM_SETSEL, -1, -1);
     }
     void Command(int id, int code) {

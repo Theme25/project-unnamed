@@ -31,7 +31,7 @@ int main() {
     Check(build(), "all settings enabled");
     for (const auto* flag : {L"--inputs", L"--report", L"--level", L"--checkpoint", L"--threads", L"--stochastic", L"--time", L"--hardfilter",
              L"--sortby", L"--save", L"--gless", L"--maxmem", L"--pad", L"--top", L"--update", L"--samples", L"--seed", L"--idle-up",
-             L"--tolerance", L"--merge-every", L"--merge-report", L"--raw-states", L"--mathspikes", L"--window", L"--noscale", L"--trig"})
+             L"--tolerance", L"--merge-every", L"--merge-report", L"--raw-states", L"--mathspikes", L"--window", L"--noscale", L"--trig", L"--player"})
         Check(has(flag), "CLI option is available");
     Check(value(L"--seed") == L"0" && value(L"--sortby") == L"-vx", "zero seed and ascending sort");
     Check(value(L"--window") == L"1100x800", "window normalized for CLI");

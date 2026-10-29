@@ -22,23 +22,54 @@ constexpr double AS3_PI = 3.141592653589793;                // Math.PI
 //   TrigImpl::IntelLibm - Flash Player 11.4 (standard plugin/projector, x86):
 //                         Intel LIBM SSE2 routines, bit-exact (4096/4096
 //                         calibration samples). Default.
-//   TrigImpl::Glibc     - correctly rounded glibc; matches neither player
-//                         exactly (kept for comparison / the ActiveX player,
-//                         whose libm is still unidentified).
+//   TrigImpl::Glibc     - correctly rounded glibc; matches no player exactly
+//                         (diagnostic only).
+// The 64-bit players have their own routines, selected with g_player below.
 enum class TrigImpl : int { IntelLibm = 0, Glibc = 1 };
 extern TrigImpl g_trigImpl;
 extern double (*g_sinHook)(double);  // diagnostics only (null in normal runs)
 extern double (*g_cosHook)(double);
+
+// Which Flash Player's arithmetic is reproduced (docs/X64_PLAYERS.md). The 32-bit players are bit-identical to
+// each other; the 64-bit builds differ in Math.sin/cos (their C runtime) and in the display layer (float32
+// matrices rounded per product, a rewritten 16.16 divide inside the fixed-point atan2).
+enum class Player : int {
+    Flash11_4 = 0,  // 32-bit: 11.4.402.287 (reference), 32.0.0.465, 30.0.0.113 (all identical)
+    ActiveX = 1,    // "ActiveX Flash Player" (x64 .NET host) running Flash64_11_5_502_149.ocx (VS2008 x64 CRT)
+    X64 = 2,        // Flash Player 30.0.0.134 x64 projector on a CPU with FMA3 + AVX (any PC since about 2013)
+    X64NoFma = 3,   // the same projector on a CPU without FMA3 (its C runtime then takes the SSE2 path)
+};
+extern Player g_player;
+inline bool PlayerIsX64() { return g_player != Player::Flash11_4; }
+const char* PlayerName(Player p);          // "11.4", "activex", "x64", "x64-nofma"
+const char* PlayerDescription(Player p);   // one line for UIs
+bool ParsePlayer(const char* s, Player& p);
+bool PlayerSupported(Player p);            // X64 needs FMA3 on this CPU (the routines use it)
+bool SetPlayer(Player p);                  // false (and unchanged) when not supported here
 }  // namespace rb
 extern "C" double rb_libm_sin(double);  // src/libm_intel.S
 extern "C" double rb_libm_cos(double);
+extern "C" double rb_x64ocx_sin(double);  // src/libm_x64_ocx.S (Flash64_11_5_502_149.ocx)
+extern "C" double rb_x64ocx_cos(double);
+extern "C" double rb_x64f30_sin(double);  // src/libm_x64_fp30.S (Flash Player 30.0.0.134 x64)
+extern "C" double rb_x64f30_cos(double);
 namespace rb {
 inline double as3_sin(double a) {
     if (__builtin_expect(g_sinHook != nullptr, 0)) return g_sinHook(a);
+    switch (g_player) {
+    case Player::Flash11_4: break;
+    case Player::ActiveX: return rb_x64ocx_sin(a);
+    default: return rb_x64f30_sin(a);
+    }
     return g_trigImpl == TrigImpl::IntelLibm ? rb_libm_sin(a) : std::sin(a);
 }
 inline double as3_cos(double a) {
     if (__builtin_expect(g_cosHook != nullptr, 0)) return g_cosHook(a);
+    switch (g_player) {
+    case Player::Flash11_4: break;
+    case Player::ActiveX: return rb_x64ocx_cos(a);
+    default: return rb_x64f30_cos(a);
+    }
     return g_trigImpl == TrigImpl::IntelLibm ? rb_libm_cos(a) : std::cos(a);
 }
 inline double as3_sqrt(double a) { return std::sqrt(a); }  // IEEE correctly rounded everywhere

@@ -66,6 +66,9 @@ digits typed into the route do not save states. Click the level view to play aga
   - **Ghost:** a second route drawn as a blue ball on the same frame: the current route (as it is now), a pasted
     string, a file, or a saved state. The tab compares the flag frames.
   - **Options:** every setting the mod has as a key or a command, as checkboxes and sliders.
+    - *Flash Player:* whose arithmetic to reproduce: the 32-bit players (default, the reference), the ActiveX
+      Flash Player with the 11.5 x64 OCX, or the Flash Player 30 x64 projector (with or without an FMA3 CPU). See
+      [`X64_PLAYERS.md`](X64_PLAYERS.md).
     - *Playback:* real-time state loads (U), fast playback (Shift+U), and what happens when a playback reaches the
       end of the route: pause there, or keep running and record your keys (the mod's behaviour). After the flag the
       run is over, so the clock always stops there.
