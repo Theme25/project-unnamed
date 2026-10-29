@@ -5,6 +5,7 @@
 //   rbsim bench [--frames N]         # raw simulation throughput
 #include "redball.h"
 #include "snapshot.h"
+#include "flashpix.h"
 #include <chrono>
 #include <cstdlib>
 #include <cmath>
@@ -1159,6 +1160,84 @@ static int CmdTest() {
               "body slots: riding Level 4's drop platform re-creates it >96 times without running out of slots");
         std::printf("       platform re-created %d times, %d body slots used\n", created, a->world.numBodies);
     }
+    // 26. The 64-bit players (docs/X64_PLAYERS.md). Values below were produced by running the players' own machine
+    // code (Flash64_11_5_502_149.ocx, Flash Player 30.0.0.134 x64) on these inputs.
+    {
+        const Player saved = g_player;
+        auto bits = [](double d) { uint64_t u; std::memcpy(&u, &d, 8); return u; };
+        auto dbl = [](uint64_t u) { double d; std::memcpy(&d, &u, 8); return d; };
+        // x, then sin and cos as {11.4, activex, x64-nofma, x64}
+        struct T { uint64_t x, s[4], c[4]; };
+        static const T trig[] = {
+            {0x401634a377beabc6ULL, {0xbfe561db335ae87bULL, 0xbfe561db335ae87cULL, 0xbfe561db335ae87cULL, 0xbfe561db335ae87bULL}, {0x3fe7cebb7794d6d7ULL, 0x3fe7cebb7794d6d7ULL, 0x3fe7cebb7794d6d7ULL, 0x3fe7cebb7794d6d7ULL}},
+            {0x40157891a4b0c422ULL, {0xbfe95ee19356a63bULL, 0xbfe95ee19356a63bULL, 0xbfe95ee19356a63bULL, 0xbfe95ee19356a63bULL}, {0x3fe380885f378b9cULL, 0x3fe380885f378b9dULL, 0x3fe380885f378b9dULL, 0x3fe380885f378b9cULL}},
+            {0xc014f312d072d1dcULL, {0x3febb0c8ff3ce074ULL, 0x3febb0c8ff3ce074ULL, 0x3febb0c8ff3ce074ULL, 0x3febb0c8ff3ce074ULL}, {0x3fe009d9217f034bULL, 0x3fe009d9217f034aULL, 0x3fe009d9217f034aULL, 0x3fe009d9217f034bULL}},
+            {0x40035d56d0ba2188ULL, {0x3fe51ff07b10a0fdULL, 0x3fe51ff07b10a0feULL, 0x3fe51ff07b10a0feULL, 0x3fe51ff07b10a0fdULL}, {0xbfe8094bdc1342e0ULL, 0xbfe8094bdc1342e0ULL, 0xbfe8094bdc1342e0ULL, 0xbfe8094bdc1342e0ULL}},
+            {0x400f22ed3e4f6b68ULL, {0xbfe5d2bff5e177b5ULL, 0xbfe5d2bff5e177b5ULL, 0xbfe5d2bff5e177b5ULL, 0xbfe5d2bff5e177b5ULL}, {0xbfe7676b04d93679ULL, 0xbfe7676b04d9367aULL, 0xbfe7676b04d9367aULL, 0xbfe7676b04d93679ULL}},
+            {0x401008acdda0e456ULL, {0xbfe864de0241a9b9ULL, 0xbfe864de0241a9b9ULL, 0xbfe864de0241a9b9ULL, 0xbfe864de0241a9b9ULL}, {0xbfe4b5eef0d85b9dULL, 0xbfe4b5eef0d85b9cULL, 0xbfe4b5eef0d85b9cULL, 0xbfe4b5eef0d85b9dULL}},
+            {0x40e388eec7bbb4d6ULL, {0x3fe51d23b1788461ULL, 0x3fe51d23b1788461ULL, 0x3fe51d23b1788461ULL, 0x3fe51d23b1788461ULL}, {0xbfe80bc1886566feULL, 0xbfe80bc1886566ffULL, 0xbfe80bc1886566ffULL, 0xbfe80bc1886566ffULL}},
+            {0x40ec360cdb7458ffULL, {0x3fe2d1afb9abd225ULL, 0x3fe2d1afb9abd225ULL, 0x3fe2d1afb9abd225ULL, 0x3fe2d1afb9abd224ULL}, {0xbfe9e19d3225c097ULL, 0xbfe9e19d3225c097ULL, 0xbfe9e19d3225c097ULL, 0xbfe9e19d3225c097ULL}},
+            {0x4150f5733efbb82aULL, {0x3fe6b47a9e9e4b6fULL, 0x3fe6b47a9e9e4b6fULL, 0x3fe6b47a9e9e4b6fULL, 0x3fe6b47a9e9e4b6fULL}, {0xbfe68cb0b08b63f9ULL, 0xbfe68cb0b08b63faULL, 0xbfe68cb0b08b63faULL, 0xbfe68cb0b08b63f9ULL}},
+            {0x415c766bf82ef323ULL, {0x3fe60701ad6d7f75ULL, 0x3fe60701ad6d7f74ULL, 0x3fe60701ad6d7f74ULL, 0x3fe60701ad6d7f74ULL}, {0x3fe73642e32387c6ULL, 0x3fe73642e32387c6ULL, 0x3fe73642e32387c6ULL, 0x3fe73642e32387c6ULL}},
+        };
+        const Player modes[4] = {Player::Flash11_4, Player::ActiveX, Player::X64NoFma, Player::X64};
+        int trigOk = 0, trigN = 0, skipped = 0;
+        for (int m = 0; m < 4; ++m) {
+            if (!SetPlayer(modes[m])) { ++skipped; continue; }
+            for (const T& t : trig) {
+                trigN += 2;
+                trigOk += (bits(as3_sin(dbl(t.x))) == t.s[m]) + (bits(as3_cos(dbl(t.x))) == t.c[m]);
+            }
+        }
+        check(trigOk == trigN, "64-bit players: Math.sin/cos of each player at spot values (x64 skipped without FMA3)");
+        std::printf("       %d / %d values%s\n", trigOk, trigN, skipped ? "; x64 (FMA3) skipped on this CPU" : "");
+        // fixed-point atan2 (timeline rotations): y, x, 64-bit result (the first four differ from the 32-bit players)
+        static const int32_t at[][3] = {{62347, -89984, 9521230},  {55512, -118736, 10154267}, {61533, -58924, 8766019},
+                                        {15938, -178094, 11461276}, {60657, 24812, 4440235},   {-25037, 60564, -1471923}};
+        int atOk = 0, atDiff = 0;
+        for (const auto& v : at) {
+            SetPlayer(Player::Flash11_4);
+            const int32_t r32 = FlashAtan2Fx(v[0], v[1]);
+            SetPlayer(Player::ActiveX);
+            atOk += FlashAtan2Fx(v[0], v[1]) == v[2];
+            atDiff += r32 != v[2];
+        }
+        // float32 matrices: point transform, concat, inverse (each case differs from the 32-bit players)
+        auto f = [](uint32_t u) { float v; std::memcpy(&v, &u, 4); return v; };
+        auto fb = [](float v) { uint32_t u; std::memcpy(&u, &v, 4); return u; };
+        struct PT { uint32_t m[4]; int32_t tx, ty, x, y, ox, oy; };
+        static const PT pts[] = {{{0x3ea3a340, 0x40293ffa, 0xc0293ffa, 0x3ea3a340}, -19111, 4408, 3156, 8003, -39266, 15312},
+                                 {{0x3f8c2e88, 0xbfa0d2ca, 0x3fa0d2ca, 0x3f8c2e88}, -13962, -21430, -7681, -9532, -34350, -22218},
+                                 {{0xbf83cc2e, 0xbfc5eacc, 0x3fc5eacc, 0xbf83cc2e}, 18355, 28100, 9443, 4968, 16313, 8384}};
+        int matOk = 0, matN = 0;
+        for (const PT& p : pts) {
+            int64_t ox, oy;
+            FlashXform(FlashFloatMatrix{f(p.m[0]), f(p.m[1]), f(p.m[2]), f(p.m[3]), p.tx, p.ty}, p.x, p.y, ox, oy);
+            ++matN, matOk += ox == p.ox && oy == p.oy;
+        }
+        struct CM { uint32_t p[4]; int32_t ptx, pty; uint32_t c[4]; int32_t ctx, cty; uint32_t r[4]; int32_t rtx, rty; };
+        static const CM cats[] = {
+            {{0x3f729583, 0x3e38bd96, 0xbe38bd96, 0x3f729583}, 11263, 15075, {0xbfe0de2b, 0x3dd2570b, 0xbdd2570b, 0xbfe0de2b}, -26844, -2596,
+             {0xbfd77482, 0xbe60e3de, 0x3e60e3de, 0xbfd77482}, -13706, 7772},
+            {{0xbd35bc44, 0x3f26f90f, 0xbf26f90f, 0xbd35bc44}, 20309, 18264, {0xc00833c8, 0x3e1d6500, 0xbe1d6500, 0xc00833c8}, 18085, 10129,
+             {0xbbbefb00, 0xbfb28ba4, 0x3fb28ba4, 0xbbbefb00}, 12900, 29610}};
+        for (const CM& c : cats) {
+            const pix::DevMatrix par{f(c.p[0]), f(c.p[1]), f(c.p[2]), f(c.p[3]), c.ptx, c.pty};
+            const pix::DevMatrix r = pix::Concat(par, f(c.c[0]), f(c.c[1]), f(c.c[2]), f(c.c[3]), c.ctx, c.cty);
+            ++matN, matOk += fb(r.a) == c.r[0] && fb(r.b) == c.r[1] && fb(r.c) == c.r[2] && fb(r.d) == c.r[3] && r.tx == c.rtx && r.ty == c.rty;
+        }
+        struct IM { uint32_t m[4]; int32_t tx, ty; uint32_t r[4]; int32_t rtx, rty; };
+        static const IM invs[] = {{{0x3f24818d, 0x3f735c54, 0xbf735c54, 0x3f24818d}, -29643, 7974, {0x3ef9e3bd, 0xbf38d607, 0x3f38d607, 0x3ef9e3bd}, 8710, -25295},
+                                  {{0xbf252697, 0xbf1713d1, 0x3f1713d1, 0xbf252697}, -502, 26885, {0xbf5809b9, 0x3f45a0d8, 0xbf45a0d8, 0xbf5809b9}, 20331, 23076}};
+        for (const IM& v : invs) {
+            const FlashFloatMatrix r = FlashInvert(FlashFloatMatrix{f(v.m[0]), f(v.m[1]), f(v.m[2]), f(v.m[3]), v.tx, v.ty});
+            ++matN, matOk += fb(r.a) == v.r[0] && fb(r.b) == v.r[1] && fb(r.c) == v.r[2] && fb(r.d) == v.r[3] && r.tx == v.rtx && r.ty == v.rty;
+        }
+        check(atOk == 6 && atDiff == 4 && matOk == matN,
+              "64-bit players: fixed-point atan2 (16.16 divide) and float32 point transform / concat / inverse");
+        std::printf("       atan2 %d / 6 (%d differ from 32-bit), matrices %d / %d\n", atOk, atDiff, matOk, matN);
+        SetPlayer(saved);
+    }
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }
@@ -1195,6 +1274,10 @@ static int CmdBench(int argc, char** argv) {
 //                    2 = MATHSPIKES 2, -1 = spikes off (analysis only)
 //   --window WxH     window client size for --mathspikes 0 (default 550x400)
 //   --noscale        noScale instead of showAll (the Practice Hack's default scale mode)
+// and, in RbsimMain:
+//   --player P       whose arithmetic to reproduce: 11.4 (default; every 32-bit player), activex (the ActiveX
+//                    Flash Player with Flash64_11_5_502_149.ocx), x64 (Flash Player 30 x64 projector on an FMA3
+//                    CPU), x64-nofma (the same on a CPU without FMA3). docs/X64_PLAYERS.md
 static bool ParseDisplayOptions(int& argc, char** argv) {
     DisplayConfig& dc = GetDisplayConfig();
     int o = 1;
@@ -1229,9 +1312,22 @@ int RbsimMain(int argc, char** argv) {
             else { std::fprintf(stderr, "--trig intel|glibc\n"); return 2; }
             for (int j = i; j + 2 <= argc; ++j) argv[j] = argv[j + 2];
             argc -= 2, --i;
+        } else if (!std::strcmp(argv[i], "--player")) {
+            Player p;
+            if (i + 1 >= argc || !ParsePlayer(argv[i + 1], p)) {
+                std::fprintf(stderr, "--player 11.4|activex|x64|x64-nofma\n");
+                return 2;
+            }
+            if (!SetPlayer(p)) {
+                std::fprintf(stderr, "--player %s: this CPU has no FMA3/AVX; use x64-nofma (or run on a newer CPU)\n", argv[i + 1]);
+                return 2;
+            }
+            for (int j = i; j + 2 <= argc; ++j) argv[j] = argv[j + 2];
+            argc -= 2, --i;
         }
     if (argc < 2) {
-        std::fprintf(stderr, "usage: rbsim run|log|test|bench|verify|calib|smartforce [options]\n");
+        std::fprintf(stderr, "usage: rbsim run|log|test|bench|verify|calib|smartforce [options]\n"
+                             "global options: --player 11.4|activex|x64|x64-nofma, --mathspikes N, --window WxH, --noscale\n");
         return 2;
     }
     if (!std::strcmp(argv[1], "run")) return CmdRun(argc, argv);

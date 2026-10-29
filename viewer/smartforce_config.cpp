@@ -46,6 +46,8 @@ const std::vector<Setting>& Settings() {
             {{L"showAll", L"showall"}, {L"noScale", L"noscale"}}},
         {L"trig", L"Trigonometry", L"--trig", L"intel", L"Intel is the accepted Flash-compatible implementation. glibc is a diagnostic alternative and changes results.", Kind::Choice, 1, 0, 0,
             {{L"Intel (accepted port)", L"intel"}, {L"glibc (diagnostic)", L"glibc"}}},
+        {L"player", L"Flash Player", L"--player", L"11.4", L"Whose arithmetic to reproduce. 11.4 covers every 32-bit Flash Player (the accepted reference). The 64-bit players compute some Math.sin/cos results and display matrices differently; x64 needs a CPU with FMA3.", Kind::Choice, 1, 0, 0,
+            {{L"32-bit (11.4, 30, 32)", L"11.4"}, {L"ActiveX + 11.5 x64 OCX", L"activex"}, {L"Flash 30 x64 (FMA3 CPU)", L"x64"}, {L"Flash 30 x64 (no FMA3)", L"x64-nofma"}}},
         {L"directory", L"Search folder", L"", L"", L"The base folder for input files, saved results and full run logs. Defaults to the folder containing this app.", Kind::Text, 1},
     };
     return fields;

@@ -3,12 +3,53 @@
 #include "b2world.h"
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 namespace rb {
 
 TrigImpl g_trigImpl = TrigImpl::IntelLibm;
 double (*g_sinHook)(double) = nullptr;
 double (*g_cosHook)(double) = nullptr;
+Player g_player = Player::Flash11_4;
+}  // namespace rb
+extern "C" int rb_x64f30_use_fma3;  // the UCRT's "use FMA3" switch, src/libm_x64_fp30.S
+namespace rb {
+
+const char* PlayerName(Player p) {
+    switch (p) {
+    case Player::Flash11_4: return "11.4";
+    case Player::ActiveX: return "activex";
+    case Player::X64: return "x64";
+    case Player::X64NoFma: return "x64-nofma";
+    }
+    return "?";
+}
+const char* PlayerDescription(Player p) {
+    switch (p) {
+    case Player::Flash11_4: return "32-bit Flash Player (11.4, 30, 32): the reference";
+    case Player::ActiveX: return "ActiveX Flash Player + Flash64_11_5_502_149.ocx (64-bit)";
+    case Player::X64: return "Flash Player 30 x64 projector, CPU with FMA3 (2013+)";
+    case Player::X64NoFma: return "Flash Player 30 x64 projector, CPU without FMA3";
+    }
+    return "?";
+}
+bool ParsePlayer(const char* s, Player& p) {
+    for (Player q : {Player::Flash11_4, Player::ActiveX, Player::X64, Player::X64NoFma})
+        if (!std::strcmp(s, PlayerName(q))) return p = q, true;
+    if (!std::strcmp(s, "32") || !std::strcmp(s, "x86")) return p = Player::Flash11_4, true;
+    return false;
+}
+bool PlayerSupported(Player p) {
+    if (p != Player::X64) return true;
+    __builtin_cpu_init();
+    return __builtin_cpu_supports("fma") && __builtin_cpu_supports("avx");
+}
+bool SetPlayer(Player p) {
+    if (!PlayerSupported(p)) return false;
+    rb_x64f30_use_fma3 = p == Player::X64;
+    g_player = p;
+    return true;
+}
 
 void fatal(const char* msg) {
     std::fprintf(stderr, "rbsim fatal: %s\n", msg);

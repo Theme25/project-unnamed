@@ -67,10 +67,11 @@ enum : int {
     ID_BACKUPS, ID_BLOAD,
     ID_GCUR, ID_GPASTE, ID_GOPEN, ID_GCLEAR, ID_GINFO,
     ID_BINFO, ID_BLIST, ID_BUP, ID_BDOWN, ID_BNEXT, ID_BAPPLY, ID_BLEAVE,
-    ID_OFAST, ID_OPAUSEEND, ID_OKEEPEND, ID_OMARKS, ID_OPOLYS, ID_OPROBES, ID_ODEC, ID_OKEYS, ID_WFILL, ID_WAPPLY, ID_WCLEAR,
+    ID_OFAST, ID_OPLAYER, ID_OPAUSEEND, ID_OKEEPEND, ID_OMARKS, ID_OPOLYS, ID_OPROBES, ID_ODEC, ID_OKEYS, ID_WFILL, ID_WAPPLY, ID_WCLEAR,
 };
 
 static HWND g_wnd, g_canvas, g_status, g_tabs;
+static HWND g_grpPlayer, g_oPlayer, g_lblPlayer;  // Options: which Flash Player's arithmetic (rb::g_player)
 static HWND g_lblLevel, g_level, g_lblCp, g_cp, g_gless, g_invincible, g_lblSpikes, g_spikes, g_lblWindow, g_window, g_scale, g_keys, g_help;
 static HWND g_lblInputs, g_inputs, g_paste, g_copy, g_open, g_save, g_load;
 static HWND g_first, g_back, g_play, g_fwd, g_last, g_lblSpeed, g_speed, g_realtime, g_follow, g_trail, g_hudBox, g_slider;
@@ -213,6 +214,23 @@ static void ReadDisplayControls() {
     dc.showAll = SendMessageW(g_scale, CB_GETCURSEL, 0, 0) != 1;
 }
 
+// ------------------------------------------------------------------ Flash Player (rb::g_player, docs/X64_PLAYERS.md)
+static const Player kPlayers[4] = {Player::Flash11_4, Player::ActiveX, Player::X64, Player::X64NoFma};
+static void SetPlayerControl() {
+    for (int i = 0; i < 4; ++i)
+        if (kPlayers[i] == g_player && SendMessageW(g_oPlayer, CB_GETCURSEL, 0, 0) != i) SendMessageW(g_oPlayer, CB_SETCURSEL, (WPARAM)i, 0);
+}
+// Applies a player; false (and a message) if this CPU cannot run it.
+static bool ApplyPlayer(Player p, bool showErrors) {
+    if (SetPlayer(p)) return true;
+    if (showErrors)
+        MessageBoxW(g_wnd,
+                    L"This CPU has no FMA3/AVX, so the 64-bit Flash Player 30 would take its other code path here.\n"
+                    L"Choose \"Flash Player 30 x64, CPU without FMA3\" to match that player on this PC.",
+                    L"Flash Player", MB_ICONWARNING);
+    return false;
+}
+
 // ------------------------------------------------------------------ settings
 static void FillCheckpoints(int level, int select) {
     SendMessageW(g_cp, CB_RESETCONTENT, 0, 0);
@@ -237,6 +255,7 @@ static void SaveSettings() {
     std::swprintf(d, 64, L"%dx%d", dc.windowW, dc.windowH);
     WritePrivateProfileStringW(L"display", L"window", d, ini);
     WritePrivateProfileStringW(L"display", L"scale", dc.showAll ? L"showAll" : L"noScale", ini);
+    WritePrivateProfileStringW(L"display", L"player", Widen(PlayerName(g_player)).c_str(), ini);
     auto wi = [&](const wchar_t* k, int v) {
         wchar_t b[32];
         std::swprintf(b, 32, L"%d", v);
@@ -372,6 +391,8 @@ static bool ReadRouteFile(const wchar_t* file, tas::Route& out) {
                 int ww, wh;
                 if (kv[i] == "window" && ParseWindowSize(Widen(kv[i + 1]), ww, wh)) dc.windowW = ww, dc.windowH = wh;
                 if (kv[i] == "scaleMode") dc.showAll = kv[i + 1] != "noScale";
+                Player pl;
+                if (kv[i] == "player" && ParsePlayer(kv[i + 1].c_str(), pl)) ApplyPlayer(pl, true);
             }
         } else if (line.rfind("LEVEL ", 0) == 0) {
             if (!prevR) {
@@ -453,6 +474,7 @@ static void SaveRouteFile() {
         return;
     }
     const tas::Route& r = g_s.route();
+    if (g_player != Player::Flash11_4) std::fprintf(f, "#ENV\tplayer\t%s\n", PlayerName(g_player));
     std::fprintf(f, "# rbview route: level %d, checkpoint %d%s%s. Input string: %s\n", r.level, r.checkpoint, r.gless ? ", glitchless" : "",
                  r.Tool() ? ", uses invincibility or warps (not a real-game route)" : "", r.in.empty() ? "-" : EncodeInputsRLE(r.in).c_str());
     std::fprintf(f, "%s\n", tas::RouteToLine(r).c_str());
@@ -1082,6 +1104,7 @@ static void RefreshMode() {
     SetCheck(g_fast, g_s.fastPlayback);
     SetCheck(g_pauseEnd, g_s.stopAtEnd);
     SetCheck(g_keepEnd, !g_s.stopAtEnd);
+    SetPlayerControl();
     SetCheck(g_hudBox, g_hud);
     SetCheck(g_marksBox, g_marks);
     SetCheck(g_polysBox, g_polys);
@@ -1101,6 +1124,10 @@ static void RefreshStatus() {
                   g_s.InPlayback() ? InputName(g_s.route().in[(size_t)g_s.pos]) : L"(recording)", s.spriteX[s.playerBody], s.spriteY[s.playerBody],
                   b.linearVelocity.x, b.linearVelocity.y, s.isTimeStop ? L"flag" : s.playerAlive ? L"alive" : L"dead",
                   s.displayUncertain ? L"   |   a hit test was within a rounding unit: check in Flash" : L"");
+    if (g_player != Player::Flash11_4) {
+        const size_t n = wcslen(buf);
+        std::swprintf(buf + n, 512 - n, L"   |   player: %ls", Widen(PlayerName(g_player)).c_str());
+    }
     SetText(g_status, buf);
     SendMessageW(g_slider, TBM_SETRANGEMAX, TRUE, (LPARAM)g_s.tl.size());
     SendMessageW(g_slider, TBM_SETPOS, TRUE, g_s.pos);
@@ -1592,6 +1619,10 @@ static void Layout() {
             yy += S(16);
         };
         begin();
+        MoveWindow(g_lblPlayer, ix, yy, iw, S(32), TRUE), yy += S(34);
+        MoveWindow(g_oPlayer, ix, yy, std::min(iw, S(420)), S(300), TRUE), yy += rowH;
+        end(g_grpPlayer);
+        begin();
         for (HWND c : {g_realtime, g_fast, g_lblEnd}) MoveWindow(c, ix, yy, iw, lh, TRUE), yy += lh;
         MoveWindow(g_pauseEnd, ix + S(14), yy, iw - S(14), lh, TRUE), yy += lh;
         MoveWindow(g_keepEnd, ix + S(14), yy, iw - S(14), lh, TRUE), yy += lh;
@@ -1707,7 +1738,7 @@ static void FillWarpFields() {
 }
 
 static void OnCommand(int id, int code, HWND ctl) {
-    const bool isCombo = id == ID_LEVEL || id == ID_CHECKPOINT || id == ID_SPIKES || id == ID_SCALE;
+    const bool isCombo = id == ID_LEVEL || id == ID_CHECKPOINT || id == ID_SPIKES || id == ID_SCALE || id == ID_OPLAYER;
     if (id == ID_WINDOW) {
         if (code == CBN_SELCHANGE) {
             const int sel = (int)SendMessageW(g_window, CB_GETCURSEL, 0, 0);
@@ -1740,6 +1771,14 @@ static void OnCommand(int id, int code, HWND ctl) {
         case ID_INVINCIBLE: s.SetFlags(Checked(g_gless), Checked(g_invincible)); break;
         case ID_SPIKES:
         case ID_SCALE: Resimulate(); break;
+        case ID_OPLAYER: {
+            const int sel = (int)SendMessageW(g_oPlayer, CB_GETCURSEL, 0, 0);
+            if (sel >= 0 && sel < 4 && kPlayers[sel] != g_player) {
+                if (ApplyPlayer(kPlayers[sel], true)) Resimulate();
+                SetPlayerControl();
+            }
+            break;
+        }
         case ID_KEYS: KeysDialog(); break;
         case ID_HELP: MessageBoxW(g_wnd, kKeyHelp, L"Keys", MB_ICONINFORMATION); break;
         case ID_LOAD: LoadFromControls(true); break;
@@ -1986,6 +2025,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             g_speedLbl = MakeCtl(L"STATIC", L"1x", 0, 0);
             g_follow = MakeCtl(L"BUTTON", L"Follow camera", BS_AUTOCHECKBOX, ID_FOLLOW);
             // Options tab: everything the mod does with keys or commands, as controls
+            g_grpPlayer = MakeCtl(L"BUTTON", L"Flash Player", BS_GROUPBOX, 0, 0, 4);
+            g_lblPlayer = MakeCtl(L"STATIC", L"Whose arithmetic to reproduce. 64-bit players compute some sin/cos and matrix results differently.", 0, 0, 0, 4);
+            g_oPlayer = MakeCtl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, ID_OPLAYER, 0, 4);
+            for (Player pl : kPlayers) SendMessageW(g_oPlayer, CB_ADDSTRING, 0, (LPARAM)Widen(PlayerDescription(pl)).c_str());
             g_grpPlay = MakeCtl(L"BUTTON", L"Playback", BS_GROUPBOX, 0, 0, 4);
             g_realtime = MakeCtl(L"BUTTON", L"Loading a state plays it back in real time (U)", BS_AUTOCHECKBOX, ID_REALTIME, 0, 4);
             g_fast = MakeCtl(L"BUTTON", L"Fast playback, 64 frames per frame (Shift+U)", BS_AUTOCHECKBOX, ID_OFAST, 0, 4);
@@ -2090,6 +2133,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                 int ww = 550, wh = 400;
                 if (ParseWindowSize(win, ww, wh)) dc.windowW = ww, dc.windowH = wh;
                 dc.showAll = _wcsicmp(sc, L"noScale") != 0;
+                wchar_t pl[32] = L"";
+                GetPrivateProfileStringW(L"display", L"player", L"11.4", pl, 32, ini);
+                Player p;
+                if (ParsePlayer(Narrow(pl).c_str(), p)) ApplyPlayer(p, false);
             }
             g_hud = GetPrivateProfileIntW(L"view", L"hud", 1, ini) != 0;
             g_marks = GetPrivateProfileIntW(L"view", L"marks", 0, ini) != 0;
@@ -2272,6 +2319,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             auto& context = *reinterpret_cast<smartui::RouteContext*>(lp);
             context.route = g_s.route();
             context.display = GetDisplayConfig();
+            context.player = g_player;
             return 0;
         }
         case WM_DESTROY:

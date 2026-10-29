@@ -33,6 +33,16 @@ DevMatrix RootMatrix(const Window& w) { return DevMatrix{F32(4.0 * w.kx), 0, 0, 
 DevMatrix Concat(const DevMatrix& p, double la, double lb, double lc, double ld, int64_t ltx, int64_t lty) {
     const float a = F32(la), b = F32(lb), c = F32(lc), d = F32(ld);
     DevMatrix r;
+    if (PlayerIsX64()) {  // 64-bit players (OCX 0x30079350, 30 x64 0x1402b3230): float32 products, float32 sums
+        r.a = p.a * a + p.c * b;
+        r.b = p.b * a + p.d * b;
+        r.c = p.a * c + p.c * d;
+        r.d = p.d * d + p.b * c;
+        const float fx = (float)ltx, fy = (float)lty;
+        r.tx = p.tx + Rint(fy * p.c + fx * p.a);
+        r.ty = p.ty + Rint(fy * p.d + fx * p.b);
+        return r;
+    }
     r.a = F32((double)b * p.c + (double)a * p.a);
     r.b = F32((double)b * p.d + (double)a * p.b);
     r.c = F32((double)c * p.a + (double)d * p.c);

@@ -132,7 +132,23 @@ FlashMatrix FlashRotationMatrix(double rotDeg) {
 }
 
 // Fixed-point division 0x005c5e57: round-half-up(|a| * 2^bits / |b|) with the sign of a/b, saturating.
+// The 64-bit players (both x64 builds, docs/X64_PLAYERS.md) rewrote it in C: q = trunc((a << (bits + 1)) / b),
+// then floor(q / 2) plus the low bit of q, applied away from zero. For a negative odd q the floor has already
+// rounded away from zero, so negative results come out one lower than the 32-bit players' (OCX 0x30072580,
+// 30 x64 0x1403680f8).
+static int32_t FlashFixDivX64(int32_t a, int32_t b, int bits) {
+    if (a == 0) return 0;
+    if (b == 0) return a < 0 ? INT32_MIN : INT32_MAX;
+    const int64_t q = (int64_t)a * ((int64_t)1 << (bits + 1)) / b;
+    int64_t h = q >> 1;
+    if (h > INT32_MAX) h = INT32_MAX;
+    else if (h < INT32_MIN) h = INT32_MIN;
+    const uint32_t bit = (uint32_t)q & 1u;
+    const int32_t hh = (int32_t)h;
+    return hh < 0 ? (int32_t)((uint32_t)hh - bit) : (int32_t)((uint32_t)hh + bit);
+}
 static int32_t FlashFixDiv(int32_t a, int32_t b, int bits) {
+    if (PlayerIsX64()) return FlashFixDivX64(a, b, bits);
     bool neg = false;
     uint32_t ua, ub;
     if (a < 0) neg = !neg, ua = a == INT32_MIN ? 0x7fffffffu : (uint32_t)(-a);
@@ -183,11 +199,17 @@ int32_t FlashAtan2Fx(int32_t y, int32_t x) {
 //   X = tx + rint(f32(a * f32(x) + c * f32(y))),  Y = ty + rint(f32(d * f32(y) + b * f32(x)))
 // with the x87 at 53-bit precision (products of a float and an integer are exact, the sum is rounded once to
 // double, then to float32) and fistp rounding half to even.
+// The 64-bit players use SSE single precision instead: every product is rounded to float32 before the sum,
+//   X = tx + rint(f32(f32(f32(x) * a) + f32(f32(y) * c))),  Y = ty + rint(f32(f32(f32(y) * d) + f32(f32(x) * b)))
+// (cvtss2si, half to even), so about 1% of transformed points land one twip / subpixel away.
 static inline int64_t FlashRint(float v) { return (int64_t)std::nearbyint((double)v); }
+static inline float Mul32(int64_t v, double e) { return (float)v * (float)e; }  // float * float, in float
 int64_t FlashXformX(double a, double c, int64_t x, int64_t y) {
+    if (PlayerIsX64()) return FlashRint(Mul32(x, a) + Mul32(y, c));
     return FlashRint((float)(a * (double)(float)x + c * (double)(float)y));
 }
 int64_t FlashXformY(double b, double d, int64_t x, int64_t y) {
+    if (PlayerIsX64()) return FlashRint(Mul32(y, d) + Mul32(x, b));
     return FlashRint((float)(d * (double)(float)y + b * (double)(float)x));
 }
 void FlashXform(const FlashFloatMatrix& m, int64_t x, int64_t y, int64_t& ox, int64_t& oy) {
@@ -198,7 +220,33 @@ void FlashXform(const FlashFloatMatrix& m, int64_t x, int64_t y, int64_t& ox, in
 // f32(a/det); translation -rint(f32(ty*c' + a'*f32(tx))) and -rint(f32(ty*d' + b'*f32(tx))) (ty as an exact integer,
 // tx rounded to float32 first). A diagonal matrix takes a shortcut: 1/a, 1/d, -rint(f32(f32(t) * entry)).
 // (A zero determinant / zero diagonal would give the identity; spikes never have one.)
+// 64-bit players (OCX 0x300796d0, 30 x64 0x1402b3e90), all in float32: det = f32(f32(d*a) - f32(c*b));
+// a' = f32(d/det), b' = -f32(b/det), c' = -f32(c/det), d' = f32(a/det); tx' = -rint(f32(f32(f32(ty)*c') +
+// f32(f32(tx)*a'))), ty' = -rint(f32(f32(f32(ty)*d') + f32(f32(tx)*b'))). Diagonal: 1/a, 1/d, -rint(f32(f32(t)*e)).
+static FlashFloatMatrix FlashInvertX64(const FlashFloatMatrix& m) {
+    FlashFloatMatrix r{1, 0, 0, 1, 0, 0};  // identity when singular (as the players)
+    if (m.b == 0 && m.c == 0) {
+        uint32_t ua, ud;
+        std::memcpy(&ua, &m.a, 4), std::memcpy(&ud, &m.d, 4);
+        if (!(ua & 0x7f800000u) || !(ud & 0x7f800000u)) return r;
+        r.a = 1.0f / m.a;
+        r.d = 1.0f / m.d;
+        r.tx = -FlashRint((float)m.tx * r.a);
+        r.ty = -FlashRint((float)m.ty * r.d);
+        return r;
+    }
+    const float det = m.d * m.a - m.c * m.b;
+    if (det == 0) return r;
+    r.a = m.d / det;
+    r.b = -(m.b / det);
+    r.c = -(m.c / det);
+    r.d = m.a / det;
+    r.tx = -FlashRint((float)m.ty * r.c + (float)m.tx * r.a);
+    r.ty = -FlashRint((float)m.ty * r.d + (float)m.tx * r.b);
+    return r;
+}
 FlashFloatMatrix FlashInvert(const FlashFloatMatrix& m) {
+    if (PlayerIsX64()) return FlashInvertX64(m);
     FlashFloatMatrix r{};
     if (m.b == 0 && m.c == 0) {
         r.a = (float)(1.0 / m.a);

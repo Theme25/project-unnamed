@@ -19,7 +19,8 @@ frame matches that Flash Player to the last bit.
 | death | death warps (onto checkpoints, flags, a moving flag, the Level 16 wrong-way trigger) and real-game pause timing |
 | platforms | Linux and Windows (x86-64), identical results; `rbview.exe`: the Practice Hack's TAS mode for Windows (same keys) with savestates, ghost and route viewer |
 | smartforce | `rbsim smartforce`: simulates every string of an input pattern and reports those meeting conditions |
-| tests | `rbsim test`: 97 self-tests; `make tastest`: the TAS core of the viewer |
+| 64-bit players | `--player activex` (ActiveX Flash Player + 11.5 x64 OCX), `--player x64` / `x64-nofma` (Flash Player 30 x64): their own `Math.sin`/`cos` and display arithmetic (`docs/X64_PLAYERS.md`); also in rbview's Options tab |
+| tests | `rbsim test`: 99 self-tests; `make tastest`: the TAS core of the viewer |
 
 ## What's new in v2.0
 
@@ -88,7 +89,7 @@ exactly `rbview.exe`, so the download link above keeps pointing at the newest on
 
 ```
 make                 # see "Build flags" below; do not change them
-./rbsim test         # 97 self-tests (physics, display layer, spikes, death warps, all 17 levels, snapshots, ...)
+./rbsim test         # 99 self-tests (physics, display layer, spikes, death warps, all 17 levels, snapshots, ...)
 ./rbsim run --level 2 --inputs "n20w1d25n40" [--hex] [--every N] [--checkpoint K]
 ./rbsim log --level 2 --inputs "..."      # simulator log in the Flash mod's TSV format
 ./rbsim bench [--frames N]                # throughput
@@ -97,6 +98,7 @@ make                 # see "Build flags" below; do not change them
 ./rbsim smartforce --level N --inputs PATTERN --report CONDITIONS   # try many routes at once, see below
 # any command: --mathspikes 1|2 picks the spike rule (docs/MATHSPIKES_RESOLUTION.md);
 #   --mathspikes 0 --window WxH [--noscale]: the original game / Tournament Edition at that window (docs/RESOLUTION.md)
+#   --player 11.4|activex|x64|x64-nofma: whose arithmetic (default 11.4 = every 32-bit player; docs/X64_PLAYERS.md)
 make framescan && tools/framescan rb1_stats.tsv      # checks the frame-scan mod's edge scans (docs/RESOLUTION.md)
 make deathcause && tools/deathcause <level> <RLE> [checkpoint] [gless]   # what killed the ball, when
 ```
@@ -126,7 +128,7 @@ Two ways to build, both giving a static `rbsim.exe` (no DLLs needed) with the sa
    ```
 2. **Cross-compiled on Linux:** `apt install mingw-w64`, then `make windows`.
 
-MSVC is not supported: Flash's `sin`/`cos` (`src/libm_intel.S`) is GNU assembly, wrapped on Windows
+MSVC is not supported: Flash's `sin`/`cos` (`src/libm_intel.S`, and `src/libm_x64_*.S` for the 64-bit players) is GNU assembly, wrapped on Windows
 to preserve the registers the Windows x64 calling convention requires. The simulator does not depend
 on the host's math library (it only uses exact functions: `sqrt`, `fmod`, `floor`, `trunc`).
 
